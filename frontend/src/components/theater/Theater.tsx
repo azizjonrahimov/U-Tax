@@ -422,6 +422,8 @@ export function Theater() {
       return null;
     };
 
+    // The finale is a fixed-length ending: it runs in real time whatever the playback speed.
+    const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
     const finaleRun = async () => {
       // Replay ending (design doc): cursors swarm, then fly into "Clients saved $X", which counts up.
       const total = railFromEvents(feed.accepted).money.tax_saved_cents;
@@ -435,22 +437,24 @@ export function Theater() {
           const p = swarmPos(k, round, W, H);
           place(id, p.x, p.y);
         });
-        await sleep(MOVE_MS);
+        await realSleep(MOVE_MS);
       }
       if (!alive) return;
       const money = visible(document.querySelector(".stagebox .g")) ?? visible(document.querySelector('[data-target="rail.money"] .big'));
       if (money) {
-        const r = money.getBoundingClientRect();
-        AGENTS.forEach(([id], k) => place(id, r.left + (r.width * k) / AGENTS.length, r.bottom + 6));
+        // Line up across the whole card (the number itself is narrow and right-aligned).
+        const r = (money.closest(".pane, .stagebox") ?? money).getBoundingClientRect();
+        const step = Math.min(34, (r.width - 40) / AGENTS.length);
+        AGENTS.forEach(([id], k) => place(id, r.left + 12 + step * k, r.bottom - 22));
       }
-      await sleep(MOVE_MS);
+      await realSleep(MOVE_MS);
       const steps = 30;
       for (let k = 1; k <= steps && alive; k++) {
         setFinale((f) => (f ? { ...f, saved: Math.round((total * k) / steps) } : f));
-        await sleep(40);
+        await realSleep(40);
       }
       if (!alive) return;
-      await sleep(1600);
+      await realSleep(2400);
       if (alive) setFinale((f) => (f ? { ...f, banner: "" } : f));
     };
 
