@@ -31,8 +31,12 @@ API = "https://api.openai.com/v1"
 
 def _map_error(response: httpx.Response) -> PortError:
     retry = response.headers.get("retry-after")
+    try:
+        retry_after = float(retry) if retry else None
+    except ValueError:  # an HTTP-date Retry-After: let the caller's backoff decide
+        retry_after = None
     if response.status_code == 429:
-        return RateLimited("openai rate limited", retry_after=float(retry) if retry else None)
+        return RateLimited("openai rate limited", retry_after=retry_after)
     if response.status_code in (401, 403):
         return AuthExpired("openai key rejected")
     if response.status_code >= 500:

@@ -76,4 +76,7 @@ def build_store(settings: Settings) -> EventStorePort:
 
 def build_gateway(settings: Settings | None = None) -> Gateway:
     settings = settings or Settings.from_env()
+    if settings.store == "postgres" and not (settings.admin_token and settings.theater_token):
+        # empty tokens disable auth (local dev only); a production store never runs open
+        raise AdapterNotReady("STORE=postgres needs ADMIN_TOKEN and THEATER_TOKEN set")
     return Gateway(build_store(settings), build_ports(settings), settings)

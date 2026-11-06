@@ -111,4 +111,7 @@ def test_repeated_ceo_brief_does_not_spam_the_log(h):
     assert again["brief_event_id"] == first["brief_event_id"]
     assert len(list(h.store.since(0))) == count  # nothing new written
     h.new_case(sender="b@two.dev")
+    # within a minute the cached brief is reused (pending approvals are always live) ...
+    assert h.ok("ceo_brief")["brief_event_id"] == first["brief_event_id"]
+    h.clock.advance(seconds=61)  # ... after it, new activity gets a new brief
     assert h.ok("ceo_brief")["brief_event_id"] != first["brief_event_id"]

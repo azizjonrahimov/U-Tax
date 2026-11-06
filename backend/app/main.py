@@ -32,7 +32,7 @@ class Health(BaseModel):
 
 def tick(gw: Gateway) -> None:
     """Background upkeep: CRM mirror, failed wakes, the 6 h stall sweep, the CEO digest."""
-    for job in (gw.drain_outbox, gw.retry_wakes,
+    for job in (gw.drain_outbox, gw.retry_wakes, gw.retry_questionnaires,
                 lambda: gw.perform("stall_sweep", {}),
                 lambda: gw.perform("ceo_digest", {})):
         try:
@@ -88,7 +88,7 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
     install_error_handlers(app)
 
     @app.get("/api/health", response_model=Health)
-    def health() -> Health:
+    async def health() -> Health:  # async: never waits behind a busy thread pool
         return Health(status="ok", version=__version__)
 
     app.include_router(build_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]

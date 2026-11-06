@@ -313,8 +313,9 @@ def test_boot_wakes_cover_open_cases(h):
     h.to_sent(h.new_case(sender="b@two.dev"))
     wakes = []
     h.gw.on_wake(wakes.append)
-    assert h.gw.boot_wakes() == ["New case case_1"]
-    assert wakes == ["New case case_1"]
+    # case_2 is SENT without a call: its calendar step is owed too
+    assert h.gw.boot_wakes() == ["New case case_1", "New case case_2"]
+    assert wakes == ["New case case_1", "New case case_2"]
 
 
 def test_unexpected_adapter_crash_is_an_error_result(h):

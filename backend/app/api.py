@@ -28,6 +28,7 @@ from app.gateway.ports import NotConfigured, PortError
 log = logging.getLogger("utax.api")
 
 HEARTBEAT_SECONDS = 15.0
+SSE_QUEUE_MAX = 2000
 
 # refused codes -> HTTP status (everything else refused is 409)
 _REFUSED_STATUS = {
@@ -52,22 +53,32 @@ def result_or_raise(result: ToolResult) -> dict[str, Any]:
 
 
 class RateLimiter:
-    """Sliding window per key (client IP): `limit` calls per `window` seconds."""
+    """Sliding window per key (client IP): `limit` calls per `window` seconds, plus a
+    `global_limit` across all keys, so forged or rotating IPs can't multiply the budget."""
 
-    def __init__(self, limit: int, window: float = 60.0) -> None:
-        self.limit, self.window = limit, window
+    def __init__(self, limit: int, window: float = 60.0, global_limit: int | None = None) -> None:
+        self.limit, self.window, self.global_limit = limit, window, global_limit
         self._hits: dict[str, deque[float]] = defaultdict(deque)
+        self._all: deque[float] = deque()
         self._lock = threading.Lock()
 
     def check(self, key: str) -> None:
         now = time.monotonic()
         with self._lock:
+            while self._all and now - self._all[0] > self.window:
+                self._all.popleft()
+            if self.global_limit is not None and len(self._all) >= self.global_limit:
+                raise APIError(429, "rate_limited", "the firm is busy; try again in a minute")
             hits = self._hits[key]
             while hits and now - hits[0] > self.window:
                 hits.popleft()
             if len(hits) >= self.limit:
                 raise APIError(429, "rate_limited", "too many requests; try again in a minute")
             hits.append(now)
+            self._all.append(now)
+            if len(self._hits) > 1000:  # prune idle keys: no unbounded growth
+                for k in [k for k, v in self._hits.items() if not v or now - v[-1] > self.window]:
+                    del self._hits[k]
 
 
 def _same(given: str | None, expected: str) -> bool:
@@ -87,14 +98,26 @@ async def sse_events(gw: Gateway, after_id: int, *, is_disconnected: Callable[[]
     for a "missing" id.
     """
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[Event] = asyncio.Queue()
-    unsubscribe = gw.subscribe(lambda e: loop.call_soon_threadsafe(queue.put_nowait, e))
+    queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=SSE_QUEUE_MAX)
+    overflow = asyncio.Event()
+
+    def push(event: Event) -> None:
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:  # a stalled reader: end its stream, it resumes by id
+            overflow.set()
+
+    unsubscribe = gw.subscribe(lambda e: loop.call_soon_threadsafe(push, e))
     last = after_id
     try:
-        for event in await asyncio.to_thread(lambda: list(gw.store.since(after_id))):
-            yield sse_frame(event)
-            last = event.id
-        while not await is_disconnected():
+        while True:  # replay in pages: a reconnect never copies the whole log at once
+            page = await asyncio.to_thread(lambda: list(gw.store.since(last, limit=500)))
+            for event in page:
+                yield sse_frame(event)
+                last = event.id
+            if len(page) < 500:
+                break
+        while not await is_disconnected() and not overflow.is_set():
             try:
                 event = await asyncio.wait_for(queue.get(), timeout=heartbeat)
             except TimeoutError:
@@ -110,7 +133,9 @@ async def sse_events(gw: Gateway, after_id: int, *, is_disconnected: Callable[[]
 
 def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     router = APIRouter()
-    public_limiter = RateLimiter(limit=20)
+    public_limiter = RateLimiter(limit=20, global_limit=120)
+    audio_limiter = RateLimiter(limit=30, global_limit=120)
+    audio_cache: dict[int, bytes] = {}  # brief text never changes: one TTS call per brief
 
     def gw() -> Gateway:
         return get_gateway()
@@ -203,15 +228,19 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             session = gw().ports.voice.create_session()
         except NotConfigured as exc:
             raise APIError(503, "voice_unavailable", "no voice key; use typed chat") from exc
-        except PortError as exc:
-            raise APIError(503, "voice_unavailable", str(exc)) from exc
+        except PortError as exc:  # provider detail stays in the server log
+            log.warning("voice session failed: %s", exc)
+            raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat") from exc
         return {"client_secret": session.client_secret, "model": session.model,
                 "expires_at": session.expires_at}
 
     @router.get("/api/brief/audio")
-    def brief_audio(event_id: int = Query(..., ge=1), token: str | None = Query(None),
-                    authorization: str | None = Header(None)):
+    def brief_audio(request: Request, event_id: int = Query(..., ge=1),
+                    token: str | None = Query(None), authorization: str | None = Header(None)):
         require_theater(token, authorization)
+        if event_id in audio_cache:
+            return Response(content=audio_cache[event_id], media_type="audio/mpeg")
+        audio_limiter.check(_client_ip(request))
         event = next((e for e in gw().store.since(event_id - 1, limit=1)
                       if e.id == event_id), None)
         if event is None or event.type != "brief.generated":
@@ -221,7 +250,11 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         except NotConfigured as exc:
             raise APIError(503, "voice_unavailable", "no voice key; use speechSynthesis") from exc
         except PortError as exc:
-            raise APIError(503, "voice_unavailable", str(exc)) from exc
+            log.warning("brief audio failed: %s", exc)
+            raise APIError(503, "voice_unavailable", "audio is unavailable; use speechSynthesis") from exc
+        if len(audio_cache) > 200:
+            audio_cache.pop(next(iter(audio_cache)))
+        audio_cache[event_id] = audio
         return Response(content=audio, media_type="audio/mpeg")
 
     @router.get("/api/ceo/brief")
@@ -261,14 +294,21 @@ def _client_ip(request: Request) -> str:
 
     peer = request.client.host if request.client else "unknown"
     try:
-        trusted_peer = ipaddress.ip_address(peer).is_loopback or ipaddress.ip_address(peer).is_private
+        ip = ipaddress.ip_address(peer)
+        loopback, private = ip.is_loopback, ip.is_private and not ip.is_loopback
     except ValueError:
-        trusted_peer = peer in ("testclient", "localhost")
-    if trusted_peer:
-        for header in ("cf-connecting-ip", "x-forwarded-for"):
-            value = request.headers.get(header)
-            if value:
-                return value.split(",")[0].strip()
+        loopback, private = peer in ("testclient", "localhost"), False
+    if loopback:
+        # cloudflared on this machine: it sets CF-Connecting-IP to the real client
+        value = request.headers.get("cf-connecting-ip")
+        if value:
+            return value.strip()
+    elif private:
+        # a platform proxy (Render): it APPENDS the client it saw, so only the rightmost
+        # X-Forwarded-For hop is trustworthy; anything left of it is client-written
+        value = request.headers.get("x-forwarded-for")
+        if value:
+            return value.split(",")[-1].strip()
     return peer
 
 

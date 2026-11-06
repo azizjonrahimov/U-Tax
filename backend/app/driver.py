@@ -75,9 +75,14 @@ class LocalCrew:
     def __init__(self, gateway: Gateway, *, pace: float = 1.2) -> None:
         self.gw = gateway
         self.pace = pace
-        self._queue: queue.Queue[str | None] = queue.Queue()
+        # Wakes are coalesced: one pending entry per case/candidate, FAST PATH first, so a
+        # judge's /talk case never waits behind a backlog of repeats.
+        self._queue: queue.PriorityQueue[tuple[int, int, str | None]] = queue.PriorityQueue()
+        self._pending: set[str] = set()
+        self._order = 0
+        self._plock = threading.Lock()
         self._thread = threading.Thread(target=self._run, name="utax-local-crew", daemon=True)
-        self._unsubscribe = gateway.on_wake(self._queue.put)
+        self._unsubscribe = gateway.on_wake(self.enqueue)
         self._step_no = 0
 
     def start(self) -> "LocalCrew":
@@ -85,9 +90,22 @@ class LocalCrew:
         log.info("local crew started (pace %.1fs)", self.pace)
         return self
 
+    MAX_PENDING = 200
+
+    def enqueue(self, message: str) -> None:
+        target = _CASE.search(message) or _CAND.search(message)
+        key = target.group(1) if target else message
+        with self._plock:
+            if key in self._pending or len(self._pending) >= self.MAX_PENDING:
+                return  # already queued (one advance handles it) or overloaded
+            self._pending.add(key)
+            self._order += 1
+            priority = 0 if message.startswith("FAST PATH") else 1
+            self._queue.put((priority, self._order, message))
+
     def stop(self) -> None:
         self._unsubscribe()
-        self._queue.put(None)
+        self._queue.put((-1, 0, None))
         self._thread.join(timeout=5)
 
     def wait_idle(self, timeout: float = 30.0) -> bool:
@@ -103,10 +121,13 @@ class LocalCrew:
 
     def _run(self) -> None:
         while True:
-            message = self._queue.get()
+            _prio, _n, message = self._queue.get()
             try:
                 if message is None:
                     return
+                target = _CASE.search(message) or _CAND.search(message)
+                with self._plock:
+                    self._pending.discard(target.group(1) if target else message)
                 self.handle(message)
             except Exception:  # noqa: BLE001 - one bad wake never stops the crew
                 log.exception("local crew failed on %r", message)
@@ -136,6 +157,8 @@ class LocalCrew:
             time.sleep(self.pace)  # so the theater can show each step
         result = self.gw.perform(tool, args, actor=actor)
         self._step_no += 1
+        if result.status != "done" or result.data.get("duplicate"):
+            return result  # only work actually done is booked (§6a estimate)
         tokens_in, tokens_out = STEP_TOKENS.get(actor, (500, 60))
         self.gw.perform("book_spend", {
             "provider": "local", "model": STAND_IN_MODEL, "tokens_in": tokens_in,

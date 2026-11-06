@@ -58,7 +58,7 @@ class JsonlEventStore:
     def _cut_torn_tail(self, raw: bytes) -> None:
         """Truncate the file to the end of the last complete line, so the torn fragment
         never ends up in the middle of the log once new events are appended."""
-        body = raw.rstrip(b"\n")
+        body = raw.rstrip()  # also drops whitespace-only trailing lines
         keep = body.rfind(b"\n") + 1  # 0 when the torn line is the only line
         try:
             with self.path.open("r+b") as fh:
@@ -68,6 +68,9 @@ class JsonlEventStore:
         except OSError as exc:
             raise EventWriteError(f"cannot repair torn tail of {self.path}: {exc}") from exc
         self._needs_newline = False
+
+    def close(self) -> None:
+        """Nothing to release: each append opens and closes the file."""
 
     def ensure_writable(self) -> None:
         try:

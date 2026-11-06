@@ -32,7 +32,14 @@ def _postgres(tmp_path):
 
     with psycopg.connect(dsn, autocommit=True) as conn:
         conn.execute((REPO_ROOT / "db" / "001_events.sql").read_text(encoding="utf-8"))
-    return PostgresEventStore(dsn), lambda: PostgresEventStore(dsn)
+    current = [PostgresEventStore(dsn)]
+
+    def reopen():  # one writer at a time: close the old store (releases the lock) first
+        current[0].close()
+        current[0] = PostgresEventStore(dsn)
+        return current[0]
+
+    return current[0], reopen
 
 
 STORES = {"jsonl": _jsonl, "postgres": _postgres}

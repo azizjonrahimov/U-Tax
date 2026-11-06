@@ -87,6 +87,11 @@ def sender_words(address: str) -> list[str]:
             if len(w) >= 3 and w.isalpha() and w not in _GENERIC_LOCAL]
 
 
+_ENTITY_WORDS = re.compile(r"(?i)\b(delaware|[cs][ -]?corp(?:oration)?|our|my|a|an|the)\b")
+_NAMED_ENTITY = re.compile(
+    r"\b((?!(?:We|Our|My|I|It|This|Hi|Hey|Hello)\b)[A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})"
+    r"((?i:,?\s+(?:is\s+|are\s+)?an?\s+delaware\s+(?:[cs][ -]?corp|corporation|company|inc))\w*)"
+)
 # "Acme Robotics Inc", "Acme Labs": capitalised words before a company suffix.
 _COMPANY_PHRASE = re.compile(
     r"\b(?:[A-Z][\w&'-]*\s+){0,3}[A-Z][\w&'-]*,?\s+"
@@ -124,10 +129,12 @@ def mask_text(text: str, *, masked_name: str, company: str | None,
     text = _EMAIL.sub(lambda m: mask_email(m.group(0)), text)
     text = _PHONE.sub("[phone hidden]", text)
     replacement = masked_name or "[company]"
-    # "a Delaware Corp." describes the entity type, not a name: keep it (intake quotes it)
+    # "a Delaware C Corp", "our Delaware Corporation" describe the entity type, not a
+    # name: never mask them (intake quotes them for incorporated_delaware)
     text = _COMPANY_PHRASE.sub(
-        lambda m: m.group(0) if re.fullmatch(r"(?i)delaware,?\s+\S+", m.group(0).strip())
-        else replacement, text)
+        lambda m: m.group(0) if _ENTITY_WORDS.search(m.group(0)) else replacement, text)
+    # "Zebra Robotics, a Delaware corporation": the capitalised words naming the entity go
+    text = _NAMED_ENTITY.sub(lambda m: replacement + m.group(2), text)
     if company:
         text = re.sub(rf"(?i)\b{re.escape(company)}\b", replacement, text)
     for word in hide_words or []:
