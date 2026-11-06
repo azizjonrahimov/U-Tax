@@ -164,8 +164,9 @@ For Replay mode and catch-up. Ordered by `id`.
   Realtime session minted with the gateway's `OPENAI_API_KEY` (the key never reaches the
   browser). `503 voice_unavailable` when no key is set; the mic page then falls back to
   typed text plus browser speech.
-- `GET /api/brief/audio?event_id=<brief.generated id>` → `audio/mpeg` (OpenAI TTS of the
-  brief text). `503 voice_unavailable` without a key; the page falls back to browser
+- `GET /api/brief/audio?event_id=<brief.generated id>&token=` → `audio/mpeg` (OpenAI TTS of the
+  brief text). Accepts the **theater token or the admin token** (read-only audio the theater
+  plays). `503 voice_unavailable` without a key; the page falls back to browser
   `speechSynthesis`.
 - `GET /api/ceo/brief?since_id=<last event id the CEO saw>` → `{brief_event_id, text,
   counts, pending_approvals: [{approval_id, action_type, summary}], last_event_id}`. Writes a
@@ -289,6 +290,8 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.4.3 (2026-11-06, frontend slice 2): `/api/brief/audio` accepts the theater token.
 
 - v1.4.2 (2026-11-06, backend task 6): `POST /api/cases/{id}/unblock`; cap-hit PAUSED flow;
   `ceo.notified.reason` adds flagged, shortlisted, paused.
