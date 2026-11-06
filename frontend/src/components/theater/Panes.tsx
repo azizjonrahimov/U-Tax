@@ -144,7 +144,7 @@ export function SheetPane({ screen }: { screen: ScreenState }) {
     </span>
   ) : null;
   return (
-    <Pane k="sheet" screen={screen} label="Sheet" name={`${view?.name ?? "—"} · franchise tax`} tag="engine v1 · rendered from log">
+    <Pane k="sheet" screen={screen} label="Sheet" name={view ? `${view.name} · franchise tax` : "franchise tax"} tag="engine v1 · rendered from log">
       <table>
         <tbody>
           {facts.map(([k, label]) => (
