@@ -1,23 +1,22 @@
-# Digest (Naive YC Hackathon · U-Tax) — 2026-11-06 12:15 local
+# Digest (Naive YC Hackathon · U-Tax) — 2026-11-06 14:00 local
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (deferred by owner, due Saturday morning before leaving): Saturday's deploys (Vercel, Render) and gstack's /verify need a GitHub remote. Auto mode blocked me from publishing the code, so this step is yours. In your own terminal, run:
-  `cd "D:\Claude Projects\Naive YC Hackathon"` then
-  `gh repo create azizjonrahimov/u-tax --private --source . --remote origin --push`
-  and reply "repo ready". (History scanned: no keys committed; only .env.example files.)
+- A (deferred by owner, due Saturday morning before leaving): GitHub remote for deploys. In your own terminal: `cd "D:\Claude Projects\Naive YC Hackathon"` then `gh repo create azizjonrahimov/u-tax --private --source . --remote origin --push`. Reply "repo ready".
 
 ## New
 
-- frontend · 0m · MERGED scaffold as 22a6f40; on theater slice 1
-- controller · 5m · owner: CEO never speaks; customers talk to the AI on /talk; CEO gets email updates and a login brief on /ceo; click approvals; Naïve on Saturday (D23-D26, contract v1.2)
-- backend · 40m · MERGED task 4 engine as 7af9034 (133 tests)
+- backend · 0m · MERGED task 5: event store, perform(), projections, 10 ports (301 tests)
+- controller · 0m · contract v1.4.1: tax saved excludes the fee; hr.questionnaire_sent
+- agents · 20m · MERGED task 1: naive.config.ts, 7 agents, deny-by-default tools
+- controller · 20m · contract v1.4: per-seat MCP, get_candidate, flag_case, CEO hire/decline, trust switches
+- frontend · 40m · MERGED slice 1: event → cursor script (132 tests)
 
 ## In progress
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| backend | `backend/`, `fixtures/`, `db/` | building: task 5 store/perform/projections/ports | 40m |
-| frontend | `frontend/` | building: theater slice 1 (event → cursor script) | 0m |
-| agents | `naive/` | building: tasks 1-2 (config, prompts, templates); Naïve apply Saturday | 1h |
+| backend | `backend/`, `fixtures/`, `db/` | building: task 6 HTTP + SSE + local driver (+ v1.4 pieces, 2nd review pass) | 0m |
+| frontend | `frontend/` | building: slice 2, the theater screen | 40m |
+| agents | `naive/` | building: task 2 prompts and templates | 20m |
