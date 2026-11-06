@@ -31,6 +31,7 @@
 .theater .dot.idle { animation: none; background: var(--faint); box-shadow: none; }
 @keyframes th-blink { 50% { opacity: .3; } }
 .theater .source { border: 1px dashed var(--amber); color: var(--amber); padding: 4px 10px; border-radius: 99px; }
+.theater .source.gateway { border-style: solid; border-color: var(--line); color: var(--text); }
 
 /* Grid + camera */
 .theater main { display: grid; grid-template-columns: 1.25fr 1fr var(--rail); gap: 10px; min-height: 0; transition: grid-template-columns calc(.6s * var(--t)) ease; }
@@ -157,6 +158,11 @@
 .theater .caption small { display: block; color: var(--dim); font-size: calc(11px * var(--k)); letter-spacing: .08em; text-transform: uppercase; margin-bottom: 2px; }
 .theater .overlay { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 30; pointer-events: none; background: rgba(7,7,11,.72); }
 .theater .overlay div { font-size: calc(28px * var(--k)); font-weight: 800; text-align: center; }
+.theater .pane-fallback { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: calc(22px * var(--k)); font-weight: 800; border: 1px dashed var(--line); border-radius: 10px; }
+.theater .pane-fallback small { font-size: calc(13px * var(--k)); color: var(--dim); font-weight: 500; margin-top: 6px; }
+.theater .hidden-body { color: var(--amber); font-style: italic; }
+.theater .banner { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 45; pointer-events: none; text-align: center; font-size: calc(44px * var(--k)); font-weight: 800; text-shadow: 0 0 40px rgba(255,77,61,.35); }
+.theater .banner small { display: block; font-size: calc(16px * var(--k)); color: var(--dim); font-weight: 500; margin-top: 8px; }
 .theater .overlay small { display: block; font-size: calc(14px * var(--k)); color: var(--dim); font-weight: 500; margin-top: 6px; }
 
 /* Stage mode (S): 1.5× type, brighter greys, rail collapses to 3 big numbers */

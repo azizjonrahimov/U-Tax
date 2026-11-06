@@ -27,11 +27,10 @@ export class PaneBoundary extends Component<{ resetKey: number; children: ReactN
     if (this.state.failedAt !== null) {
       return (
         <main>
-          <div className="overlay" role="status">
-            <div>
-              One event couldn’t be drawn
-              <small>The log keeps playing</small>
-            </div>
+          {/* Inside the grid only: the header, footer and cursors stay up. */}
+          <div className="pane-fallback" role="status">
+            One event couldn’t be drawn
+            <small>The log keeps playing</small>
           </div>
         </main>
       );

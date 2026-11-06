@@ -1,15 +1,30 @@
 "use client";
 
-// The Agent Theater player: plays the cursor script step by step. Each step
-// moves its agent's named cursor to the target element, then applies the step
-// to the screen. Every frame comes from a logged event (premise 7).
+// The Agent Theater player. A source (fixture file, full-log replay, or the
+// live gateway stream) feeds cursor steps into a queue; the player drains it,
+// moving each agent's named cursor to its target and applying the step to the
+// screen. Every frame comes from a logged event (premise 7).
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
+import { API_URL } from "@/lib/api";
 import { parseJsonl, type Agent, type UTaxEvent } from "@/theater/events";
 import { formatClock } from "@/theater/format";
-import { humanTouches, railFromEvents } from "@/theater/rail";
+import {
+  backlogSpeed,
+  briefAudioUrl,
+  fetchAllEvents,
+  numbersFromState,
+  parseSource,
+  reconnectDelayMs,
+  seedFromState,
+  stateUrl,
+  streamUrl,
+  type Endpoints,
+  type Source,
+} from "@/theater/live";
+import { humanTouches, railFromEvents, type FirmNumbers } from "@/theater/rail";
 import { applyStep, emptyScreen, type ScreenState } from "@/theater/screen";
-import { buildScript, type CursorStep, type Pane } from "@/theater/script";
+import { appendEvents, startScript, type CursorStep, type Pane, type ScriptCursor } from "@/theater/script";
 import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
 import { CalendarPane, MailPane, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
 import { PaneBoundary } from "./PaneBoundary";
@@ -28,6 +43,10 @@ const AGENTS: [Agent, string, string][] = [
 ];
 const SPEEDS = [1, 4, 16] as const;
 const FIXTURE_URL = "/fixtures/events.sample.jsonl";
+const HAS_GATEWAY = Boolean(process.env.NEXT_PUBLIC_API_URL);
+const GATEWAY: Endpoints = { base: API_URL, token: process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "" };
+/** /api/state refresh after events land (live rail numbers), at most this often. */
+const STATE_REFRESH_MS = 1200;
 
 /** Rail targets without their own element land on the nearest rail card. */
 const RAIL_FALLBACK: Record<string, string> = {
@@ -72,23 +91,22 @@ const subscribeResize = (cb: () => void) => {
 };
 const windowSize = () => `${window.innerWidth}x${window.innerHeight}`;
 const noSize = () => null;
+const subscribeNothing = () => () => {};
+const locationSearch = () => window.location.search;
+const noSearch = () => "";
 
 const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
 const cancelSpeech = () => {
   if (hasSpeech()) window.speechSynthesis.cancel();
 };
 
-/**
- * Speak a brief or a CEO order. Fixture mode uses browser speech only, so the
- * room never hears a gateway brief that isn't in this log (controller ruling);
- * live mode (slice 3) plays GET /api/brief/audio. Customer /talk text is never spoken.
- */
 function speakText(text: string) {
   if (!hasSpeech()) return;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
 }
 
+/** Briefs and CEO orders are spoken; customer /talk text never is. */
 const shouldSpeak = (step: CursorStep) => step.target === "rail.brief" || step.meta?.speaker === "ceo";
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
@@ -100,9 +118,31 @@ function captionFor(step: CursorStep): { label: string; text: string } | null {
   return { label: speaker, text: step.text };
 }
 
+type Status = "loading" | "playing" | "live" | "waiting" | "reconnecting" | "ended" | "error";
+
+/** The queue a source fills and the player drains. Mutable on purpose: it lives in a ref. */
+interface Feed {
+  steps: CursorStep[];
+  accepted: UTaxEvent[];
+  skipped: number;
+  ended: boolean;
+  wake: (() => void) | null;
+}
+const newFeed = (): Feed => ({ steps: [], accepted: [], skipped: 0, ended: false, wake: null });
+
+/** The ending of a replay: cursors swarm, then line up under "Clients saved" while it counts up. */
+const SWARM_ROUNDS = 3;
+const swarmPos = (i: number, round: number, W: number, H: number): Pos => {
+  // Deterministic scatter (no Math.random): a golden-angle walk over the stage.
+  const a = (i * 7 + round * 3) * 2.399963;
+  return { x: W * (0.5 + 0.32 * Math.cos(a)), y: H * (0.45 + 0.28 * Math.sin(a * 1.3)) };
+};
+
 export function Theater() {
-  const [events, setEvents] = useState<UTaxEvent[] | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const search = useSyncExternalStore(subscribeNothing, locationSearch, noSearch);
+  const [override, setOverride] = useState<Source | null>(null);
+  const source: Source = override ?? parseSource(search, HAS_GATEWAY);
+
   const [screen, setScreen] = useState<ScreenState>(emptyScreen);
   const [typing, setTyping] = useState<{ target: string; shown: number } | null>(null);
   const [caption, setCaption] = useState<{ label: string; text: string } | null>(null);
@@ -121,9 +161,46 @@ export function Theater() {
   const [sound, setSound] = useState(false);
   const [run, setRun] = useState(0);
   const [progress, setProgress] = useState(0);
-  const [playing, setPlaying] = useState(false);
+  const [status, setStatus] = useState<Status>("loading");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [feedVersion, setFeedVersion] = useState(0);
+  const [liveNumbers, setLiveNumbers] = useState<FirmNumbers | null>(null);
+  /** The last event whose steps have all played: log-derived rail numbers move when its animation is done. */
+  const [doneId, setDoneId] = useState(0);
+  const [finale, setFinale] = useState<{ banner: string; saved: number } | null>(null);
   const speedRef = useRef(1);
   const soundRef = useRef(false);
+  const feedRef = useRef<Feed>(newFeed());
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopAudio = useCallback(() => {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    cancelSpeech();
+  }, []);
+
+  /** Live briefs play the gateway's audio, falling back to browser speech; fixture and replay speak locally. */
+  const speak = useCallback(
+    (step: CursorStep) => {
+      const text = step.text ?? "";
+      if (source === "live" && step.target === "rail.brief") {
+        stopAudio();
+        const audio = new Audio(briefAudioUrl(GATEWAY, step.eventId));
+        audioRef.current = audio;
+        let fellBack = false;
+        const fallback = () => {
+          if (fellBack || audioRef.current !== audio || !soundRef.current) return;
+          fellBack = true;
+          speakText(text);
+        };
+        audio.addEventListener("error", fallback, { once: true });
+        void audio.play()?.catch(fallback);
+      } else {
+        speakText(text);
+      }
+    },
+    [source, stopAudio],
+  );
 
   useEffect(() => {
     speedRef.current = speed;
@@ -133,37 +210,8 @@ export function Theater() {
   }, [layout]);
   useEffect(() => {
     soundRef.current = sound;
-    if (!sound && typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
-  }, [sound]);
-
-  // Load the fixture log.
-  useEffect(() => {
-    let alive = true;
-    fetch(FIXTURE_URL, { cache: "no-store" })
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.text();
-      })
-      .then((text) => {
-        if (!alive) return;
-        const { events: parsed, bad } = parseJsonl(text);
-        if (bad.length) console.warn(`[theater] ${bad.length} unreadable log line(s)`, bad);
-        setEvents(parsed);
-      })
-      .catch((e: unknown) => alive && setLoadError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  const script = useMemo(() => (events ? buildScript(events) : null), [events]);
-  // Rail numbers and the clock come only from events the script accepted
-  // (deduplicated, valid), so they can never disagree with what the screen showed.
-  const accepted = useMemo(() => script?.accepted ?? [], [script]);
-  const byId = useMemo(() => new Map(accepted.map((e) => [e.id, e])), [accepted]);
-  /** The last event whose steps have all played: rail numbers move when its animation is done, not before. */
-  const [doneId, setDoneId] = useState(0);
-  const numbers = useMemo(() => railFromEvents(accepted.filter((e) => e.id <= doneId)), [accepted, doneId]);
+    if (!sound) stopAudio();
+  }, [sound, stopAudio]);
 
   // S toggles stage mode.
   useEffect(() => {
@@ -176,11 +224,158 @@ export function Theater() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // The player.
+  // ---------------------------------------------------------------- sources
+
   useEffect(() => {
-    if (!script) return;
+    const feed = newFeed();
+    feedRef.current = feed;
     let alive = true;
-    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms / speedRef.current));
+    let es: EventSource | null = null;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let refresh: ReturnType<typeof setTimeout> | undefined;
+    let cursor: ScriptCursor = startScript();
+
+    const push = (events: UTaxEvent[]) => {
+      if (!alive || events.length === 0) return;
+      const res = appendEvents(cursor, events);
+      cursor = res.cursor;
+      feed.steps.push(...res.steps);
+      feed.accepted.push(...res.accepted);
+      feed.skipped += res.skipped.length;
+      setFeedVersion((v) => v + 1);
+      feed.wake?.();
+    };
+    const end = () => {
+      feed.ended = true;
+      feed.wake?.();
+      setFeedVersion((v) => v + 1);
+    };
+    const getJson = async (url: string) => {
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    };
+
+    (async () => {
+      setStatus("loading");
+      setLoadError(null);
+      setLiveNumbers(null);
+      try {
+        if (source === "fixture") {
+          const r = await fetch(FIXTURE_URL, { cache: "no-store" });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const { events, bad } = parseJsonl(await r.text());
+          if (bad.length) console.warn(`[theater] ${bad.length} unreadable log line(s)`, bad);
+          push(events);
+          end();
+          return;
+        }
+        if (source === "replay") {
+          push(await fetchAllEvents(GATEWAY, getJson));
+          end();
+          return;
+        }
+      } catch (e) {
+        if (alive) {
+          setLoadError(e instanceof Error ? e.message : String(e));
+          setStatus("error");
+        }
+        return;
+      }
+
+      // ---- live: /api/state seeds the script and the rail, then the SSE stream.
+      let attempt = 0;
+      const refreshState = async () => {
+        try {
+          const s = await getJson(stateUrl(GATEWAY));
+          if (!alive) return;
+          const n = numbersFromState(s);
+          if (n) setLiveNumbers(n);
+          const { lastId } = seedFromState(s);
+          // The gateway's store went backwards (a reset or a new data dir): ids we hold
+          // no longer mean the same thing, so start over instead of silently dropping events.
+          if (lastId < cursor.lastId) {
+            console.warn(`[theater] gateway log went back to id ${lastId} (we were at ${cursor.lastId}); resyncing`);
+            setRun((r) => r + 1);
+          }
+        } catch {
+          // The stream reports connection problems; a missed refresh only delays the rail numbers.
+        }
+      };
+      const scheduleRefresh = () => {
+        if (refresh) return;
+        refresh = setTimeout(() => {
+          refresh = undefined;
+          void refreshState();
+        }, STATE_REFRESH_MS);
+      };
+
+      const connect = () => {
+        if (!alive) return;
+        es?.close();
+        // Resume after the last id we applied; the browser's own reconnects send Last-Event-ID.
+        es = new EventSource(streamUrl(GATEWAY, cursor.lastId));
+        es.onopen = () => {
+          attempt = 0;
+          if (alive) setStatus("live");
+        };
+        es.onmessage = (msg) => {
+          try {
+            const ev = JSON.parse(msg.data) as UTaxEvent;
+            push([ev]);
+            scheduleRefresh();
+          } catch {
+            console.warn("[theater] unreadable stream message", msg.data);
+          }
+        };
+        es.onerror = () => {
+          if (!alive) return;
+          setStatus("reconnecting");
+          if (es?.readyState === EventSource.CLOSED) {
+            // The browser gave up (HTTP error or the server ended the stream): retry ourselves.
+            retry = setTimeout(connect, reconnectDelayMs(attempt++));
+          }
+        };
+      };
+
+      while (alive) {
+        try {
+          const s = await getJson(stateUrl(GATEWAY));
+          if (!alive) return;
+          const seed = seedFromState(s);
+          cursor = startScript(seed);
+          const n = numbersFromState(s);
+          if (n) setLiveNumbers(n);
+          setStatus("waiting");
+          connect();
+          return;
+        } catch (e) {
+          if (!alive) return;
+          setLoadError(e instanceof Error ? e.message : String(e));
+          setStatus("reconnecting");
+          await new Promise((r) => (retry = setTimeout(r, reconnectDelayMs(attempt++))));
+        }
+      }
+    })();
+
+    return () => {
+      alive = false;
+      es?.close();
+      clearTimeout(retry);
+      clearTimeout(refresh);
+      feed.ended = true;
+      feed.wake?.();
+    };
+  }, [source, run]);
+
+  // ---------------------------------------------------------------- player
+
+  useEffect(() => {
+    let alive = true;
+    const feed = feedRef.current;
+    let i = 0;
+    const effSpeed = () => Math.max(speedRef.current, source === "live" ? backlogSpeed(feed.steps.length - i) : 1);
+    const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms / effSpeed()));
     // Wait for layout after a state change. rAF pauses in hidden tabs, so a
     // timeout backs it up (browsers still throttle timers in long-hidden tabs;
     // the projector tab is expected to stay visible).
@@ -196,6 +391,10 @@ export function Theater() {
         requestAnimationFrame(go);
         setTimeout(go, 50);
       });
+    const place = (agent: string, x: number, y: number) => {
+      const at = layoutRef.current;
+      setMoves((c) => ({ layout: at, pos: c.layout === at ? { ...c.pos, [agent]: { x, y } } : { [agent]: { x, y } } }));
+    };
     const moveTo = async (agent: Agent, target: string, pane: Pane) => {
       await frame();
       const el = locate(target, pane);
@@ -209,9 +408,50 @@ export function Theater() {
         x = clamp(x, box.left + 8, box.right - 24);
         y = clamp(y, box.top + 8, box.bottom - 24);
       }
-      const at = layoutRef.current;
-      setMoves((c) => ({ layout: at, pos: c.layout === at ? { ...c.pos, [agent]: { x, y } } : { [agent]: { x, y } } }));
+      place(agent, x, y);
       await sleep(MOVE_MS);
+    };
+    const nextStep = async (): Promise<CursorStep | null> => {
+      while (alive) {
+        if (i < feed.steps.length) return feed.steps[i];
+        if (feed.ended) return null;
+        if (source === "live") setStatus((s) => (s === "live" || s === "playing" ? "live" : s));
+        await new Promise<void>((r) => (feed.wake = r));
+        feed.wake = null;
+      }
+      return null;
+    };
+
+    const finaleRun = async () => {
+      // Replay ending (design doc): cursors swarm, then fly into "Clients saved $X", which counts up.
+      const total = railFromEvents(feed.accepted).money.tax_saved_cents;
+      const clients = railFromEvents(feed.accepted).firm.clients;
+      const touches = humanTouches(railFromEvents(feed.accepted));
+      setFinale({ banner: `${plural(clients, "client")} · 7 agents · ${plural(touches, "human touch", "human touches")}`, saved: 0 });
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+      for (let round = 0; round < SWARM_ROUNDS && alive; round++) {
+        AGENTS.forEach(([id], k) => {
+          const p = swarmPos(k, round, W, H);
+          place(id, p.x, p.y);
+        });
+        await sleep(MOVE_MS);
+      }
+      if (!alive) return;
+      const money = visible(document.querySelector(".stagebox .g")) ?? visible(document.querySelector('[data-target="rail.money"] .big'));
+      if (money) {
+        const r = money.getBoundingClientRect();
+        AGENTS.forEach(([id], k) => place(id, r.left + (r.width * k) / AGENTS.length, r.bottom + 6));
+      }
+      await sleep(MOVE_MS);
+      const steps = 30;
+      for (let k = 1; k <= steps && alive; k++) {
+        setFinale((f) => (f ? { ...f, saved: Math.round((total * k) / steps) } : f));
+        await sleep(40);
+      }
+      if (!alive) return;
+      await sleep(1600);
+      if (alive) setFinale((f) => (f ? { ...f, banner: "" } : f));
     };
 
     (async () => {
@@ -220,13 +460,15 @@ export function Theater() {
       setTyping(null);
       setCaption(null);
       setProgress(0);
-      setPlaying(true);
       setDoneId(0);
+      setFinale(null);
       setMoves({ layout: "", pos: {} });
       await sleep(400);
-      const steps = script.steps;
-      for (let i = 0; i < steps.length && alive; i++) {
-        const step = steps[i];
+      for (;;) {
+        const step = await nextStep();
+        if (!alive) return;
+        if (!step) break;
+        if (source !== "live") setStatus("playing");
         // One bad step must never freeze the projector: log it and keep playing.
         try {
           if (movesCursor(step)) {
@@ -253,7 +495,7 @@ export function Theater() {
             const cap = captionFor(step);
             if (cap) {
               setCaption(cap);
-              if (soundRef.current && shouldSpeak(step)) speakText(step.text ?? "");
+              if (soundRef.current && shouldSpeak(step)) speak(step);
             }
             await sleep(hold);
             if (!alive) return;
@@ -263,17 +505,40 @@ export function Theater() {
           console.error(`[theater] step ${step.key} (${step.action} ${step.target}) failed`, err);
           if (!alive) return;
         }
-        if (i === steps.length - 1 || steps[i + 1].eventId !== step.eventId) setDoneId(step.eventId);
-        setProgress((i + 1) / steps.length);
+        i += 1;
+        const next = feed.steps[i];
+        if (!next || next.eventId !== step.eventId) setDoneId(step.eventId);
+        setProgress(i / Math.max(1, feed.steps.length));
       }
-      if (alive) setPlaying(false);
+      if (!alive) return;
+      setStatus("ended");
+      if (source === "replay") await finaleRun();
     })();
 
     return () => {
       alive = false;
-      cancelSpeech();
+      stopAudio();
     };
-  }, [script, run]);
+  }, [source, run, speak, stopAudio]);
+
+  // ---------------------------------------------------------------- derived view
+
+  const feed = feedRef.current;
+  // Rail numbers: the gateway's projections in live mode; otherwise only events the
+  // script accepted (deduplicated, valid), counted once their animation has played.
+  const logNumbers = useMemo(
+    () => railFromEvents(feed.accepted.filter((e) => e.id <= doneId)),
+    // feedVersion: the feed is a mutable ref, so its growth is tracked by version.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feed, feedVersion, doneId],
+  );
+  const baseNumbers = source === "live" && liveNumbers ? liveNumbers : logNumbers;
+  const numbers = finale ? { ...baseNumbers, money: { ...baseNumbers.money, tax_saved_cents: finale.saved } } : baseNumbers;
+  const byId = useMemo(
+    () => new Map(feed.accepted.map((e) => [e.id, e])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [feed, feedVersion],
+  );
 
   const typed: Typed = useCallback(
     (target, full) => (typing && typing.target === target && full !== undefined ? full.slice(0, typing.shown) : full),
@@ -282,8 +547,32 @@ export function Theater() {
 
   const current = byId.get(screen.lastEventId);
   const clock = formatClock(current?.ts, true) || "--:--:--";
-  const skippedCount = script?.skipped.length ?? 0;
-  const empty = script !== null && script.steps.length === 0;
+  const skippedCount = feed.skipped;
+  const loaded = feed.ended || source === "live";
+  const empty = source !== "live" && feed.ended && feed.steps.length === 0;
+
+  const sourceLabel = source === "live" ? "LIVE · gateway" : source === "replay" ? "REPLAY · full log" : "FIXTURE · contract sample";
+  const statusLabel: Record<Status, string> = {
+    loading: "OPENING",
+    playing: source === "replay" ? "REPLAYING" : "PLAYING LOG",
+    live: "LIVE",
+    waiting: "LIVE · waiting",
+    reconnecting: "RECONNECTING…",
+    ended: "END OF LOG",
+    error: "NO LOG",
+  };
+  const blinking = status === "live" || status === "playing";
+
+  const overlay =
+    status === "error"
+      ? { title: "Couldn’t load the action log", sub: loadError ?? "" }
+      : source === "live" && status === "reconnecting" && !liveNumbers
+        ? { title: "Gateway unreachable", sub: "Retrying…" }
+        : !loaded || status === "loading"
+          ? { title: "Firm opening…", sub: "Agents at their desks" }
+          : empty
+            ? { title: "No clients yet", sub: "Marketing is posting" }
+            : null;
 
   return (
     <div className={`theater${stage ? " stage" : ""}`} style={{ "--t": 1 / speed } as CSSProperties}>
@@ -292,12 +581,16 @@ export function Theater() {
         <span className="title">U-Tax</span>
         <span className="sub">the firm, live · every move rendered from the action log</span>
         <div className="pill">
-          <span className="source" title={skippedCount ? `${skippedCount} log event(s) skipped as malformed or unknown (see console)` : undefined}>
-            FIXTURE · contract sample{skippedCount ? ` · ${skippedCount} skipped` : ""}
+          <span
+            className={`source${source === "live" ? " gateway" : ""}`}
+            title={skippedCount ? `${skippedCount} log event(s) skipped as malformed or unknown (see console)` : undefined}
+          >
+            {sourceLabel}
+            {skippedCount ? ` · ${skippedCount} skipped` : ""}
           </span>
           <span className="live">
-            <span className={`dot${playing ? "" : " idle"}`} />
-            {loadError ? "NO LOG" : playing ? "PLAYING LOG" : script ? "END OF LOG" : "OPENING"}
+            <span className={`dot${blinking ? "" : " idle"}`} />
+            {statusLabel[status]}
           </span>
           <span className="mono" aria-label="time of the current event">
             {clock}
@@ -306,23 +599,23 @@ export function Theater() {
       </header>
 
       <PaneBoundary resetKey={screen.lastEventId}>
-      <main data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined}>
-        <div className="col left">
-          <MailPane screen={screen} typed={typed} />
-          <div className="low">
-            <SocialPane screen={screen} typed={typed} />
-            <PhonePane screen={screen} typed={typed} />
+        <main data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined}>
+          <div className="col left">
+            <MailPane screen={screen} typed={typed} />
+            <div className="low">
+              <SocialPane screen={screen} typed={typed} />
+              <PhonePane screen={screen} typed={typed} />
+            </div>
           </div>
-        </div>
-        <div className="col mid">
-          <SheetPane screen={screen} />
-          <div className="low">
-            <SearchPane screen={screen} typed={typed} />
-            <CalendarPane screen={screen} />
+          <div className="col mid">
+            <SheetPane screen={screen} />
+            <div className="low">
+              <SearchPane screen={screen} typed={typed} />
+              <CalendarPane screen={screen} />
+            </div>
           </div>
-        </div>
-        <Rail screen={screen} numbers={numbers} />
-      </main>
+          <Rail screen={screen} numbers={numbers} />
+        </main>
       </PaneBoundary>
 
       <footer>
@@ -334,6 +627,7 @@ export function Theater() {
         <span className="mono firmline">
           Firm run by <b>{plural(numbers.firm.agents, "agent")}</b> · <b>{plural(numbers.firm.clients, "client")}</b> ·{" "}
           <b>{plural(humanTouches(numbers), "human touch", "human touches")}</b>
+          {source === "replay" ? " · Replay" : ""}
         </span>
         <div className="bar" role="progressbar" aria-label="log progress" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
           <i style={{ width: `${progress * 100}%` }} />
@@ -345,15 +639,24 @@ export function Theater() {
               {s}×
             </button>
           ))}
-          <button className={sound ? "on" : ""} aria-pressed={sound} onClick={() => setSound((v) => !v)} title="Play spoken briefs and voice">
+          <button className={sound ? "on" : ""} aria-pressed={sound} onClick={() => setSound((v) => !v)} title="Play spoken briefs and CEO orders">
             {sound ? "Sound on" : "Sound off"}
           </button>
           <button className={stage ? "on" : ""} aria-pressed={stage} onClick={() => setStage((v) => !v)} title="Stage mode (S)">
             Stage
           </button>
-          <button onClick={() => setRun((r) => r + 1)} disabled={!script}>
+          <button
+            onClick={() => (HAS_GATEWAY && source !== "replay" ? setOverride("replay") : setRun((r) => r + 1))}
+            disabled={status === "loading"}
+            title={HAS_GATEWAY ? "Replay the whole night from the gateway log" : "Play the log again"}
+          >
             Replay
           </button>
+          {HAS_GATEWAY && source !== "live" && (
+            <button onClick={() => setOverride("live")} title="Follow the firm live">
+              Live
+            </button>
+          )}
         </div>
       </footer>
 
@@ -368,11 +671,18 @@ export function Theater() {
         </div>
       )}
 
-      {(loadError || !script || empty) && (
+      {finale?.banner && (
+        <div className="banner" role="status">
+          Night shift replayed
+          <small>{finale.banner}</small>
+        </div>
+      )}
+
+      {overlay && (
         <div className="overlay" role="status">
           <div>
-            {loadError ? "Couldn’t load the action log" : !script ? "Firm opening…" : "No clients yet"}
-            <small>{loadError ? loadError : !script ? "Agents at their desks" : "Marketing is posting"}</small>
+            {overlay.title}
+            <small>{overlay.sub}</small>
           </div>
         </div>
       )}
