@@ -110,12 +110,14 @@ _BUILTIN_NOT_ELIGIBLE = {
                          "a Delaware corporation",
 }
 SPECS: dict[str, Spec] = {
-    "memo": Spec(PLACEHOLDERS, lines=(DISCLAIMER,), builtin=(
+    # v1.7: memo_ref is required; the gateway refuses a render without a valid one
+    "memo": Spec(PLACEHOLDERS, required=("memo_ref",), lines=(DISCLAIMER,), builtin=(
         "Hi {{greeting_name}},\n"
         "Using the assumed-par-value method instead of the authorized-shares method, your "
         "estimated 2026 Delaware franchise tax drops from {{authorized_method}} to "
         "{{assumed_par_method}} (+{{annual_report_fee}} annual report fee = {{total}}), "
-        "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n" + DISCLAIMER)),
+        "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n" + DISCLAIMER
+        + "\n\nReference: {{memo_ref}}")),
     "ask-client": Spec(("greeting_name", "masked_name", "missing_list", "problems_line"),
                        required=("missing_list",), lines=(DISCLAIMER,), builtin=_BUILTIN_ASK),
     **{f"not-eligible-{reason}": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,), builtin=(

@@ -91,6 +91,7 @@ class Case:
     memo_message_id: str | None = None
     memo_version: int = 0
     memo_ref: str | None = None  # v1.7: the latest memo's reference (UTX-...)
+    memo_result: dict | None = None  # v1.7.1: the result the latest memo was sent with
     phone_attempts: dict[str, list[str]] = field(default_factory=dict)  # memo_ref -> statuses
     memo_ts: str | None = None
     call: dict[str, Any] | None = None
@@ -106,7 +107,8 @@ class Case:
             result = {"total_cents": self.result["total_cents"],
                       "authorized_method_cents": self.result["authorized_method_cents"]}
         return {"case_id": self.case_id, "masked_name": self.masked_name,
-                "status": self.status, "result": result}
+                "status": self.status, "result": result,
+                "flagged": bool(self.flags)}  # v1.7.1: any case.flagged
 
     def detail(self) -> dict[str, Any]:
         """What get_case returns to an agent: masked, this case only."""
@@ -151,7 +153,8 @@ class State:
     spent_by_provider: dict[str, Decimal] = field(default_factory=dict)
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
-                                                           "shortlisted": 0, "hired": 0})
+                                                           "shortlisted": 0, "hired": 0,
+                                                           "declined": 0})
     cap_log: dict[str, list[str]] = field(default_factory=lambda: {t: [] for t in TRUST_TYPES})
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
     last_login_brief: dict | None = None
@@ -169,10 +172,12 @@ class State:
     def tax_saved_cents(self) -> int:
         """Contract §4 (v1.4.1): Σ over sent cases of max(0, authorized − (total − fee)).
         The annual report fee is paid under either method, so it is never a saving."""
-        return sum(max(0, c.result["authorized_method_cents"]
-                       - (c.result["total_cents"] - c.result["annual_report_fee_cents"]))
+        # v1.7.1: per case, the result the latest memo was sent with (a recompute after
+        # it, for a revision not yet sent, never changes the firm's saving)
+        return sum(max(0, c.memo_result["authorized_method_cents"]
+                       - (c.memo_result["total_cents"] - c.memo_result["annual_report_fee_cents"]))
                    for c in self.cases.values()
-                   if c.result and c.memo_message_id is not None)
+                   if c.memo_result and c.memo_message_id is not None)
 
     def spent_usd(self) -> Decimal:
         return sum(self.spent_by_provider.values(), Decimal(0))
@@ -193,7 +198,11 @@ class State:
                                       for p, v in sorted(self.spent_by_provider.items())},
             },
             # v1.5: every screened candidate is listed for the CEO (no silent rejection)
-            "hiring": {**self.hiring, "candidates": [
+            # v1.7.1: awaiting = shortlisted with no hire/decline yet
+            "hiring": {**self.hiring,
+                       "awaiting": sum(1 for c in self.candidates.values()
+                                       if c.get("stage") == "shortlisted"),
+                       "candidates": [
                 {"candidate_id": c["candidate_id"], "name_masked": c["name_masked"],
                  "stage": c.get("stage"), "credentials": c.get("credentials")}
                 for c in sorted(self.candidates.values(), key=lambda c: c["candidate_id"])
@@ -354,6 +363,8 @@ class State:
             case.memo_version = case.facts_version
             case.memo_ts = e.ts
             case.memo_ref = e.payload.get("memo_ref")
+            if case.result:
+                case.memo_result = dict(case.result)
 
     def _on_call_booked(self, e: Event) -> None:
         case = self._case(e)
@@ -443,7 +454,8 @@ class State:
         if stage not in cand["stages"]:
             cand["stages"].add(stage)
             key = {"applicant": "applicants", "screened": "screened",
-                   "shortlisted": "shortlisted", "hired": "hired"}.get(stage)
+                   "shortlisted": "shortlisted", "hired": "hired",
+                   "declined": "declined"}.get(stage)
             if key:
                 self.hiring[key] += 1
 

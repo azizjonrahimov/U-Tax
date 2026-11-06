@@ -109,8 +109,9 @@ def _sponsor(name: str, choice: str, settings: Settings):
         return MobilerunDevice(_need(settings.mobilerun_api_key, "MOBILERUN_API_KEY", switch),
                                device_id=settings.mobilerun_device_id or None,
                                mail_app=settings.mobilerun_mail_app or None,
-                               sender=settings.mobilerun_memo_sender or settings.inbox_clients
-                               or None,
+                               # mandatory: only memos from our own sender count
+                               sender=_need(settings.mobilerun_memo_sender,
+                                            "MOBILERUN_MEMO_SENDER", switch),
                                model=settings.mobilerun_model or None)
     if name == "scrape" and choice == "apify":  # task 9 (agents lane's adapter)
         from app.gateway.adapters.apify import ApifyScrape

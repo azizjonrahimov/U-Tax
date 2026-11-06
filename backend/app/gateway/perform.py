@@ -64,6 +64,7 @@ from app.gateway.projections import TRANSITIONS, TRUST_TYPES, Case, State, rebui
 from app.gateway.projections import money_text
 from app.gateway.settings import Settings
 from app.gateway.templates import (
+    MEMO_REF,
     with_reference,
     FACT_LABELS,
     MEMO_SUBJECT,
@@ -411,6 +412,25 @@ class Gateway:
                      if cand.get("stage") == "applicant"]
         self._deliver_wakes(owed)
         return owed
+
+    HIDDEN = "[hidden: flagged by QA]"
+
+    def flagged_injection(self, case_id: str | None) -> bool:
+        case = self.state.cases.get(case_id) if case_id else None
+        return case is not None and "possible_injection" in case.flags
+
+    def public_event(self, event: Event, *, admin: bool = False) -> dict[str, Any]:
+        """An event as theater readers see it (v1.7.1): once QA flags a case as a possible
+        injection, every event of that case, earlier ones too, has its subject and body
+        replaced. The admin token still sees the originals."""
+        out = event.public()
+        if admin or not self.flagged_injection(event.case_id):
+            return out
+        payload = dict(out["payload"])
+        for key in ("subject", "body"):
+            if key in payload:
+                payload[key] = self.HIDDEN
+        return {**out, "payload": payload}
 
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The
@@ -1676,7 +1696,11 @@ class Gateway:
             self._epoch = f"{first.id}:{first.ts}" if first is not None else ""
         return "UTX-" + hashlib.sha256(f"{self._epoch}|{key}".encode()).hexdigest()[:12].upper()
 
-    def _memo_body(self, case: Case, *, outgoing: bool = False, memo_ref: str = "") -> str:
+    def _memo_body(self, case: Case, *, outgoing: bool = False, memo_ref: str) -> str:
+        """The memo text. `memo_ref` is minted once per memo version (_memo_ref of the memo
+        key) and reused for both renders, retries and memo.sent; no render without it."""
+        if not MEMO_REF.fullmatch(memo_ref or ""):
+            raise Refused("template_invalid", "memo_ref must be UTX- plus 8-16 capitals/digits")
         facts = case.facts or {}
         rnd_known = facts.get("gross_receipts_cents") is not None \
             and facts.get("years_with_receipts") is not None

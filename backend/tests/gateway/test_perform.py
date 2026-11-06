@@ -31,7 +31,8 @@ def test_happy_path_event_sequence(h):
     assert state["cases"] == [{"case_id": "case_1", "masked_name": "Team #1",
                                "status": "CALL_BOOKED",
                                "result": {"total_cents": 45000,
-                                          "authorized_method_cents": 8516500}}]
+                                          "authorized_method_cents": 8516500},
+                               "flagged": False}]  # v1.7.1
     assert state["touches"]["training"] == 2
     assert state["trust"]["email"] == "AUTO"
     # v1.4.1: franchise tax saved only (the $50 fee is paid either way)
@@ -353,7 +354,8 @@ def test_crm_failure_never_blocks_and_retries_later(h):
 def test_memo_template_file_is_used(make_harness, tmp_path):
     template = tmp_path / "memo.md"
     template.write_text("Hello {{masked_name}}: {{total}} by {{due_date}}.\n{{rnd_note}}\n"
-                        "Educational estimate — not tax advice.", encoding="utf-8")
+                        "Educational estimate — not tax advice.\nReference: {{memo_ref}}",
+                        encoding="utf-8")  # v1.7: memo_ref is required
     h = make_harness(memo_template_path=template)
     h.to_sent()
     body = h.events("memo.sent")[0].payload["body"]
@@ -443,7 +445,8 @@ def test_hr_flow_and_human_hire(h):
     for stage in ("applicant", "declined", "hired"):  # v1.4: never an agent's call
         assert h.do("hr_record", stage=stage, candidate_id="cand_1").error["code"] == "bad_input"
     h.ok("candidate_decision", candidate_id="cand_1", decision="hire")
-    assert h.gw.state.hiring == {"applicants": 1, "screened": 0, "shortlisted": 1, "hired": 1}
+    assert h.gw.state.hiring == {"applicants": 1, "screened": 0, "shortlisted": 1, "hired": 1,
+                                 "declined": 0}  # v1.7.1
     assert h.events("hr.hired")[0].actor == "ceo"
 
 
