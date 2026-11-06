@@ -94,7 +94,7 @@ every key out of git.
 | `ADAPTER_SCRAPE=apify` | not built | `APIFY_TOKEN` | `test_scrape_fee_page_and_search` (fee page against `fixtures/snapshots/delaware-fees.html`) |
 | `ADAPTER_TOOLBUY=monid` | not built | *proposed* `MONID_API_KEY` | `test_toolbuy_reports_decimal_cost` (cost must be a Decimal, booked as `cost.booked`) |
 | `ADAPTER_CALENDAR=agentmail` (design D27; replaces google) | **built** (task 8), never run against the real API | the AgentMail mail env above, and `ADAPTER_MAIL=agentmail` too (refuses to boot otherwise); optional `UTAX_CALL_LOCATION` (the meeting link shown on the invitation); US region only | `test_calendar_book_is_idempotent` against the fake, plus the calendar tests in `test_agentmail.py` and `test_task8_review.py`. Deferred item 7 still stands: an approved slot the calendar keeps rejecting holds the other slots. |
-| `ADAPTER_SOCIAL=naive` | **built** (task 8), never run against the real API | `NAIVE_API_KEY` (scope `sessions:write`); `NAIVE_SOCIAL_IDENTITY` (`utax-mkt`, or its `idn_` id if the name answers 404), with its social workspace activated and X/LinkedIn connected; `PUBLIC_TALK_URL`; `PUBLIC_ASSET_HOSTS` for images | `test_social_post_is_idempotent` against the Naïve fake, plus `tests/adapters/test_naive_social.py`; live: `test_live_post_once` with `NAIVE_SOCIAL_TEST_POST=yes` (it posts publicly) |
+| `ADAPTER_SOCIAL=naive` | **built** (task 8), never run against the real API | `NAIVE_API_KEY` (scope `sessions:write`); `NAIVE_SOCIAL_IDENTITY=utax-mkt`; if Naïve refuses the name in the path (a post answers 404, reported as not configured), the owner sets it to the `idn_...` id from `naive identity list`, with its social workspace activated and X/LinkedIn connected; `PUBLIC_TALK_URL`; `PUBLIC_ASSET_HOSTS` for images | `test_social_post_is_idempotent` against the Naïve fake, plus `tests/adapters/test_naive_social.py`; live: `test_live_post_once` with `NAIVE_SOCIAL_TEST_POST=yes` (it posts publicly) |
 | `ADAPTER_PAY=stripe` | not built (no payment flow in v1.6) | `STRIPE_SECRET_KEY` (`sk_test_` first) | `test_pay_has_no_adapter_yet` must be replaced by a real pay suite |
 
 Each suite also checks error mapping through `FaultPlan`: 429 becomes `RateLimited`
@@ -103,6 +103,29 @@ an HTTP adapter, the factory drives these with an `httpx.MockTransport`. After a
 the whole backend suite (`pytest` in `backend/`). The gateway tests use the local adapters,
 so they keep passing. For the real service, run one fixture end to end with the
 `/api/dev/inject-email` admin route, and check the theater's event stream.
+
+## Post-hackathon
+
+Accepted for the hackathon by the controller (task 8 review), to fix afterwards:
+
+- **Inbound hook does work in the request** (mail review 8). `/hooks/agentmail` opens
+  the case, sends the hiring questionnaire and delivers the wakes before it answers.
+  Tonight's mitigation: 3 s / 8 s timeouts, and the message-id dedupe makes AgentMail's
+  retries safe. Fix: write the inbound event, answer 200, and run the rest from a queue.
+- **Inbound dedupe keys on the sender's Message-ID** (mail review 11). `email:{message_id}`
+  uses an id the sender chooses, not scoped by inbox, so a resend that reuses an id is
+  dropped as a duplicate. Fix: key on a hash of inbox_id + message_id (an event key
+  format change, so it needs a migration note).
+- **A booking that times out after AgentMail stored it** (calendar review 5). After 3
+  timeouts the case is BLOCKED although the invitation went out. Re-booking the same slot
+  replays safely (same client_id); a different slot sends a second invitation, and the
+  first event is never cancelled. Fix: on a timeout, look the event up by client_id first.
+- **A 2xx can hide a refused invitation** (calendar review 10). AgentMail stores the event
+  even when outbound checks refuse the invitation mail, so `call.booked` is written but the
+  client got nothing. Fix: subscribe to message.sent / message.rejected for the invitation
+  and flag the case.
+- **Deferred since 6c LOW, item 7**: an approved slot the real calendar keeps rejecting
+  holds the other slots until it passes.
 
 ## Lesson
 

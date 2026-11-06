@@ -342,8 +342,8 @@ falls back to a built-in template if the file is missing.
 ## 8. Theater flags and the two voice/console pages
 
 - Once a case has a `case.flagged` (`possible_injection`) event, the gateway serves **every**
-  event of that case (earlier ones included) to theater-token readers with `subject` and `body`
-  replaced by `"[hidden: flagged by QA]"` (`/api/events`, the stream, `/api/state`); the admin
+  event of that case (earlier ones included) to theater-token readers with `subject`, `body`,
+  `voice.command.text` and `facts.extracted.quotes` values replaced by `"[hidden: flagged by QA]"` (`/api/events`, the stream, `/api/state`); the admin
   token still sees them. The theater never shows the mail body of a flagged case either; it shows "hidden: flagged by QA" instead. It renders images only from hosts in
   `NEXT_PUBLIC_ASSET_HOSTS`.
 - Theater env: `NEXT_PUBLIC_SHOW_BLOCKED` and `NEXT_PUBLIC_SHOW_QUEUE`, both default `1`
@@ -363,6 +363,8 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.2 (2026-11-07, backend task 9): flagged hiding also covers voice text and fact quotes.
 
 - v1.7.1 (2026-11-07, frontend slice 3 review): `cases[].flagged`; hiring `awaiting` and `declined`;
   gateway hides flagged cases' subject/body from theater-token readers, retroactively; tax-saved parity rule.

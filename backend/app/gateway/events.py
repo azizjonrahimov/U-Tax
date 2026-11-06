@@ -38,9 +38,9 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
                      "form5472_flag", "rnd_flag", "engine_version"),
     "qa.passed": _QA,
     "qa.failed": _QA,
-    "memo.sent": ("to_masked", "subject", "body", "message_id", "seconds_since_last_fact"),
+    "memo.sent": ("to_masked", "subject", "body", "message_id", "seconds_since_last_fact", "memo_ref"),
     "call.booked": ("start", "minutes", "invitee_masked"),
-    "phone.checked": ("screenshot_url", "rendered_ok"),
+    "phone.checked": ("rendered_ok", "status_note"),  # v1.7: the screenshot url is private
     "crm.sync_requested": _CRM,
     "crm.synced": _CRM,
     "post.published": ("channel", "text", "url", "image_url"),

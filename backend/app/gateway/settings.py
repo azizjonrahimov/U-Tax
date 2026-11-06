@@ -53,6 +53,13 @@ class Settings:
     agentmail_base_url: str = "https://api.agentmail.to"
     hook_token: str = ""  # fallback for /hooks/*: X-UTax-Hook-Token when no signing secret
     call_location: str = ""  # the review call's meeting link or phone (calendar invites)
+    mail_qa_bcc: str = ""  # v1.7: the QA phone's mailbox; every memo is BCC'd to it
+    mobilerun_api_key: str = ""
+    mobilerun_device_id: str = ""
+    mobilerun_mail_app: str = ""
+    mobilerun_memo_sender: str = ""
+    mobilerun_model: str = ""
+    apify_token: str = ""
     public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"
@@ -109,6 +116,13 @@ class Settings:
             agentmail_base_url=_env("AGENTMAIL_BASE_URL") or "https://api.agentmail.to",
             hook_token=_env("UTAX_HOOK_TOKEN"),
             call_location=_env("UTAX_CALL_LOCATION"),
+            mail_qa_bcc=_env("MAIL_QA_BCC"),
+            mobilerun_api_key=_env("MOBILERUN_API_KEY"),
+            mobilerun_device_id=_env("MOBILERUN_DEVICE_ID"),
+            mobilerun_mail_app=_env("MOBILERUN_MAIL_APP"),
+            mobilerun_memo_sender=_env("MOBILERUN_MEMO_SENDER"),
+            mobilerun_model=_env("MOBILERUN_MODEL"),
+            apify_token=_env("APIFY_TOKEN"),
             naive_api_key=_env("NAIVE_API_KEY"),
             naive_api_base=_env("NAIVE_API_BASE") or "https://api.vetta.sh",
             naive_social_identity=_env("NAIVE_SOCIAL_IDENTITY"),

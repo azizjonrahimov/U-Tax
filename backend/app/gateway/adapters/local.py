@@ -104,7 +104,8 @@ class LocalMail:
             (self.outbox / f"{message_id}.json").write_text(
                 json.dumps({"message_id": message_id, "key": key, "to": mail.to,
                             "subject": mail.subject, "body": mail.body,
-                            "in_reply_to": mail.in_reply_to}, indent=1, ensure_ascii=False),
+                            "in_reply_to": mail.in_reply_to, "bcc": mail.bcc}, indent=1,
+                           ensure_ascii=False),
                 encoding="utf-8",
             )
             self._index.put(key, message_id)

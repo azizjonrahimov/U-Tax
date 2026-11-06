@@ -27,7 +27,19 @@ MEMO_SUBJECT = "Your Delaware franchise tax estimate"
 QUESTIONNAIRE_SUBJECT = "U-Tax: a few questions about the gig"
 DECISION_SUBJECT = "U-Tax: about the memo review gig"
 PLACEHOLDERS = ("greeting_name", "masked_name", "authorized_method", "assumed_par_method",
-                "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note")
+                "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note",
+                "memo_ref")
+MEMO_REF = re.compile(r"UTX-[A-Z0-9]{8,16}")
+
+
+def with_reference(text: str, memo_ref: str) -> str:
+    """v1.7: the memo's last line is `Reference: <memo_ref>`, whatever the template did
+    (the phone check finds the memo only by it). Any other Reference line goes."""
+    if not MEMO_REF.fullmatch(memo_ref):
+        raise ValueError("memo_ref must be UTX- plus 8-16 capitals/digits")
+    kept = [line for line in text.rstrip().splitlines()
+            if not re.fullmatch(r"\s*Reference:\s*UTX-[A-Z0-9]*\s*", line)]
+    return "\n".join(kept).rstrip() + f"\n\nReference: {memo_ref}"
 
 FORM5472_NOTE = ("Heads-up: with a 25%+ foreign owner, your company likely has to file IRS "
                  "Form 5472 with its federal return; the penalty for missing it is $25,000 "
@@ -98,12 +110,14 @@ _BUILTIN_NOT_ELIGIBLE = {
                          "a Delaware corporation",
 }
 SPECS: dict[str, Spec] = {
-    "memo": Spec(PLACEHOLDERS, lines=(DISCLAIMER,), builtin=(
+    # v1.7: memo_ref is required; the gateway refuses a render without a valid one
+    "memo": Spec(PLACEHOLDERS, required=("memo_ref",), lines=(DISCLAIMER,), builtin=(
         "Hi {{greeting_name}},\n"
         "Using the assumed-par-value method instead of the authorized-shares method, your "
         "estimated 2026 Delaware franchise tax drops from {{authorized_method}} to "
         "{{assumed_par_method}} (+{{annual_report_fee}} annual report fee = {{total}}), "
-        "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n" + DISCLAIMER)),
+        "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n" + DISCLAIMER
+        + "\n\nReference: {{memo_ref}}")),
     "ask-client": Spec(("greeting_name", "masked_name", "missing_list", "problems_line"),
                        required=("missing_list",), lines=(DISCLAIMER,), builtin=_BUILTIN_ASK),
     **{f"not-eligible-{reason}": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,), builtin=(
@@ -227,8 +241,10 @@ def _tidy(text: str) -> str:
 
 
 def memo_values(*, masked_name: str, result: dict, form5472: bool, rnd: bool,
-                rnd_known: bool, greeting_name: str | None = None) -> dict[str, str]:
+                rnd_known: bool, greeting_name: str | None = None,
+                memo_ref: str = "") -> dict[str, str]:
     return {
+        "memo_ref": memo_ref,
         "greeting_name": greeting_name or masked_name,
         "masked_name": masked_name,
         "authorized_method": format_usd(result["authorized_method_cents"]),

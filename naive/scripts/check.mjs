@@ -150,7 +150,9 @@ const MEMO_PLACEHOLDERS = (() => {
 // X/LinkedIn sections (the gateway's post guard). spend: money spent is called "estimated".
 // optional: placeholders that may render empty; every empty/filled combination must render cleanly.
 const TEMPLATE_RULES = {
-  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS, optional: ["form5472_note", "rnd_note"] },
+  // contract v1.7 §7: the phone check finds the memo only by its last line
+  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS, optional: ["form5472_note", "rnd_note"],
+    lastLine: "Reference: {{memo_ref}}" },
   "ask-client.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list", "problems_line"], optional: ["problems_line"] },
   "not-eligible-not_incorporated.md": { body: true, client: true, placeholders: ["greeting_name"] },
   "not-eligible-outside_delaware.md": { body: true, client: true, placeholders: ["greeting_name"] },
@@ -262,6 +264,10 @@ function templateProblems(file, text, rule) {
     if (!text.includes(`${DISCLAIMER}.`)) bad(`missing the line "${DISCLAIMER}."`);
     if (/\$\s?\d/.test(text.replace(/\{\{[^}]*\}\}/g, ""))) bad("literal dollar amount in a client template");
   }
+  if (rule.lastLine) {
+    const last = text.split("\n").filter((l) => l.trim()).pop()?.trim();
+    if (last !== rule.lastLine) bad(`the last line must be exactly "${rule.lastLine}" (got "${last}")`);
+  }
   if (rule.applicant && !text.includes(DISCLOSURE)) bad("missing the AI-screen disclosure line");
   if (rule.body && /^\s*subject:/i.test(text)) bad("starts with a Subject: line; the gateway sets the subject");
   if (rule.noAmounts && /\$\s?\d/.test(text)) bad("literal dollar amount");
@@ -292,6 +298,9 @@ const TEMPLATE_SELF_TEST = [
 ];
 for (const [text, why] of TEMPLATE_SELF_TEST)
   if (!templateProblems("self-test.md", text, CLIENT_RULE).some((p) => p.includes(why))) fail(`template rule self-test: expected "${why}" for ${JSON.stringify(text)}`);
+if (!templateProblems("self-test.md", "Hi {{greeting_name}},\nEducational estimate — not tax advice.\nReference: {{x}}\nP.S.",
+  { ...CLIENT_RULE, lastLine: "Reference: {{x}}" }).some((p) => p.includes("last line")))
+  fail('template rule self-test: expected "last line" when the reference is not last');
 if (templateProblems("self-test.md", "Hi {{greeting_name}},\nTotal is due.\n{{x}}\n\nEnd.\nEducational estimate — not tax advice.", CLIENT_RULE).length)
   fail("template rule self-test: a well-formed template was refused");
 
