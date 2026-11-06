@@ -90,6 +90,7 @@ class Mention:
     label: str | None  # authorized_shares | issued_shares | gross_assets | None
     is_share: bool
     is_money: bool
+    span: str = ""  # the text as the client wrote it ("10,000,000", "$500k")
 
 
 def mentions(text: str) -> list[Mention]:
@@ -115,7 +116,8 @@ def mentions(text: str) -> list[Mention]:
         is_money = "$" in span or label == "gross_assets"
         is_share = not is_money and bool(_SHARE_WORD.search(after_words)
                                          or _SHARE_WORD.search(before_words))
-        found.append(Mention(value=value, label=label, is_share=is_share, is_money=is_money))
+        found.append(Mention(value=value, label=label, is_share=is_share, is_money=is_money,
+                             span=span))
     return found
 
 

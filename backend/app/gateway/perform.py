@@ -897,6 +897,19 @@ class Gateway:
     def _ceo_brief(self, args: dict) -> dict:
         """GET /api/ceo/brief: the login brief (stand-in: a template over the projections)."""
         since_id = _int(args, "since_id") or 0
+        # Nothing happened since the last login brief (a reload, a polling console):
+        # return that brief again instead of writing two more events every call.
+        last = next(iter(self.store.since(self.state.last_event_id - 1)), None) \
+            if self.state.last_event_id else None
+        if last is not None and last.type == "ceo.notified" and \
+                last.payload["reason"] == "login":
+            brief = next((e for e in self.store.since(last.id - 2)
+                          if e.type == "brief.generated" and e.id < last.id), None)
+            if brief is not None:
+                return {"brief_event_id": brief.id, "text": brief.payload["text"],
+                        "counts": brief.payload["counts"],
+                        "pending_approvals": self._pending_approvals(),
+                        "last_event_id": self.state.last_event_id}
         text, counts = self._brief_text()
         new_events = max(0, self.state.last_event_id - since_id)
         if since_id:

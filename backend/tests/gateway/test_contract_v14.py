@@ -101,3 +101,14 @@ def test_failed_wakes_are_retried_with_backoff(h, monkeypatch):
     h.gw.retry_wakes()
     assert calls == [f"New case {case_id}"] * 3
     assert h.gw.pending_wake_retries() == []
+
+
+def test_repeated_ceo_brief_does_not_spam_the_log(h):
+    h.new_case()
+    first = h.ok("ceo_brief")
+    count = len(list(h.store.since(0)))
+    again = h.ok("ceo_brief")
+    assert again["brief_event_id"] == first["brief_event_id"]
+    assert len(list(h.store.since(0))) == count  # nothing new written
+    h.new_case(sender="b@two.dev")
+    assert h.ok("ceo_brief")["brief_event_id"] != first["brief_event_id"]
