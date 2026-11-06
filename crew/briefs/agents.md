@@ -104,3 +104,8 @@ and test with httpx.MockTransport (auth header, success, 429 mapped, error mappe
 idempotency where the port has a key). Never call a live API, and mark unverified shapes
 `# UNVERIFIED`. Make a venv in your worktree's backend/ for pytest. One READY per adapter or
 per pair.
+
+## Saturday note (contract v1.7.3)
+Marketing gains `buy_tool {tool, input, key}` (Monid). Add it to mkt's allowed set and prompt:
+use it only for enriching public startup lists, never with client data or emails, and only for
+tools the owner has put in MONID_TOOLS.
