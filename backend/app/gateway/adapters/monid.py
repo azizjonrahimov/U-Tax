@@ -16,15 +16,16 @@ Spend safety, because every run costs money and an agent picks the tool:
   `fields` (optional) limits which input keys the agent may send;
 - the agent's input goes only in `body`, and is refused if it carries an email address;
 - a daily cap (MONID_DAILY_CAP_USD, default 1.00): before each run, today's booked spend plus
-  every in-flight ceiling plus this tool's ceiling must fit. Also set a run cap control in the
+  every in-flight or unsure ceiling plus this tool's ceiling must fit. Also set a run cap control in the
   Monid dashboard;
 - a purchase is remembered by our key (a repeat returns the first Purchase; the same key with a
   different tool or input is Rejected). If a failure leaves it unclear whether Monid charged (a
   timeout or a dropped connection after sending, a 5xx, an unreadable reply, a run that never
-  finished), the key is marked unsure and refused until `resolve(key, cost_usd)` records what
-  `GET /v1/runs` shows;
+  finished, anything unexpected after sending), the key is marked unsure: it is refused and its
+  ceiling stays reserved against the cap until `resolve(key, cost_usd, result)` records what
+  `GET /v1/runs` shows (a charged run is then remembered, so the key never pays twice);
 - a COMPLETED run with no readable `billing.reportedCost` books the tool's ceiling (fail
-  closed).
+  closed); `max_usd` must be above 0. Purchases are remembered for the last 1000 keys.
 All of this is per-process memory: a restart forgets purchases, unsure keys and today's spend.
 The gateway should rebuild them from its cost events at boot (reported to the backend).
 
@@ -62,7 +63,7 @@ API = "https://api.monid.ai"
 UNITS = {"MICRO_DOLLAR": Decimal("0.000001"), "CENT": Decimal("0.01"), "DOLLAR": Decimal("1")}
 RUN_ID = re.compile(r"[A-Za-z0-9_-]{1,80}")
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-NOT_CHARGED = (400, 401, 402, 403, 404, 408, 429)  # answers that prove no run was billed
+NOT_CHARGED = (400, 401, 402, 403, 404, 408, 409, 422, 429)  # answers that prove no run was billed
 PENDING = ("READY", "RUNNING", "STOPPING")
 MAX_REMEMBERED = 1000
 
@@ -100,7 +101,10 @@ def cost_usd(run: dict) -> str | None:
         raise Unreadable(repr(reported)[:120]) from exc
     if isinstance(reported.get("value"), bool) or not value.is_finite() or value < 0:
         raise Unreadable(repr(reported)[:120])
-    return _usd(value * unit)
+    try:
+        return _usd(value * unit)
+    except ArithmeticError as exc:
+        raise Unreadable(repr(reported)[:120]) from exc
 
 
 def _has_email(value: object) -> bool:
@@ -108,7 +112,7 @@ def _has_email(value: object) -> bool:
         return bool(EMAIL.search(value))
     if isinstance(value, dict):
         return any(_has_email(k) or _has_email(v) for k, v in value.items())
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple, set, frozenset)):
         return any(_has_email(v) for v in value)
     return False
 
@@ -124,6 +128,8 @@ def _tools(raw: object) -> dict[str, dict]:
         if "max_usd" not in spec:
             raise NotConfigured(f"monid: tool '{name}' needs max_usd (its price ceiling)")
         ceiling = _money(spec["max_usd"], f"max_usd of '{name}'")
+        if ceiling <= 0:
+            raise NotConfigured(f"monid: max_usd of '{name}' must be above 0 (it is what the cap reserves)")
         fields = spec.get("fields")
         if fields is not None and not (isinstance(fields, list) and all(isinstance(f, str) for f in fields)):
             raise NotConfigured(f"monid: fields of '{name}' must be a list of names")
@@ -159,7 +165,7 @@ class MonidToolBuy:
         self._sleep, self._clock, self._today = sleep, clock, today
         self._lock = threading.Lock()
         self._bought: OrderedDict[str, tuple[str, Purchase]] = OrderedDict()  # key -> (fingerprint, first purchase)
-        self._unsure: dict[str, str] = {}  # key -> fingerprint; may have been charged
+        self._unsure: dict[str, tuple[str, Decimal]] = {}  # key -> (fingerprint, ceiling still reserved)
         self._inflight: dict[str, Decimal] = {}  # key -> reserved ceiling
         self._spent: tuple[str, Decimal] = ("", Decimal(0))  # (day, booked USD)
         self._http = httpx.Client(base_url=API, timeout=timeout, transport=transport,
@@ -182,20 +188,29 @@ class MonidToolBuy:
     def _book(self, amount: Decimal) -> None:
         self._spent = (self._spent[0], self._spent_today() + amount)
 
+    def _committed(self) -> Decimal:
+        """Booked today + every in-flight ceiling + every unsure run's ceiling (it may be charged)."""
+        held = sum(self._inflight.values(), Decimal(0)) + sum((c for _, c in self._unsure.values()), Decimal(0))
+        return self._spent_today() + held
+
     def _remember(self, key: str, fp: str, purchase: Purchase) -> None:
         self._bought[key] = (fp, purchase)
+        self._bought.move_to_end(key)
         while len(self._bought) > MAX_REMEMBERED:
             self._bought.popitem(last=False)
 
-    def resolve(self, key: str, cost_usd: str | None) -> None:
-        """After checking GET /v1/runs for an unsure key: book what it cost ("0" or None when it
-        was never charged) and let the key be bought again."""
+    def resolve(self, key: str, cost_usd: str | None, result: Any = None) -> None:
+        """After checking GET /v1/runs for an unsure key. Never charged: resolve(key, None) frees
+        the key and its reserved ceiling. Charged: resolve(key, "0.0400", output) books the cost
+        and remembers the purchase, so the same key returns it instead of paying again."""
+        amount = _money(cost_usd, "cost_usd") if cost_usd is not None else None  # parse before forgetting
         with self._lock:
-            if key not in self._unsure:
+            entry = self._unsure.pop(key, None)
+            if entry is None:
                 return
-            del self._unsure[key]
-            if cost_usd is not None:
-                self._book(_money(cost_usd, "cost_usd"))
+            if amount is not None and amount > 0:
+                self._book(amount)
+                self._remember(key, entry[0], Purchase(result=result, cost_usd=_usd(amount), bought=True))
 
     # ------------------------------------------------------------------ buying
 
@@ -207,45 +222,58 @@ class MonidToolBuy:
             raise Rejected("monid: input must be an object")
         if spec["fields"] is not None and not set(input) <= spec["fields"]:
             raise Rejected(f"monid: '{tool}' takes only {sorted(spec['fields'])}")
+        try:
+            canonical = json.dumps(input, sort_keys=True, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise Rejected("monid: input must be plain JSON (objects, lists, strings, finite numbers)") from exc
+        input = json.loads(canonical)  # what is fingerprinted, checked and sent is the same JSON
         if _has_email(input):
             raise Rejected("monid: input carries an email address; send no client contact data")
-        fp = _http.fingerprint(tool, json.dumps(input, sort_keys=True, default=str))
+        fp = _http.fingerprint(tool, canonical)
         ceiling = spec["max_usd"]
         with self._lock:
             if key in self._bought:
                 first_fp, purchase = self._bought[key]
                 if first_fp != fp:
                     raise Rejected("monid: this key was used for a different purchase")
+                self._bought.move_to_end(key)
                 return purchase
             if key in self._unsure:
                 raise Rejected(f"monid: purchase {key} may already be charged; check GET /v1/runs, then resolve()")
             if key in self._inflight:
                 raise Rejected(f"monid: purchase {key} is already in flight")
-            committed = self._spent_today() + sum(self._inflight.values(), Decimal(0))
-            if committed + ceiling > self.daily_cap:
+            if self._committed() + ceiling > self.daily_cap:
                 raise Rejected(f"monid: today's cap of ${self.daily_cap} would be exceeded")
             self._inflight[key] = ceiling
         try:
             run = self._run({"provider": spec["provider"], "endpoint": spec["endpoint"], "input": {"body": input}})
-            try:
-                cost = cost_usd(run)
-            except Unreadable:
-                cost = None
-            if cost is None:
-                log.warning("monid: run for %s has no readable cost; booking the ceiling", tool)
-                cost = _usd(ceiling)
-            purchase = Purchase(result=run.get("output"), cost_usd=cost, bought=True)
-            with self._lock:
-                self._book(Decimal(cost))
-                self._remember(key, fp, purchase)
-            return purchase
         except Unsure:
             with self._lock:
-                self._unsure[key] = fp
+                self._unsure[key] = (fp, ceiling)
+                self._inflight.pop(key, None)
             raise
-        finally:
+        except PortError:  # proved not charged: release the reservation
             with self._lock:
                 self._inflight.pop(key, None)
+            raise
+        except BaseException as exc:  # anything else after sending: assume it may be charged
+            with self._lock:
+                self._unsure[key] = (fp, ceiling)
+                self._inflight.pop(key, None)
+            raise Unsure(f"monid: unexpected {type(exc).__name__} after sending; it may be charged") from exc
+        try:
+            cost = cost_usd(run)
+        except (Unreadable, ArithmeticError):
+            cost = None
+        if cost is None:
+            log.warning("monid: run for %s has no readable cost; booking the ceiling", tool)
+            cost = _usd(ceiling)
+        purchase = Purchase(result=run.get("output"), cost_usd=cost, bought=True)
+        with self._lock:
+            self._book(Decimal(cost))
+            self._remember(key, fp, purchase)
+            self._inflight.pop(key, None)
+        return purchase
 
     def _run(self, payload: dict) -> dict:
         try:

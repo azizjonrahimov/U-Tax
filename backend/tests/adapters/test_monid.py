@@ -345,3 +345,76 @@ def test_contract_style_toolbuy_check(tmp_path):
     faults.add(RateLimited())
     with pytest.raises(RateLimited):
         port.buy("enrichment", {"domain": "team8.dev"}, key="buy-2")
+
+
+# ------------------------------------------------------------------ fix-pass regressions
+
+
+def test_unsure_runs_keep_their_ceiling_reserved_against_the_cap():
+    calls, handler = counting(lambda r, n: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=r)))
+    tools = {"enrichment": TOOLS["enrichment"] | {"max_usd": "0.40"}}
+    buy = make(handler, tools=tools, daily_cap_usd="1.00")
+    for key in ("a", "b"):
+        with pytest.raises(Unavailable):
+            buy.buy("enrichment", {}, key=key)
+    with pytest.raises(Rejected, match="cap"):  # 0.80 may be charged; another 0.40 would not fit
+        buy.buy("enrichment", {}, key="c")
+    assert len(calls) == 2
+    buy.resolve("a", None)  # checked: never charged, so its ceiling is free again
+    with pytest.raises(Unavailable):
+        buy.buy("enrichment", {}, key="c")
+    assert len(calls) == 3
+
+
+def test_resolving_a_charged_run_remembers_it():
+    calls, handler = counting(lambda r, n: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=r)))
+    buy = make(handler)
+    with pytest.raises(Unavailable):
+        buy.buy("enrichment", {"q": 1}, key="k")
+    with pytest.raises(NotConfigured):
+        buy.resolve("k", "$0.40")  # a bad cost leaves the key unsure
+    with pytest.raises(Rejected, match="may already be charged"):
+        buy.buy("enrichment", {"q": 1}, key="k")
+    buy.resolve("k", "0.0400", {"results": []})
+    purchase = buy.buy("enrichment", {"q": 1}, key="k")
+    assert purchase.cost_usd == "0.0400" and purchase.result == {"results": []} and len(calls) == 1
+
+
+@pytest.mark.parametrize("respond", [
+    lambda r, n: httpx.Response(200, json=completed(cost=(10**40, "DOLLAR"))),
+    lambda r, n: httpx.Response(200, content=b"[" * 100000 + b"]" * 100000),
+])
+def test_odd_replies_after_sending_never_pay_twice(respond):
+    """A huge cost books the ceiling; an undecodable body leaves the key unsure. Either way the
+    second attempt sends nothing."""
+    calls, handler = counting(respond)
+    buy = make(handler)
+    for _ in range(2):
+        try:
+            buy.buy("enrichment", {}, key="k")
+        except PortError:
+            pass
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("value", [{"q": {1, 2}}, {"q": float("nan")}, {"q": ("bob@client.com",)}])
+def test_input_must_be_plain_json_without_emails(value):
+    calls, handler = counting(lambda r, n: httpx.Response(200, json=completed()))
+    with pytest.raises(Rejected):
+        make(handler).buy("enrichment", value, key="k")
+    assert calls == []
+
+
+def test_a_zero_ceiling_is_not_configured():
+    with pytest.raises(NotConfigured, match="above 0"):
+        MonidToolBuy(KEY, tools={"e": {"provider": "exa", "endpoint": "s", "max_usd": "0"}})
+
+
+@pytest.mark.parametrize("status", [409, 422])
+def test_validation_answers_do_not_leave_the_key_unsure(status):
+    calls, handler = counting(lambda r, n: httpx.Response(status, json={"code": status, "message": "m"}))
+    buy = make(handler)
+    for _ in range(2):
+        with pytest.raises(Rejected):
+            buy.buy("enrichment", {}, key="k")
+    assert len(calls) == 2

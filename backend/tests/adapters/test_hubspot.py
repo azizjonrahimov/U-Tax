@@ -229,3 +229,22 @@ def test_contract_style_crm_check(tmp_path):
     faults.add(RateLimited())
     with pytest.raises(RateLimited):
         port.set_stage("deal:case_7", "call_booked")
+
+
+def test_a_corrupt_body_is_a_port_error():
+    response = lambda r: httpx.Response(200, headers={"content-encoding": "gzip"}, content=b"not gzip")
+    with pytest.raises(Unavailable):
+        make(response).upsert_contact(CrmContact(key="case_7", label="Team #7"))
+
+
+def test_a_per_item_rate_limit_in_a_207_is_retryable():
+    body = {"status": "COMPLETE", "results": [], "errors": [{"category": "RATE_LIMITS", "message": "slow down"}]}
+    with pytest.raises(RateLimited):
+        make(lambda r: httpx.Response(207, json=body)).set_stage("deal:case_7", "memo_sent")
+
+
+@pytest.mark.parametrize("record_id", [{"x": 1}, True, "", None])
+def test_an_odd_record_id_is_unavailable(record_id):
+    body = {"results": [{"id": record_id}]}
+    with pytest.raises(Unavailable):
+        make(lambda r: httpx.Response(200, json=body)).upsert_contact(CrmContact(key="case_7", label="Team #7"))

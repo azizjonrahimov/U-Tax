@@ -17,7 +17,7 @@ a late retry of an earlier stage (memo_sent after call_booked) is skipped. That 
 process; the outbox should also send each case's jobs in order (reported to the backend).
 
 Errors follow the shared mapping in `_http` (429 RateLimited, 5xx/transport Unavailable,
-400/404/409 Rejected), refined for HubSpot: 401 and 403 (bad token, missing scope) and a
+400/404/409 Rejected, provider text with emails removed), refined for HubSpot: 401 and 403 (bad token, missing scope) and a
 missing `utax_key` property are NotConfigured; a DAILY-policy 429 asks for an hour's wait
 (the outbox ignores retry_after today: reported).
 
@@ -68,6 +68,8 @@ def _classify(status: int, body: dict, message: str) -> PortError | None:
         if str(body.get("policyName", "")).upper() == "DAILY":
             return RateLimited("hubspot daily limit reached", retry_after=3600.0)
         return None
+    if str(body.get("category", "")).upper() == "RATE_LIMITS":  # a per-item limit inside a 207
+        return RateLimited("hubspot rate limited", retry_after=10.0)
     if status in (401, 403):
         return NotConfigured(f"hubspot token rejected or missing a scope ({status})")
     if _missing_key_property(message):
@@ -122,16 +124,17 @@ class HubSpotCRM:
             raise refined or Rejected(f"hubspot partial failure: {first.get('category') or 'error'}")
         results = body.get("results")
         record = results[0] if isinstance(results, list) and results else None
-        if not isinstance(record, dict) or not record.get("id"):
+        record_id = record.get("id") if isinstance(record, dict) else None
+        if isinstance(record_id, bool) or not isinstance(record_id, (str, int)) or not str(record_id).strip():
             raise Unavailable("hubspot: upsert answered without a record id")
-        return str(record["id"])
+        return str(record_id)
 
     def _http_call(self, path: str, payload: dict) -> httpx.Response:
         try:
             response = self._http.post(path, json=payload)
         except httpx.TimeoutException as exc:
             raise Unavailable("hubspot timed out") from exc
-        except httpx.TransportError as exc:
+        except httpx.HTTPError as exc:  # transport or decoding: the upsert is idempotent, retry is safe
             raise Unavailable(f"hubspot unreachable: {type(exc).__name__}") from exc
         if not response.is_success:
             body = _http.json_dict(response)
@@ -155,10 +158,9 @@ class HubSpotCRM:
         if not stage_id:
             raise Rejected(f"hubspot: no pipeline stage for '{stage}' (HUBSPOT_STAGE_MAP)")
         rank = STAGE_ORDER.index(stage) if stage in STAGE_ORDER else -1
-        with self._lock:
+        with self._lock:  # held across the call, so two drains can't send one deal backwards
             if rank >= 0 and self._reached.get(key, -1) > rank:
                 return  # a late retry of an earlier stage: the deal is already further along
-        self._upsert(DEALS, key, {"dealname": f"U-Tax {key}", "pipeline": self.pipeline, "dealstage": stage_id})
-        if rank >= 0:
-            with self._lock:
+            self._upsert(DEALS, key, {"dealname": f"U-Tax {key}", "pipeline": self.pipeline, "dealstage": stage_id})
+            if rank >= 0:
                 self._reached[key] = max(self._reached.get(key, -1), rank)
