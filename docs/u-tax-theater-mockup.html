@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>U-Tax Agent Theater</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#07070b; --panel:#0f0f16; --panel2:#151520; --line:#24243a; --text:#ecebf5; --dim:#8b8aa3; --faint:#55546b;
+  --red:#ff4d3d; --green:#3ddc84; --amber:#ffb547;
+  --a-cos:#ff4d3d; --a-intake:#4da3ff; --a-tax:#ffb547; --a-qa:#3ddc84; --a-acct:#c77dff; --a-mkt:#ff6fb5; --a-hr:#2ee6d6; --ceo:#ffffff;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;overflow:hidden}
+.mono{font-family:"JetBrains Mono",monospace}
+.stage{position:relative;height:100vh;display:grid;grid-template-rows:52px 1fr 64px;gap:10px;padding:12px 16px}
+header{display:flex;align-items:center;gap:14px}
+.logo{background:var(--red);color:#000;font-weight:800;padding:4px 8px;border-radius:4px;letter-spacing:.5px}
+.title{font-weight:800;font-size:18px}
+.sub{color:var(--dim);font-size:12px}
+.pill{margin-left:auto;display:flex;gap:8px;align-items:center;font-size:12px;color:var(--dim)}
+.live{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);padding:4px 10px;border-radius:99px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 10px var(--red);animation:blink 1.4s infinite}
+@keyframes blink{50%{opacity:.3}}
+.mock{border:1px dashed var(--amber);color:var(--amber);padding:4px 10px;border-radius:99px}
+main{display:grid;grid-template-columns:1.25fr 1fr 300px;gap:10px;min-height:0}
+.col{display:grid;gap:10px;min-height:0}
+.col.mid{grid-template-rows:1.2fr 1fr}
+.pane{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;min-height:0;position:relative}
+.ph{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line);font-size:11px;color:var(--dim);letter-spacing:.08em;text-transform:uppercase}
+.ph b{color:var(--text);letter-spacing:0;text-transform:none;font-size:13px}
+.ph .tag{margin-left:auto;font-size:10px;color:var(--faint);text-transform:none;letter-spacing:0}
+.pb{padding:12px;font-size:13px;line-height:1.5;flex:1;min-height:0;overflow:hidden}
+.mail .from{color:var(--dim);font-size:12px;margin-bottom:6px}
+.mail .body{white-space:pre-wrap}
+.hl{background:rgba(77,163,255,.18);outline:1px solid var(--a-intake);border-radius:3px;padding:0 2px;transition:.3s}
+.compose{margin-top:10px;border-top:1px solid var(--line);padding-top:10px;display:none}
+.compose .to{color:var(--dim);font-size:12px}
+.compose .txt{min-height:90px;white-space:pre-wrap;font-size:12.5px}
+.btn{display:inline-block;background:var(--red);color:#000;font-weight:700;font-size:12px;padding:6px 14px;border-radius:6px;margin-top:6px}
+.sent{color:var(--green);font-weight:600;font-size:12px;display:none}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+td{border-bottom:1px solid var(--line);padding:6px 4px}
+td:first-child{color:var(--dim)}
+td.v{text-align:right;font-family:"JetBrains Mono",monospace;min-width:110px}
+td.v.win{color:var(--green);font-weight:600}
+td.v.lose{color:var(--faint);text-decoration:line-through}
+.tick{color:var(--green);margin-left:6px;opacity:0;transition:.3s}
+.cal{display:grid;grid-template-columns:40px 1fr;font-size:11px}
+.cal .h{color:var(--faint);height:26px;border-top:1px solid var(--line)}
+.cal .slot{height:26px;border-top:1px solid var(--line);position:relative}
+.block{position:absolute;left:4px;right:6%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;top:2px;height:22px;border-radius:5px;background:rgba(77,163,255,.25);border:1px solid var(--a-intake);font-size:11px;padding:3px 6px;opacity:0;transition:.4s}
+.search{font-size:12px}
+.q{border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-family:"JetBrains Mono",monospace;min-height:30px}
+.res{margin-top:8px;border-left:2px solid var(--a-tax);padding-left:8px;color:var(--dim);opacity:0;transition:.4s}
+aside{display:grid;grid-template-rows:auto auto auto 1fr;gap:10px;min-height:0}
+.big{font-size:26px;font-weight:800;font-family:"JetBrains Mono",monospace}
+.k{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;color:var(--dim)}
+.log{font-size:11px;font-family:"JetBrains Mono",monospace;color:var(--dim);display:grid;gap:4px}
+.log .t{color:var(--text)}
+.log .h{color:var(--ceo)}
+.cases{display:flex;flex-direction:column;gap:6px;font-size:12px}
+.case{display:flex;justify-content:space-between;border:1px solid var(--line);border-radius:6px;padding:6px 8px}
+.st{font-size:10px;padding:1px 6px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+.st.ok{color:var(--green);border-color:var(--green)}
+.st.run{color:var(--amber);border-color:var(--amber)}
+footer{display:flex;align-items:center;gap:14px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:0 16px}
+.avs{display:flex}
+.av{width:22px;height:22px;border-radius:50%;border:2px solid var(--bg);margin-left:-6px}
+.av:first-child{margin-left:0}
+.bar{flex:1;height:4px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--a-intake),var(--red));transition:width .3s}
+.ctl{display:flex;gap:6px}
+.ctl button{background:var(--panel2);border:1px solid var(--line);color:var(--text);border-radius:6px;padding:6px 10px;font:600 12px Inter;cursor:pointer}
+.ctl button.on{background:var(--a-intake);color:#000;border-color:var(--a-intake)}
+.cur{position:fixed;left:0;top:0;pointer-events:none;z-index:50;transition:transform .7s cubic-bezier(.45,.05,.2,1);will-change:transform}
+.cur svg{display:block;filter:drop-shadow(0 0 6px rgba(0,0,0,.6))}
+.cur span{position:absolute;left:14px;top:14px;font:600 10px Inter;color:#000;padding:2px 6px;border-radius:4px;white-space:nowrap}
+.banner{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);font-size:44px;font-weight:800;text-align:center;opacity:0;transition:.6s;z-index:40;pointer-events:none;text-shadow:0 0 40px rgba(255,77,61,.35)}
+.banner small{display:block;font-size:16px;color:var(--dim);font-weight:500;margin-top:8px}
+main{transition:grid-template-columns .6s ease}
+.col.mid{transition:grid-template-rows .6s ease}
+.col.low{grid-template-columns:1fr 1fr;transition:grid-template-columns .6s ease}
+.pane{transition:opacity .5s}
+main[data-focus] .pane{opacity:.45}
+main[data-focus] .pane.focus, aside .pane{opacity:1}
+main[data-focus="mail"]{grid-template-columns:2.1fr .8fr 300px}
+main[data-focus="sheet"]{grid-template-columns:.8fr 2fr 300px}
+main[data-focus="sheet"] .col.mid{grid-template-rows:2.2fr .6fr}
+main[data-focus="search"]{grid-template-columns:.8fr 2fr 300px}
+main[data-focus="search"] .col.mid{grid-template-rows:.7fr 2fr}
+main[data-focus="search"] .col.low{grid-template-columns:2fr .7fr}
+main[data-focus="cal"]{grid-template-columns:.8fr 2fr 300px}
+main[data-focus="cal"] .col.mid{grid-template-rows:.7fr 2fr}
+main[data-focus="cal"] .col.low{grid-template-columns:.7fr 2fr}
+.stagebox{display:none}
+body.stage{--dim:#c4c3d6;--faint:#8d8ca6}
+body.stage .pb{font-size:17px}
+body.stage table{font-size:17px}
+body.stage .compose .txt{font-size:16px}
+body.stage .ph{font-size:13px}
+body.stage .ph b{font-size:16px}
+body.stage aside .pane{display:none}
+body.stage aside .stagebox{display:flex;flex-direction:column;justify-content:space-around;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;grid-row:1/-1}
+.stagebox div{font-size:15px;color:var(--dim)}
+.stagebox b{display:block;font:800 44px "JetBrains Mono",monospace;color:var(--text)}
+.stagebox b.g{color:var(--green);font-size:34px}
+.hint{font-size:11px;color:var(--faint)}
+@media (max-width:900px){main{grid-template-columns:1fr} aside,.col.mid{display:none} .stage{padding:8px 16px}}
+</style>
+</head>
+<body>
+<div class="stage">
+  <header>
+    <span class="logo">U</span><span class="title">U-Tax</span><span class="sub">the firm, live · every move rendered from the action log</span>
+    <div class="pill"><span class="mock">MOCKUP · sample events</span><span class="live"><span class="dot"></span><span id="mode">LIVE</span></span><span class="mono" id="clock">02:14:07</span></div>
+  </header>
+  <main>
+    <section class="pane mail" id="mailPane" data-k="mail">
+      <div class="ph">Mail <b>firm inbox</b><span class="tag">via Gmail · rendered from log</span></div>
+      <div class="pb">
+        <div class="from">From: founder@team7.dev · "free franchise tax checkup?"</div>
+        <div class="body" id="mailBody">Hey U-Tax! We're a Delaware C-corp. Delaware says we owe a big franchise tax.
+We have <span id="n1">10,000,000</span> authorized shares, <span id="n2">8,000,000</span> issued, and about <span id="n3">$500k</span> in assets. No foreign owners. Can you check?</div>
+        <div class="compose" id="compose">
+          <div class="to">To: founder@team7.dev · Subject: Your Delaware franchise tax estimate</div>
+          <div class="txt mono" id="memo"></div>
+          <span class="btn" id="sendBtn">Send</span> <span class="sent" id="sent">✓ Sent · 41 s after last fact</span>
+        </div>
+      </div>
+    </section>
+    <div class="col mid">
+      <section class="pane" id="sheetPane" data-k="sheet">
+        <div class="ph">Sheet <b>Team #7 · franchise tax</b><span class="tag">engine v1 · tests 14/14</span></div>
+        <div class="pb"><table>
+          <tr><td>Authorized shares</td><td class="v" id="c1">—</td></tr>
+          <tr><td>Issued shares</td><td class="v" id="c2">—</td></tr>
+          <tr><td>Gross assets (proj. Dec 31)</td><td class="v" id="c3">—</td></tr>
+          <tr><td>Authorized-shares method</td><td class="v" id="c4">—</td></tr>
+          <tr><td>Assumed-par method</td><td class="v" id="c5">—</td></tr>
+          <tr><td>+ annual report fee</td><td class="v" id="c6">—</td></tr>
+          <tr><td><b>Estimated total</b></td><td class="v" id="c7">—<span class="tick" id="qa">✓ QA</span></td></tr>
+        </table></div>
+      </section>
+      <div class="col low">
+        <section class="pane" id="searchPane" data-k="search">
+          <div class="ph">Search <b>law</b><span class="tag">Naïve Data catalogue</span></div>
+          <div class="pb search"><div class="q" id="q"></div><div class="res" id="res">8 Del. C. § 503 · assumed par value capital method · min $400, max $200,000</div></div>
+        </section>
+        <section class="pane" id="calPane" data-k="cal">
+          <div class="ph">Calendar <b>Sun Nov 8</b><span class="tag">via Google Calendar</span></div>
+          <div class="pb"><div class="cal">
+            <div class="h">9:00</div><div class="slot"></div>
+            <div class="h">9:30</div><div class="slot" id="slot"><div class="block" id="block">Team #7 · 15-min review</div></div>
+            <div class="h">10:00</div><div class="slot"></div>
+            <div class="h">10:30</div><div class="slot"></div>
+          </div></div>
+        </section>
+      </div>
+    </div>
+    <aside>
+      <div class="stagebox"><div>Clients served<b id="sbC">22</b></div><div>Human touches<b id="sbT">6</b></div><div>Saved vs spent<b class="g" id="sbS">$1.87M / $11</b></div></div>
+      <section class="pane"><div class="ph">Human touches</div><div class="pb">
+        <div class="k"><span>Operating</span><span class="big" id="ops">2</span></div>
+        <div class="k"><span>Training (1 per action type)</span><span class="mono">4 / 4 · all AUTO</span></div>
+        <div class="log" id="log" style="margin-top:8px">
+          <div><span class="h">13:22</span> voice: "open the firm"</div>
+          <div><span class="h">14:05</span> email → AUTO</div>
+        </div></div></section>
+      <section class="pane"><div class="ph">Money</div><div class="pb">
+        <div class="k"><span>Clients saved</span><span class="big" id="saved">$1,872,960</span></div>
+        <div class="k"><span>Firm spent (est.)</span><span class="mono" id="spent">$11.38</span></div></div></section>
+      <section class="pane"><div class="ph">Hiring</div><div class="pb" style="font-size:12px;color:var(--dim)">14 applicants → 2 screened by phone<br>Shortlist ready · <span style="color:var(--text)">waiting on CEO</span></div></section>
+      <section class="pane"><div class="ph">Cases</div><div class="pb cases" id="cases">
+        <div class="case"><span>Team #7</span><span class="st run" id="s7">intake</span></div>
+        <div class="case"><span>Team #12</span><span class="st ok">sent</span></div>
+        <div class="case"><span>Team #3</span><span class="st ok">call booked</span></div>
+      </div></section>
+    </aside>
+  </main>
+  <footer>
+    <div class="avs" id="avs"></div>
+    <span class="mono" style="font-size:12px">Firm run by <b>7 agents</b> · <b id="nClients">22</b> clients · <b id="nTouch">6</b> human touches</span>
+    <div class="bar"><i id="prog"></i></div>
+    <span class="hint">S = stage mode</span><div class="ctl"><button data-s="1" class="on">1×</button><button data-s="4">4×</button><button data-s="16">16×</button><button id="replay">Replay</button></div>
+  </footer>
+</div>
+<div class="banner" id="banner">Night shift replayed<small>23 clients · 7 agents · 6 human touches · 30 s</small></div>
+<script>
+const AG=[["cos","Chief of Staff"],["intake","Intake"],["tax","Tax"],["qa","QA"],["acct","Accounting"],["mkt","Marketing"],["hr","HR"]];
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const cur={};
+function mkCursor(id,label,color){
+  const d=document.createElement('div');d.className='cur';
+  d.innerHTML=`<svg width="18" height="20" viewBox="0 0 18 20"><path d="M1 1 L16 9 L9 11 L6 18 Z" fill="${color}" stroke="#000" stroke-width="1"/></svg><span style="background:${color}">${label}</span>`;
+  document.body.appendChild(d);cur[id]={el:d,x:0,y:0};
+}
+AG.forEach(([id,l])=>mkCursor(id,l,css('--a-'+id)));
+mkCursor('ceo','You (CEO)',css('--ceo'));
+document.getElementById('avs').innerHTML=AG.map(([id])=>`<span class="av" style="background:${css('--a-'+id)}"></span>`).join('');
+let speed=1, run=0;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms/speed));
+function place(id,x,y,instant){const c=cur[id];c.x=x;c.y=y;c.el.style.transitionDuration=instant?'0s':(0.7/speed)+'s';c.el.style.transform=`translate(${x}px,${y}px)`}
+async function go(id,el,dx=.5,dy=.5){const r=(typeof el==='string'?document.getElementById(el):el).getBoundingClientRect();place(id,r.left+r.width*dx,r.top+r.height*dy);await sleep(750)}
+async function type(el,text,cps=60){el=document.getElementById(el);for(const ch of text){el.textContent+=ch;await sleep(1000/cps)}}
+const $=id=>document.getElementById(id);
+async function focus(k){const m=document.querySelector('main');if(k){m.dataset.focus=k}else{delete m.dataset.focus}
+  document.querySelectorAll('.pane[data-k]').forEach(p=>p.classList.toggle('focus',p.dataset.k===k));await sleep(650)}
+function setNums(c,t,saved,spent){$('nClients').textContent=c;$('sbC').textContent=c;$('nTouch').textContent=t;$('sbT').textContent=t;
+  $('saved').textContent='$'+saved.toLocaleString('en-US');$('spent').textContent='$'+spent.toFixed(2);$('sbS').textContent='$'+(saved/1e6).toFixed(2)+'M / $'+Math.round(spent)}
+function park(){const W=innerWidth,H=innerHeight;Object.keys(cur).forEach((id,i)=>place(id,W*0.08+i*W*0.11,H-110+(i%2)*14,true))}
+function reset(){
+  ['c1','c2','c3','c4','c5','c6'].forEach(i=>{$(i).textContent='—';$(i).className='v'});
+  $('c7').innerHTML='—<span class="tick" id="qa">✓ QA</span>';$('c7').className='v';
+  ['n1','n2','n3'].forEach(i=>$(i).className='');
+  $('compose').style.display='none';$('memo').textContent='';$('sent').style.display='none';
+  $('q').textContent='';$('res').style.opacity=0;$('block').style.opacity=0;$('s7').textContent='intake';$('s7').className='st run';
+  setNums(22,6,1872960,11.38);$('ops').textContent='2';$('prog').style.width='0';focus(null);
+}
+async function script(){
+  const my=++run; reset(); park(); await sleep(400);
+  const ok=()=>my===run;
+  const P=p=>$('prog').style.width=p+'%';
+  await focus('mail');await go('intake','mailBody',.2,.2); if(!ok())return;
+  for(const n of ['n1','n2','n3']){await go('intake',n);$(n).className='hl';await sleep(250)} P(15);
+  await focus('sheet');
+  for(const [n,c,v] of [['n1','c1','10,000,000'],['n2','c2','8,000,000'],['n3','c3','$500,000']]){await go('intake',n);await go('intake',c,.8);$(c).textContent=v;if(!ok())return} P(30);
+  $('s7').textContent='computing';
+  await focus('search');await go('tax','q',.1);await type('q','delaware franchise tax assumed par value method');$('res').style.opacity=1;P(40);
+  await focus('sheet');await go('tax','c4',.8);$('c4').textContent='$85,165';await sleep(300);
+  await go('tax','c5',.8);$('c5').textContent='$400';$('c5').className='v win';$('c4').className='v lose';
+  await go('tax','c6',.8);$('c6').textContent='$50';
+  await go('tax','c7',.6);$('c7').firstChild.textContent='$450';$('c7').className='v win';P(55);
+  for(const c of ['c1','c2','c3','c4','c5','c6','c7']){await go('qa',c,.95);await sleep(80)}
+  $('qa').style.opacity=1;$('s7').textContent='qa passed';P(65); if(!ok())return;
+  $('compose').style.display='block';await focus('mail');await go('acct','memo',.1,.2);
+  await type('memo',"Hi Team #7,\nUsing the assumed-par-value method instead of the authorized-shares method, your estimated 2026 Delaware franchise tax drops from $85,165 to $400 (+$50 annual report fee = $450), due March 1, 2027.\nEducational estimate, not tax advice.",140);
+  await go('acct','sendBtn');$('sent').style.display='inline';$('s7').textContent='sent';$('s7').className='st ok';P(80);
+  await focus('cal');await go('intake','block',.3);$('block').style.opacity=1;$('s7').textContent='call booked';P(90);
+  await focus(null);
+  await go('ceo','log',.5,.9);await sleep(400);P(100);
+  await sleep(1500); if(!ok())return; swarm(my);
+}
+async function swarm(my){
+  $('mode').textContent='REPLAY';$('banner').style.opacity=1;
+  const W=innerWidth,H=innerHeight;
+  for(let k=0;k<3&&my===run;k++){Object.keys(cur).forEach(id=>place(id,W*(.2+.6*Math.random()),H*(.15+.6*Math.random())));await sleep(700)}
+  $('banner').style.opacity=0;
+  const tgt=document.body.classList.contains('stage')?'sbS':'saved';
+  const r=$(tgt).getBoundingClientRect();
+  Object.keys(cur).forEach((id,i)=>place(id,r.left+r.width*(i/7)-6,r.bottom+4));await sleep(800);
+  const a=1872960,b=1957675;for(let k=1;k<=30&&my===run;k++){setNums(k<30?22:23,6,Math.round(a+(b-a)*k/30),11.38+0.02*k/30);await sleep(40)}
+  $('mode').textContent='LIVE';
+}
+document.querySelectorAll('.ctl button[data-s]').forEach(b=>b.onclick=()=>{speed=+b.dataset.s;document.querySelectorAll('.ctl button[data-s]').forEach(x=>x.classList.toggle('on',x===b))});
+$('replay').onclick=()=>script();
+setInterval(()=>{const d=new Date();$('clock').textContent=d.toTimeString().slice(0,8)},1000);
+addEventListener('resize',park);
+addEventListener('keydown',e=>{if(e.key==='s'||e.key==='S'){document.body.classList.toggle('stage')}});
+script();
+</script>
+</body>
+</html>
