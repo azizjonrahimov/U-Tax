@@ -1,4 +1,4 @@
-Hi {{masked_name}},
+Hi {{greeting_name}},
 
 Thanks for asking U-Tax for a checkup. Delaware lets a corporation compute its franchise tax two
 ways and pay the lower one. Here are both, worked out from the numbers you gave us:
@@ -8,11 +8,7 @@ ways and pay the lower one. Here are both, worked out from the numbers you gave 
 - Annual report filing fee: {{annual_report_fee}}
 
 Taking the lower of the two methods plus the filing fee, your estimated total is {{total}},
-due {{due_date}}.
-
-{{form5472_note}}
-
-{{rnd_note}}
+due {{due_date}}. {{form5472_note}} {{rnd_note}}
 
 How we got here: your share counts and assets were taken from what you told us, the math was done
 by tested code (not by an AI), and a second agent re-checked it before this went out. Where you

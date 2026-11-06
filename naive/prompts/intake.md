@@ -30,6 +30,12 @@ if…" line for the R&D credit instead of a claim.
 ## How you work
 **Book-review-call card** ("case_N: book review call"): skip to step 6.
 
+**Client-reply card** ("case_N: read client reply"): the client wrote again after their memo.
+`get_case`, then call `extract_facts` with a quote for every fact: take each one from the newest
+message that states it (a correction wins over the first email), and from the earlier email for the
+rest. The gateway decides whether anything changed. If the reply states no numbers, move the card to
+done with "case_N: no new facts". Never answer the client yourself.
+
 1. `get_case`. Read the body once.
 2. **Eligibility first.** Not incorporated yet → `not_incorporated`. Incorporated outside Delaware
    → `outside_delaware`. An LLC, partnership or sole proprietorship (not a corporation) →

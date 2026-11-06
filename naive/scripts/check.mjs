@@ -134,17 +134,20 @@ if (existsSync(memoPath) && /^\s*subject:/i.test(readFileSync(memoPath, "utf8"))
 
 // 10. every template has a rule: its placeholders, the disclaimer where a client reads it, the
 // disclosure line where an applicant reads it, and the post guard's limits on posts.
-const MEMO_PLACEHOLDERS = ["masked_name", "authorized_method", "assumed_par_method", "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note"];
+// contract v1.6 §7: greeting_name is the outgoing mail's greeting; masked_name is allowed but optional.
+const MEMO_PLACEHOLDERS = ["greeting_name", "authorized_method", "assumed_par_method", "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note"];
+// Placeholders that may render empty: never alone on a line (the empty line would stay as a blank gap).
+const OPTIONAL_INLINE = ["form5472_note", "rnd_note", "problems_line", "approvals_line", "blocked_line", "hiring_line"];
 // body: the gateway sends the file as the body and sets the subject itself (no "Subject:" line).
 // client: a client reads it (disclaimer line, no literal dollar amounts). applicant: the AI-screen
 // disclosure line. posts: Marketing posts its X/LinkedIn sections (the gateway's post guard).
 // spend: every money-spent figure is called "estimated".
 const TEMPLATE_RULES = {
-  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS },
-  "ask-client.md": { body: true, client: true, placeholders: ["masked_name", "missing_list", "problems_line"] },
-  "not-eligible-not_incorporated.md": { body: true, client: true, placeholders: ["masked_name"] },
-  "not-eligible-outside_delaware.md": { body: true, client: true, placeholders: ["masked_name"] },
-  "not-eligible-not_a_corporation.md": { body: true, client: true, placeholders: ["masked_name"] },
+  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS, optional: ["masked_name"] },
+  "ask-client.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list", "problems_line"] },
+  "not-eligible-not_incorporated.md": { body: true, client: true, placeholders: ["greeting_name"] },
+  "not-eligible-outside_delaware.md": { body: true, client: true, placeholders: ["greeting_name"] },
+  "not-eligible-not_a_corporation.md": { body: true, client: true, placeholders: ["greeting_name"] },
   "hr-questionnaire.md": { body: true, applicant: true, noAmounts: true, placeholders: [] },
   "hr-hired.md": { body: true, noAmounts: true, placeholders: [] },
   "hr-declined.md": { body: true, noAmounts: true, placeholders: [] },
@@ -212,12 +215,17 @@ for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).filter((
   if (text.includes("\r")) fail(`templates/${file}: has CR characters; keep LF`);
   if (rule.placeholders) {
     const used = [...new Set([...text.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]))];
-    const extra = used.filter((p) => !rule.placeholders.includes(p));
+    const extra = used.filter((p) => !rule.placeholders.includes(p) && !(rule.optional ?? []).includes(p));
     const absent = rule.placeholders.filter((p) => !used.includes(p));
     if (extra.length) fail(`templates/${file}: unknown placeholders ${extra}`);
     if (absent.length) fail(`templates/${file}: missing placeholders ${absent}`);
   }
+  for (const line of text.split("\n")) {
+    const only = line.trim().match(/^\{\{\s*(\w+)\s*\}\}$/);
+    if (only && OPTIONAL_INLINE.includes(only[1])) fail(`templates/${file}: {{${only[1]}}} is alone on a line; put it inline so an empty value leaves no blank gap`);
+  }
   if (rule.client) {
+    if (/^\s*hi \{\{\s*masked_name/im.test(text)) fail(`templates/${file}: greets the client by the masked name; use {{greeting_name}} (contract v1.6 §7)`);
     if (!text.includes(`${DISCLAIMER}.`)) fail(`templates/${file}: missing the line "${DISCLAIMER}."`);
     if (/\$\s?\d/.test(text.replace(/\{\{[^}]*\}\}/g, ""))) fail(`templates/${file}: literal dollar amount in a client template`);
   }
