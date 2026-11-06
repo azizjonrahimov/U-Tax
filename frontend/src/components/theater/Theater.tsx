@@ -5,8 +5,8 @@
 // to the screen. Every frame comes from a logged event (premise 7).
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
-import { API_URL } from "@/lib/api";
 import { parseJsonl, type Agent, type UTaxEvent } from "@/theater/events";
+import { formatClock } from "@/theater/format";
 import { humanTouches, railFromEvents } from "@/theater/rail";
 import { applyStep, emptyScreen, type ScreenState } from "@/theater/screen";
 import { buildScript, type CursorStep, type Pane } from "@/theater/script";
@@ -27,7 +27,6 @@ const AGENTS: [Agent, string, string][] = [
 ];
 const SPEEDS = [1, 4, 16] as const;
 const FIXTURE_URL = "/fixtures/events.sample.jsonl";
-const THEATER_TOKEN = process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "";
 
 /** Rail targets without their own element land on the nearest rail card. */
 const RAIL_FALLBACK: Record<string, string> = {
@@ -73,26 +72,25 @@ const subscribeResize = (cb: () => void) => {
 const windowSize = () => `${window.innerWidth}x${window.innerHeight}`;
 const noSize = () => null;
 
+const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
+const cancelSpeech = () => {
+  if (hasSpeech()) window.speechSynthesis.cancel();
+};
+
+/**
+ * Speak a brief or a CEO order. Fixture mode uses browser speech only, so the
+ * room never hears a gateway brief that isn't in this log (controller ruling);
+ * live mode (slice 3) plays GET /api/brief/audio. Customer /talk text is never spoken.
+ */
 function speakText(text: string) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  if (!hasSpeech()) return;
   window.speechSynthesis.cancel();
   window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
 }
 
-/** The brief as audio from the gateway (contract §5), falling back to browser speech. */
-function playBrief(eventId: number, text: string) {
-  const params = new URLSearchParams({ event_id: String(eventId) });
-  if (THEATER_TOKEN) params.set("token", THEATER_TOKEN);
-  const audio = new Audio(`${API_URL}/api/brief/audio?${params}`);
-  let fellBack = false;
-  const fallback = () => {
-    if (fellBack) return;
-    fellBack = true;
-    speakText(text);
-  };
-  audio.addEventListener("error", fallback, { once: true });
-  audio.play().catch(fallback);
-}
+const shouldSpeak = (step: CursorStep) => step.target === "rail.brief" || step.meta?.speaker === "ceo";
+
+const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), Math.max(lo, hi));
 
 function captionFor(step: CursorStep): { label: string; text: string } | null {
   if (step.action !== "say" || !step.text) return null;
@@ -107,12 +105,18 @@ export function Theater() {
   const [screen, setScreen] = useState<ScreenState>(emptyScreen);
   const [typing, setTyping] = useState<{ target: string; shown: number } | null>(null);
   const [caption, setCaption] = useState<{ label: string; text: string } | null>(null);
-  /** Cursors that have moved this run; the rest sit at their desks. */
-  const [moves, setMoves] = useState<Record<string, Pos>>({});
   const size = useSyncExternalStore(subscribeResize, windowSize, noSize);
   const desks = useMemo(() => (size ? parkedAt(size) : null), [size]);
   const [speed, setSpeed] = useState<number>(1);
   const [stage, setStage] = useState(false);
+  /**
+   * Cursors that have moved this run, measured for one layout (viewport size +
+   * stage mode). After a resize or stage toggle the old coordinates are wrong,
+   * so cursors fall back to their desks until they move again.
+   */
+  const layout = `${size}|${stage}`;
+  const layoutRef = useRef(layout);
+  const [moves, setMoves] = useState<{ layout: string; pos: Record<string, Pos> }>({ layout: "", pos: {} });
   const [sound, setSound] = useState(false);
   const [run, setRun] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -123,6 +127,9 @@ export function Theater() {
   useEffect(() => {
     speedRef.current = speed;
   }, [speed]);
+  useEffect(() => {
+    layoutRef.current = layout;
+  }, [layout]);
   useEffect(() => {
     soundRef.current = sound;
     if (!sound && typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
@@ -149,11 +156,13 @@ export function Theater() {
   }, []);
 
   const script = useMemo(() => (events ? buildScript(events) : null), [events]);
-  const skippedIds = useMemo(() => new Set(script?.skipped.map((s) => s.eventId) ?? []), [script]);
-  const byId = useMemo(() => new Map((events ?? []).map((e) => [e.id, e])), [events]);
+  // Rail numbers and the clock come only from events the script accepted
+  // (deduplicated, valid), so they can never disagree with what the screen showed.
+  const accepted = useMemo(() => script?.accepted ?? [], [script]);
+  const byId = useMemo(() => new Map(accepted.map((e) => [e.id, e])), [accepted]);
   const numbers = useMemo(
-    () => railFromEvents((events ?? []).filter((e) => e.id <= screen.lastEventId), skippedIds),
-    [events, screen.lastEventId, skippedIds],
+    () => railFromEvents(accepted.filter((e) => e.id <= screen.lastEventId)),
+    [accepted, screen.lastEventId],
   );
 
   // S toggles stage mode.
@@ -173,7 +182,8 @@ export function Theater() {
     let alive = true;
     const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms / speedRef.current));
     // Wait for layout after a state change. rAF pauses in hidden tabs, so a
-    // timeout backs it up: a hidden projector tab must never stall the log.
+    // timeout backs it up (browsers still throttle timers in long-hidden tabs;
+    // the projector tab is expected to stay visible).
     const frame = () =>
       new Promise<void>((r) => {
         let done = false;
@@ -191,9 +201,16 @@ export function Theater() {
       const el = locate(target, pane);
       if (!el || !alive) return;
       const r = el.getBoundingClientRect();
-      const x = r.left + Math.min(r.width * 0.5, 160);
-      const y = r.top + Math.min(r.height * 0.5, 40);
-      setMoves((c) => ({ ...c, [agent]: { x, y } }));
+      let x = r.left + Math.min(r.width * 0.5, 160);
+      let y = r.top + Math.min(r.height * 0.5, 40);
+      // Text clipped by its pane (overflow hidden) is still "there": keep the cursor inside the pane.
+      const box = el.closest(".pane")?.getBoundingClientRect();
+      if (box) {
+        x = clamp(x, box.left + 8, box.right - 24);
+        y = clamp(y, box.top + 8, box.bottom - 24);
+      }
+      const at = layoutRef.current;
+      setMoves((c) => ({ layout: at, pos: c.layout === at ? { ...c.pos, [agent]: { x, y } } : { [agent]: { x, y } } }));
       await sleep(MOVE_MS);
     };
 
@@ -204,39 +221,46 @@ export function Theater() {
       setCaption(null);
       setProgress(0);
       setPlaying(true);
-      setMoves({});
+      setMoves({ layout: "", pos: {} });
       await sleep(400);
       const steps = script.steps;
       for (let i = 0; i < steps.length && alive; i++) {
         const step = steps[i];
-        if (movesCursor(step)) {
-          if (step.action === "drag" && step.from) await moveTo(step.agent!, step.from, step.pane);
-          await moveTo(step.agent!, step.target, step.pane);
-        }
-        if (!alive) return;
-        // A new scene: idle cursors go back to their desks instead of floating over moved panes.
-        if (step.action === "focus") setMoves({});
-        const hold = stepHoldMs(step);
-        state = applyStep(state, step);
-        if (step.action === "type" && step.text) {
-          setTyping({ target: step.target, shown: 0 });
-          setScreen(state);
-          const ticks = Math.max(1, Math.round(hold / 33));
-          for (let t = 1; t <= ticks && alive; t++) {
-            await sleep(hold / ticks);
-            setTyping({ target: step.target, shown: Math.ceil((step.text.length * t) / ticks) });
+        // One bad step must never freeze the projector: log it and keep playing.
+        try {
+          if (movesCursor(step)) {
+            if (step.action === "drag" && step.from) await moveTo(step.agent!, step.from, step.pane);
+            await moveTo(step.agent!, step.target, step.pane);
           }
-          setTyping(null);
-        } else {
-          setScreen(state);
-          const cap = captionFor(step);
-          if (cap) {
-            setCaption(cap);
-            if (step.target === "rail.brief" && soundRef.current) playBrief(step.eventId, step.text ?? "");
-            else if (soundRef.current) speakText(step.text ?? "");
+          if (!alive) return;
+          // A new scene: idle cursors go back to their desks instead of floating over moved panes.
+          if (step.action === "focus") setMoves({ layout: "", pos: {} });
+          const hold = stepHoldMs(step);
+          state = applyStep(state, step);
+          if (step.action === "type" && step.text) {
+            setTyping({ target: step.target, shown: 0 });
+            setScreen(state);
+            const ticks = Math.max(1, Math.round(hold / 33));
+            for (let t = 1; t <= ticks; t++) {
+              await sleep(hold / ticks);
+              if (!alive) return;
+              setTyping({ target: step.target, shown: Math.ceil((step.text.length * t) / ticks) });
+            }
+            setTyping(null);
+          } else {
+            setScreen(state);
+            const cap = captionFor(step);
+            if (cap) {
+              setCaption(cap);
+              if (soundRef.current && shouldSpeak(step)) speakText(step.text ?? "");
+            }
+            await sleep(hold);
+            if (!alive) return;
+            if (cap) setCaption(null);
           }
-          await sleep(hold);
-          if (cap) setCaption(null);
+        } catch (err) {
+          console.error(`[theater] step ${step.key} (${step.action} ${step.target}) failed`, err);
+          if (!alive) return;
         }
         setProgress((i + 1) / steps.length);
       }
@@ -245,6 +269,7 @@ export function Theater() {
 
     return () => {
       alive = false;
+      cancelSpeech();
     };
   }, [script, run]);
 
@@ -254,7 +279,8 @@ export function Theater() {
   );
 
   const current = byId.get(screen.lastEventId);
-  const clock = current ? new Date(current.ts).toLocaleTimeString("en-US", { hour12: false }) : "--:--:--";
+  const clock = formatClock(current?.ts, true) || "--:--:--";
+  const skippedCount = script?.skipped.length ?? 0;
   const empty = script !== null && script.steps.length === 0;
 
   return (
@@ -264,7 +290,9 @@ export function Theater() {
         <span className="title">U-Tax</span>
         <span className="sub">the firm, live · every move rendered from the action log</span>
         <div className="pill">
-          <span className="source">FIXTURE · contract sample</span>
+          <span className="source" title={skippedCount ? `${skippedCount} log event(s) skipped as malformed or unknown (see console)` : undefined}>
+            FIXTURE · contract sample{skippedCount ? ` · ${skippedCount} skipped` : ""}
+          </span>
           <span className="live">
             <span className={`dot${playing ? "" : " idle"}`} />
             {loadError ? "NO LOG" : playing ? "PLAYING LOG" : script ? "END OF LOG" : "OPENING"}
@@ -295,8 +323,8 @@ export function Theater() {
 
       <footer>
         <div className="avs" aria-hidden>
-          {AGENTS.slice(0, 7).map(([id, , color]) => (
-            <span key={id} className="av" style={{ background: color }} title={AGENTS.find((x) => x[0] === id)?.[1]} />
+          {AGENTS.filter(([id]) => id !== "ceo").map(([id, label, color]) => (
+            <span key={id} className="av" style={{ background: color }} title={label} />
           ))}
         </div>
         <span className="mono firmline">
@@ -346,7 +374,7 @@ export function Theater() {
       )}
 
       {AGENTS.map(([id, label, color]) => {
-        const p = moves[id] ?? desks?.[id];
+        const p = (moves.layout === layout ? moves.pos[id] : undefined) ?? desks?.[id];
         if (!p) return null;
         return (
           <div key={id} className="cur" style={{ transform: `translate(${p.x}px, ${p.y}px)` }} aria-hidden>

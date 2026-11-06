@@ -12,11 +12,14 @@ export interface FirmNumbers {
   firm: { agents: number; clients: number };
   touches: { training: number; operating: number; engineering: number };
   money: { tax_saved_cents: number; spent_usd: string };
-  hiring: { applicants: number; screened: number; shortlisted: number; hired: number };
+  /** Counts only: the projector never shows candidate names (contract v1.6). */
+  hiring: { applicants: number; screened: number; shortlisted: number; hired: number; declined?: number; awaiting?: number };
   queue: { waiting: number; blocked: number };
 }
 
-export const AGENTS = 7;
+export const AGENT_COUNT = 7;
+/** Action types with a one-time training touch (contract: trust action_type values). */
+export const TRAINABLE_ACTION_TYPES = 4;
 
 const SCALE = BigInt("10000000000"); // fixed-point scale for USD sums
 
@@ -58,20 +61,33 @@ const num = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) ? 
 export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<number> = new Set()): FirmNumbers {
   const clients = new Set<string>();
   const touches = { training: 0, operating: 0, engineering: 0 };
-  const hiring = { applicants: 0, screened: 0, shortlisted: 0, hired: 0 };
+  const hiring = { applicants: 0, screened: 0, shortlisted: 0, hired: 0, declined: 0, awaiting: 0 };
+  const stageOf = new Map<string, string>(); // candidate → latest stage
+  const seen = new Set<number>();
   const lastTax = new Map<string, number>(); // case → franchise tax saved
   const sent = new Set<string>();
   const status = new Map<string, string>();
   const costs: string[] = [];
 
   for (const e of [...events].sort((a, b) => a.id - b.id)) {
-    if (skip.has(e.id) || e.status !== "ok") continue;
-    const p = (e.payload ?? {}) as Record<string, unknown>;
+    if (!Number.isSafeInteger(e.id) || seen.has(e.id) || skip.has(e.id)) continue;
+    seen.add(e.id);
+    // Contract §4: spent = Σ envelope cost_usd. A failed provider call still costs money.
     if (typeof e.cost_usd === "string") costs.push(e.cost_usd);
+    if (e.status !== "ok") continue;
+    const p = (e.payload ?? {}) as Record<string, unknown>;
     const c = e.case_id;
+    const candidate = typeof p.candidate_id === "string" ? p.candidate_id : null;
+    if (candidate && e.type.startsWith("hr.") && e.type !== "hr.decision_mailed" && e.type !== "hr.questionnaire_sent") {
+      stageOf.set(candidate, e.type.slice(3));
+    }
     switch (e.type) {
       case "email.received":
         if (c) clients.add(c);
+        break;
+      case "voice.command":
+        // A /talk customer opens a fast-path case without an email (contract §5).
+        if (c && p.speaker === "customer") clients.add(c);
         break;
       case "touch.training":
       case "touch.operating":
@@ -89,6 +105,9 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
         break;
       case "hr.hired":
         hiring.hired += 1;
+        break;
+      case "hr.declined":
+        hiring.declined += 1;
         break;
       case "tax.computed": {
         const a = num(p.authorized_method_cents);
@@ -109,12 +128,14 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
     }
   }
 
+  hiring.awaiting = [...stageOf.values()].filter((s) => s === "shortlisted").length;
+
   let saved = 0;
   for (const c of sent) saved += lastTax.get(c) ?? 0;
   const blocked = [...status.values()].filter((s) => s === "BLOCKED").length;
 
   return {
-    firm: { agents: AGENTS, clients: clients.size },
+    firm: { agents: AGENT_COUNT, clients: clients.size },
     touches,
     money: { tax_saved_cents: saved, spent_usd: sumUsd(costs) },
     hiring,

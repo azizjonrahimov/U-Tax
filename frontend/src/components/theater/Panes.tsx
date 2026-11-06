@@ -1,12 +1,12 @@
 // Theater panes. Pure rendering of ScreenState; every element a cursor can
 // visit carries data-target matching the script's target keys.
 
-import type { ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import type { FirmNumbers } from "@/theater/rail";
-import { humanTouches } from "@/theater/rail";
+import { humanTouches, TRAINABLE_ACTION_TYPES } from "@/theater/rail";
 import type { Cell, ScreenState } from "@/theater/screen";
 import type { Pane as PaneKey } from "@/theater/script";
-import { formatCents, formatUsd } from "@/theater/format";
+import { formatCents, formatClock, formatUsd } from "@/theater/format";
 
 /** Text as it should show right now (a step being typed reveals progressively). */
 export type Typed = (target: string, full: string | undefined) => string | undefined;
@@ -16,12 +16,8 @@ export const SHOW_QUEUE = process.env.NEXT_PUBLIC_SHOW_QUEUE !== "0";
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-const timeOf = (iso: string | undefined, seconds = false) => {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hour12: false });
-};
+/** Rail case rows shown (blocked cases always show as cards above them). */
+const MAX_CASE_ROWS = 8;
 
 function Pane(props: {
   k: PaneKey;
@@ -117,6 +113,15 @@ const RESULT_ROWS: [string, string][] = [
   ["assumed_par_method", "Assumed-par method"],
   ["annual_report_fee", "+ annual report fee"],
 ];
+/** Case chip tone by contract status (not display wording). */
+const CASE_TONE: Record<string, "ok" | "bad" | "run"> = {
+  QA_PASSED: "ok",
+  SENT: "ok",
+  CALL_BOOKED: "ok",
+  BLOCKED: "bad",
+  QA_FAILED: "bad",
+  NOT_ELIGIBLE: "bad",
+};
 const OPTIONAL = new Set(["gross_receipts", "years_with_receipts"]);
 const KNOWN = new Set([...FACT_ROWS, ...RESULT_ROWS].map(([k]) => k).concat("total"));
 
@@ -132,7 +137,8 @@ function Value({ k, cell, extra }: { k: string; cell?: Cell; extra?: ReactNode }
   );
 }
 
-export function SheetPane({ screen }: { screen: ScreenState }) {
+// Memoized: these only re-render when the screen or numbers change, not on every typing tick.
+export const SheetPane = memo(function SheetPane({ screen }: { screen: ScreenState }) {
   const view = screen.sheetCase ? screen.cases[screen.sheetCase] : undefined;
   const sh = view?.sheet;
   const cells = sh?.cells ?? {};
@@ -184,7 +190,7 @@ export function SheetPane({ screen }: { screen: ScreenState }) {
       )}
     </Pane>
   );
-}
+});
 
 export function SearchPane({ screen, typed }: { screen: ScreenState; typed: Typed }) {
   const s = screen.search;
@@ -207,7 +213,7 @@ export function SearchPane({ screen, typed }: { screen: ScreenState; typed: Type
   );
 }
 
-export function CalendarPane({ screen }: { screen: ScreenState }) {
+export const CalendarPane = memo(function CalendarPane({ screen }: { screen: ScreenState }) {
   const last = screen.calendar.blocks.at(-1);
   const start = last?.start ? new Date(last.start) : null;
   const base = start && !Number.isNaN(start.getTime()) ? new Date(start) : null;
@@ -218,7 +224,7 @@ export function CalendarPane({ screen }: { screen: ScreenState }) {
     <Pane k="calendar" screen={screen} label="Calendar" name={day} tag="via Google Calendar">
       <div className="cal" data-target="calendar.block">
         {slots.map((t, i) => {
-          const label = t ? timeOf(t.toISOString()) : ["9:00", "9:30", "10:00", "10:30"][i];
+          const label = t ? formatClock(t.toISOString()) : ["9:00", "9:30", "10:00", "10:30"][i];
           const here = t && base && i === 1 ? last : undefined;
           return (
             <div key={i} style={{ display: "contents" }}>
@@ -231,7 +237,7 @@ export function CalendarPane({ screen }: { screen: ScreenState }) {
       {!last && <div className="empty">No calls booked yet.</div>}
     </Pane>
   );
-}
+});
 
 export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Typed }) {
   const s = screen.social;
@@ -247,7 +253,7 @@ export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Type
               <div className="chan">{s.channel}</div>
               {img && (
                 // eslint-disable-next-line @next/next/no-img-element -- agent-supplied https image, rendered as given
-                <img src={img} alt="" data-target="social.image" />
+                <img src={img} alt="" data-target="social.image" referrerPolicy="no-referrer" />
               )}
               <div>{typed("social.caption", s.caption)}</div>
               <span className="btn" data-target="social.post">
@@ -308,7 +314,7 @@ export function PhonePane({ screen, typed }: { screen: ScreenState; typed: Typed
   );
 }
 
-export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNumbers }) {
+export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNumbers }) {
   const trust = Object.values(screen.rail.trust);
   const auto = trust.filter((t) => t === "AUTO").length;
   const saved = formatCents(numbers.money.tax_saved_cents);
@@ -337,7 +343,8 @@ export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNu
           <div className="k" data-target="rail.trust">
             <span>Training (1 per action type)</span>
             <span className="mono">
-              {numbers.touches.training} / 4{trust.length ? ` · ${auto} AUTO` : ""}
+              {numbers.touches.training} / {TRAINABLE_ACTION_TYPES}
+              {trust.length ? ` · ${auto} AUTO` : ""}
             </span>
           </div>
           {numbers.touches.engineering > 0 && (
@@ -349,7 +356,7 @@ export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNu
           <div className="log">
             {screen.rail.log.slice(-4).map((l) => (
               <div key={`${l.eventId}:${l.kind}`}>
-                <span className="h">{timeOf(l.ts)}</span>
+                <span className="h">{formatClock(l.ts)}</span>
                 {l.text}
               </div>
             ))}
@@ -377,11 +384,13 @@ export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNu
       <section className="pane" data-target="rail.hiring" aria-label="Hiring">
         <div className="ph">Hiring</div>
         <div className="pb hiring">
+          {/* Counts only: candidate names never reach the projector. */}
           {plural(numbers.hiring.applicants, "applicant")} → {numbers.hiring.screened} screened · {numbers.hiring.shortlisted} shortlisted
-          {screen.rail.hiring.at(-1) && (
+          {numbers.hiring.hired > 0 && ` · ${numbers.hiring.hired} hired`}
+          {(numbers.hiring.awaiting ?? 0) > 0 && (
             <>
               <br />
-              <b>{screen.rail.hiring.at(-1)}</b>
+              <b>Shortlist ready · waiting on CEO</b>
             </>
           )}
         </div>
@@ -399,10 +408,9 @@ export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNu
               </div>
             ))}
           {screen.caseOrder.length === 0 && <div className="empty">No clients yet. Marketing is posting.</div>}
-          {screen.caseOrder.map((c) => {
+          {screen.caseOrder.slice(-MAX_CASE_ROWS).map((c) => {
             const r = screen.caseRows[c];
-            const ok = r.status === "sent" || r.status === "call booked" || r.status === "qa passed";
-            const bad = r.status === "blocked" || r.status === "not eligible";
+            const tone = CASE_TONE[r.raw ?? ""] ?? "run";
             return (
               <div key={c} className="case">
                 <span>
@@ -413,7 +421,7 @@ export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNu
                     </span>
                   ))}
                 </span>
-                <span className={`st${ok ? " ok" : bad ? "" : " run"}`} style={bad ? { color: "var(--red)", borderColor: "var(--red)" } : undefined}>
+                <span className={`st ${tone}`}>
                   {r.status}
                 </span>
               </div>
@@ -433,4 +441,4 @@ export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNu
       </section>
     </aside>
   );
-}
+});

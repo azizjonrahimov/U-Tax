@@ -57,7 +57,6 @@ describe("screen fold over the fixture script", () => {
       ["operating", 'voice: "open the firm"'],
       ["training", "email → AUTO"],
     ]);
-    expect(end.rail.brief?.eventId).toBe(29);
     expect(end.calendar.blocks.map((b) => b.text)).toEqual(["Team #7 · 15-min review"]);
     expect(end.search.results).toHaveLength(1);
     expect(upTo(19).phone.check).toEqual({ ok: true, text: "Memo renders on phone" });
@@ -97,6 +96,87 @@ describe("screen fold over the fixture script", () => {
   });
 });
 
+describe("review pass: rail and screen hardening", () => {
+  const ev = (id: number, type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent => ({
+    id, ts: "2026-11-07T21:00:00.000Z", type, actor: "system", case_id: null, provider: null, status: "ok", payload,
+    tokens_in: null, tokens_out: null, cost_usd: null, ...extra,
+  });
+  const fold = (evs: UTaxEvent[]) => applySteps(emptyScreen(), buildScript(evs, quiet).steps);
+
+  it.each([
+    ["touch.training", "allow"],
+    ["touch.training", "deny"],
+    ["touch.operating", "allow"],
+    ["touch.operating", "deny"],
+    ["touch.engineering", "allow"],
+    ["touch.engineering", "deny"],
+  ])("%s (%s) settles its pending approval, logs its kind and leaves trust alone", (type, decision) => {
+    const s = fold([
+      ev(1, "approval.requested", { approval_id: "apr_9", action_type: "email", summary: "First memo" }, { case_id: "case_1" }),
+      ev(2, type, { note: `${decision}: memo`, approval_id: "apr_9" }, { actor: "ceo" }),
+    ]);
+    expect(s.rail.pending).toEqual([]);
+    expect(s.rail.log.map((l) => l.kind)).toEqual([type.slice(6)]);
+    expect(s.rail.trust).toEqual({});
+  });
+
+  it("a repeated approval request replaces its row instead of duplicating it", () => {
+    const req = (id: number) => ev(id, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: `v${id}` });
+    expect(fold([req(1), req(2)]).rail.pending).toEqual([{ approvalId: "apr_1", text: "v2" }]);
+  });
+
+  it("a failure note stays on its pane until the next real step there", () => {
+    const failed = ev(1, "post.published", {}, { actor: "mkt", status: "failed" });
+    const other = ev(2, "law.searched", { query: "q", results: [] }, { actor: "tax", case_id: "c" });
+    const post = ev(3, "post.published", { channel: "x", text: "hi", url: null, image_url: null }, { actor: "mkt" });
+    expect(fold([failed, other]).failure).toMatchObject({ pane: "social", eventId: 1 });
+    expect(fold([failed, other, post]).failure).toBeUndefined();
+  });
+
+  it("prototype-like case ids are plain keys, never Object.prototype", () => {
+    for (const id of ["constructor", "__proto__", "toString"]) {
+      const s = fold([
+        ev(1, "email.received", { masked_name: "Team X", from_masked: "a@b", subject: "s", body: "b" }, { actor: "intake", case_id: id }),
+        ev(2, "tax.computed", {
+          authorized_method_cents: 100, assumed_par_method_cents: 50, chosen: "assumed_par", annual_report_fee_cents: 0,
+          fee_source: "s", total_cents: 50, due_date: "d", form5472_flag: false, rnd_flag: false, engine_version: "1",
+        }, { actor: "tax", case_id: id }),
+      ]);
+      expect(Object.hasOwn(s.cases, id)).toBe(true);
+      expect(s.cases[id].sheet.cells.total.text).toBe("$0.50");
+    }
+  });
+
+  it("candidate names never reach the screen; hiring is counts plus an awaiting flag", () => {
+    const name = "Jane Candidate";
+    const hr = (id: number, type: string) =>
+      ev(id, type, { candidate_id: "cand_7", name_masked: name, note: `${name} note` }, { actor: type === "hr.declined" ? "ceo" : "hr" });
+    const evs = [hr(1, "hr.applicant"), hr(2, "hr.questionnaire_sent"), hr(3, "hr.shortlisted")];
+    expect(railFromEvents(evs).hiring).toMatchObject({ shortlisted: 1, awaiting: 1, declined: 0 });
+    const all = [...evs, hr(4, "hr.declined"), hr(5, "hr.decision_mailed")];
+    const { steps } = buildScript(all, quiet);
+    expect(JSON.stringify(steps)).not.toContain("Jane");
+    expect(JSON.stringify(applySteps(emptyScreen(), steps))).not.toContain("Jane");
+    expect(railFromEvents(all).hiring).toMatchObject({ shortlisted: 1, awaiting: 0, declined: 1 });
+  });
+
+  it("rail counts each event once, counts the cost of failed calls, and counts /talk clients", () => {
+    const touch = events.find((e) => e.type === "touch.training")!;
+    expect(railFromEvents([...events, touch]).touches.training).toBe(1);
+    const failed = ev(99, "cost.booked", { provider: "openrouter", model: "m", estimated: true }, { status: "failed", cost_usd: "0.01" });
+    expect(railFromEvents([...events, failed]).money.spent_usd).toBe("0.4324");
+    const talk = ev(100, "voice.command", { text: "hi", channel: "voice", speaker: "customer", case_id: "case_9" }, { actor: "intake", case_id: "case_9" });
+    expect(railFromEvents([...events, talk]).firm.clients).toBe(3);
+  });
+
+  it("the touches log keeps the last 12 lines", () => {
+    const touches = Array.from({ length: 13 }, (_, i) => ev(i + 1, "touch.operating", { note: `n${i + 1}`, approval_id: null }, { actor: "ceo" }));
+    const log = fold(touches).rail.log;
+    expect(log).toHaveLength(12);
+    expect(log[0].text).toBe("n2");
+  });
+});
+
 describe("timing", () => {
   it("every fixture step has a finite, bounded hold", () => {
     for (const s of steps) {
@@ -127,7 +207,7 @@ describe("rail numbers (fixture projection of /api/state)", () => {
     expect(humanTouches(n)).toBe(2);
     expect(n.money.tax_saved_cents).toBe(8516500 - (45000 - 5000));
     expect(n.money.spent_usd).toBe("0.4224"); // 0.0021 + 0.0034 + 0.0017 + 0.4100 + 0.0052
-    expect(n.hiring).toEqual({ applicants: 1, screened: 0, shortlisted: 1, hired: 0 });
+    expect(n.hiring).toEqual({ applicants: 1, screened: 0, shortlisted: 1, hired: 0, declined: 0, awaiting: 1 });
     expect(n.queue).toEqual({ waiting: 0, blocked: 0 });
   });
 

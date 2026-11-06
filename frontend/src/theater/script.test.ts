@@ -63,8 +63,8 @@ describe("buildScript on the happy-path fixture", () => {
   });
 
   it("is deterministic: same events, same script, whatever the input order", () => {
-    expect(buildScript(events, quiet)).toEqual({ steps, skipped });
-    expect(buildScript([...events].reverse(), quiet)).toEqual({ steps, skipped });
+    expect(buildScript(events, quiet)).toEqual(buildScript(events, quiet));
+    expect(buildScript([...events].reverse(), quiet)).toEqual(buildScript(events, quiet));
   });
 
   it("every step comes from a real event (premise 7)", () => {
@@ -226,11 +226,14 @@ describe("buildScript on the happy-path fixture", () => {
 
   it("v1.4.1 hr.questionnaire_sent is a system update on the Hiring card", () => {
     const { steps } = buildScript([ev(1, "hr.questionnaire_sent", { candidate_id: "cand_2", name_masked: "Candidate B", note: "auto-reply" }, { actor: "system", case_id: null })], quiet);
-    expect(steps).toMatchObject([{ target: "rail.hiring", agent: null, action: "count", text: "Candidate B · questionnaire sent", meta: { stage: "questionnaire_sent" } }]);
+    expect(steps).toMatchObject([{ target: "rail.hiring", agent: null, action: "count", text: "questionnaire sent", meta: { stage: "questionnaire_sent" } }]);
+    const mailed = buildScript([ev(1, "hr.decision_mailed", { candidate_id: "cand_2", name_masked: "Candidate B", note: "hired" }, { actor: "system", case_id: null })], quiet);
+    expect(mailed.steps).toMatchObject([{ target: "rail.hiring", text: "decision mailed" }]);
   });
 
-  it("hr.* counts on the rail with the stage", () => {
-    expect(stepsOf(steps, "hr.shortlisted")[0]).toMatchObject({ target: "rail.hiring", agent: "hr", text: "Candidate A · shortlisted", meta: { stage: "shortlisted" } });
+  it("hr.* counts on the rail by stage, never by name", () => {
+    expect(stepsOf(steps, "hr.shortlisted")[0]).toMatchObject({ target: "rail.hiring", agent: "hr", text: "shortlisted", meta: { stage: "shortlisted", candidate_id: "cand_1" } });
+    expect(JSON.stringify(stepsOf(steps, "hr.applicant"))).not.toContain("Candidate A");
   });
 
   it("facts.missing marks the missing cells; client.asked types the re-ask", () => {
@@ -252,7 +255,7 @@ describe("buildScript on the happy-path fixture", () => {
 
 describe("validation: never animate what was not logged", () => {
   it("zero events → empty script", () => {
-    expect(buildScript([], quiet)).toEqual({ steps: [], skipped: [] });
+    expect(buildScript([], quiet)).toEqual({ steps: [], skipped: [], accepted: [] });
   });
 
   it("unknown types are skipped and logged, never animated", () => {
@@ -324,7 +327,7 @@ describe("validation: never animate what was not logged", () => {
 
   it("case_id __proto__ is just a string", () => {
     const { steps } = buildScript([ev(1, "call.booked", { start: "x", minutes: 15, invitee_masked: "m" }, { case_id: "__proto__" })], quiet);
-    expect(steps.find((s) => s.action === "drag")?.text).toBe("__proto__ · 15-min review");
+    expect(steps.find((s) => s.action === "drag")?.text).toBe("New client · 15-min review");
   });
 
   it("untrusted URLs: only https: and local: reach the renderer", () => {
@@ -457,9 +460,30 @@ describe("mapping details", () => {
     expect(skipped).toMatchObject([{ eventId: 2, reason: "bad_payload" }]);
   });
 
-  it("call.booked before any email falls back to the case id", () => {
+  it("a case with no masked name yet shows a neutral label, never its raw id", () => {
     const { steps } = buildScript([ev(1, "call.booked", { start: "x", minutes: 15, invitee_masked: "m" })], quiet);
-    expect(steps.find((s) => s.action === "drag")?.text).toBe("case_1 · 15-min review");
+    expect(steps.find((s) => s.action === "drag")?.text).toBe("New client · 15-min review");
+  });
+
+  it("unmoderated customer text is clipped to 240 characters; CEO orders are not", () => {
+    const long = "x".repeat(500);
+    const { steps } = buildScript(
+      [
+        ev(1, "voice.command", { text: long, channel: "voice", speaker: "customer", case_id: "case_9" }, { case_id: "case_9" }),
+        ev(2, "voice.command", { text: long, channel: "typed", speaker: "ceo", case_id: null }, { actor: "ceo", case_id: null }),
+      ],
+      quiet,
+    );
+    expect(steps[0].text).toHaveLength(240);
+    expect(steps[0].text?.endsWith("…")).toBe(true);
+    expect(steps[1].text).toHaveLength(500);
+  });
+
+  it("accepted lists each applied event once and leaves out malformed ones", () => {
+    const ok = ev(1, "case.status", { from: "NEW", to: "READY" }, { actor: "system" });
+    const bad = ev(2, "tax.computed", {}, { actor: "tax" });
+    const unknown = ev(3, "ufo.landed", {});
+    expect(buildScript([ok, ok, bad, unknown], quiet).accepted.map((e) => e.id)).toEqual([1, 3]);
   });
 
   it("concurrent cases: the mail pane switches back before highlighting the right email", () => {

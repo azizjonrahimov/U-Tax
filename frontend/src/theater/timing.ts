@@ -4,7 +4,7 @@ import type { CursorStep } from "./script";
 
 /** Cursor travel between elements (matches the .cur CSS transition at 1×). */
 export const MOVE_MS = 700;
-/** Camera re-layout (matches the grid transition). */
+/** Camera re-layout: the .6s grid transition plus a 50ms settle before the next move. */
 export const FOCUS_MS = 650;
 
 const BASE_MS: Record<CursorStep["action"], number> = {
