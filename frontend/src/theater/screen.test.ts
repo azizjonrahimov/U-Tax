@@ -61,7 +61,7 @@ describe("screen fold over the fixture script", () => {
     expect(end.search.results).toHaveLength(1);
     expect(upTo(19).phone.check).toEqual({ ok: true, text: "Memo renders on phone" });
     // A later screen call replaces the phone pane (event 24).
-    expect(end.phone).toEqual({ dial: "5-min screen" });
+    expect(end.phone).toEqual({ dial: "5 min" });
   });
 
   it("an approval is pending until its touch arrives", () => {
@@ -181,7 +181,7 @@ describe("review pass: rail and screen hardening", () => {
     expect(shown).not.toContain("Candidate B");
     expect(shown).not.toContain("cand_9");
     expect(s.rail.log.map((l) => l.text)).toEqual(["operating · email", "operating"]);
-    expect(s.phone.dial).toBe("5-min screen");
+    expect(s.phone.dial).toBe("5 min");
   });
 
   it("hiring counts each candidate once per stage, and stages only move forward", () => {

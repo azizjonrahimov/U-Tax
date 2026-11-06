@@ -20,6 +20,8 @@ export interface MailView {
   /** Quoted spans to highlight in the body, by fact. */
   quotes: Record<string, string>;
   compose?: { header: string; text: string; sent?: string; pressed?: boolean };
+  /** v1.6.4: the case was flagged possible_injection; its body is never shown again. */
+  hidden?: boolean;
 }
 
 export interface SheetView {
@@ -255,7 +257,10 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
         const raw = str(meta.to) ?? (text === "not eligible" ? "NOT_ELIGIBLE" : undefined);
         next = { ...row, status: text, raw, blocked: raw === "BLOCKED" ? row.blocked : undefined };
       } else if (step.action === "block") next = { ...row, status: "blocked", raw: "BLOCKED", blocked: text };
-      else if (step.action === "flag") next = { ...row, flags: row.flags?.includes(text) ? row.flags : [...(row.flags ?? []), text] };
+      else if (step.action === "flag") {
+        next = { ...row, flags: row.flags?.includes(text) ? row.flags : [...(row.flags ?? []), text] };
+        if (meta.kind === "possible_injection") mail((m) => ({ ...m, hidden: true }));
+      }
       s.caseRows = { ...s.caseRows, [caseId]: next };
       if (!s.caseOrder.includes(caseId)) s.caseOrder = [...s.caseOrder, caseId];
       break;

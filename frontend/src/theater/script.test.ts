@@ -206,7 +206,7 @@ describe("buildScript on the happy-path fixture", () => {
     ]);
     // The candidate's words and id stay off the projector: only the length of the screen shows.
     expect(content(stepsOf(steps, "screen.call")).map((x) => [x.target, x.action, x.agent, x.text])).toEqual([
-      ["phone.dial", "dial", "hr", "5-min screen"],
+      ["phone.dial", "dial", "hr", "5 min"],
     ]);
     expect(stepsOf(steps, "phone.checked").at(-1)).toMatchObject({ target: "phone.check", action: "tick", agent: "qa" });
   });
@@ -465,7 +465,7 @@ describe("mapping details", () => {
     expect(steps.find((s) => s.action === "drag")?.text).toBe("New client · 15-min review");
   });
 
-  it("unmoderated customer text is clipped to 240 characters; CEO orders are not", () => {
+  it("spoken captions (customer and CEO) are clipped to 240 characters", () => {
     const long = "x".repeat(500);
     const { steps } = buildScript(
       [
@@ -476,7 +476,7 @@ describe("mapping details", () => {
     );
     expect(steps[0].text).toHaveLength(240);
     expect(steps[0].text?.endsWith("…")).toBe(true);
-    expect(steps[1].text).toHaveLength(500);
+    expect(steps[1].text).toHaveLength(240);
   });
 
   it("clip never splits an emoji; long email bodies are clipped for the projector", () => {
@@ -486,7 +486,7 @@ describe("mapping details", () => {
     const body = "b".repeat(5000);
     const mail = buildScript([ev(2, "email.received", { masked_name: "T", from_masked: "f", subject: "s".repeat(500), body })], quiet).steps;
     const open = mail.find((s) => s.action === "open")!;
-    expect(Array.from(open.text ?? "")).toHaveLength(1200);
+    expect(Array.from(open.text ?? "")).toHaveLength(2400);
     expect(String(open.meta?.subject)).toHaveLength(160);
   });
 

@@ -109,7 +109,10 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
         const a = num(p.authorized_method_cents);
         const t = num(p.total_cents);
         const fee = num(p.annual_report_fee_cents);
-        if (c && a !== null && t !== null && fee !== null && a >= 0 && t >= fee && fee >= 0) lastTax.set(c, Math.max(0, a - (t - fee)));
+        if (!c) break;
+        // The latest computation wins; a malformed one clears the case's saving instead of keeping a stale one.
+        if (a !== null && t !== null && fee !== null && a >= 0 && t >= fee && fee >= 0) lastTax.set(c, Math.max(0, a - (t - fee)));
+        else lastTax.delete(c);
         break;
       }
       case "memo.sent":
