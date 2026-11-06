@@ -312,6 +312,9 @@ export function Theater() {
           <button className={sound ? "on" : ""} aria-pressed={sound} onClick={() => setSound((v) => !v)} title="Play spoken briefs and voice">
             {sound ? "Sound on" : "Sound off"}
           </button>
+          <button className={stage ? "on" : ""} aria-pressed={stage} onClick={() => setStage((v) => !v)} title="Stage mode (S)">
+            Stage
+          </button>
           <button onClick={() => setRun((r) => r + 1)} disabled={!script}>
             Replay
           </button>

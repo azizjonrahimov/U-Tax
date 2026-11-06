@@ -136,8 +136,12 @@
 .theater .bar { flex: 1; height: 4px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 40px; }
 .theater .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--a-intake), var(--red)); transition: width .3s; }
 .theater .ctl { display: flex; gap: 6px; }
-.theater .ctl button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 10px; font: 600 calc(12px * var(--k)) var(--font-inter), Inter, sans-serif; cursor: pointer; }
+.theater .ctl button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: calc(8px * var(--k)) calc(11px * var(--k)); min-height: calc(32px * var(--k)); transition: background-color .15s, border-color .15s; font: 600 calc(12px * var(--k)) var(--font-inter), Inter, sans-serif; cursor: pointer; }
 .theater .ctl button.on { background: var(--a-intake); color: #000; border-color: var(--a-intake); }
+.theater .ctl button:hover:not(:disabled) { border-color: var(--dim); background: #1c1c2a; }
+.theater .ctl button.on:hover { background: var(--a-intake); filter: brightness(1.1); }
+.theater .ctl button:active:not(:disabled) { transform: translateY(1px); }
+.theater .ctl button:disabled { opacity: .45; cursor: not-allowed; }
 .theater .ctl button:focus-visible { outline: 2px solid var(--a-intake); outline-offset: 2px; }
 .theater .hint { font-size: calc(11px * var(--k)); color: var(--faint); white-space: nowrap; }
 
