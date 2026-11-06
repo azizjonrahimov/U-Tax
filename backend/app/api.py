@@ -169,7 +169,9 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     @router.get("/api/state")
     def state(token: str | None = Query(None), authorization: str | None = Header(None)):
         require_theater(token, authorization)
-        return gw().public_state()
+        settings = gw().settings
+        admin = not settings.admin_token or _same(_bearer(authorization), settings.admin_token)
+        return gw().public_state(admin=admin)
 
     @router.get("/api/events")
     def events(after_id: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000),

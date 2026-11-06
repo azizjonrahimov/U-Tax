@@ -128,7 +128,12 @@ class LocalMail:
         subject = str(msg.get("Subject", ""))
         mid = str(msg.get("Message-ID", "")).strip("<> ") or \
             f"local-in-{_digest(f'{sender}|{subject}|{body}')}"
-        return InMail(message_id=mid, sender=sender, subject=subject, body=body.strip())
+        auto = (str(msg.get("Auto-Submitted", "no")).strip().lower() not in ("", "no")
+                or msg.get("X-Autoreply") is not None or msg.get("X-Autorespond") is not None
+                or str(msg.get("Precedence", "")).strip().lower() in ("auto_reply", "bulk",
+                                                                     "junk"))
+        return InMail(message_id=mid, sender=sender, subject=subject, body=body.strip(),
+                      auto_reply=auto)
 
 
 # ------------------------------------------------------------------ llm

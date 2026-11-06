@@ -98,3 +98,12 @@ def test_optional_rnd_facts():
 def test_quote_matching_ignores_case_and_whitespace():
     assert quote_found("we're a  delaware\nC-corp", [HAPPY_BODY])
     assert not quote_found("", [HAPPY_BODY])
+
+
+def test_a_dollar_amount_is_never_labelled_as_shares():
+    # regression (found writing the v1.6 tests): "$500k." took the preceding "issued"
+    body = "To confirm: 10,000,000 authorized shares, 8,000,000 issued, $500k."
+    labels = {m.value: m.label for m in mentions(body)}
+    assert labels[500_000] is None and labels[8_000_000] == "issued_shares"
+    out = check(body, {**HAPPY_QUOTES, "incorporated_delaware": ""})
+    assert "issued_shares" not in out.missing

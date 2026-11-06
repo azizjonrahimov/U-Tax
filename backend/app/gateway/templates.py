@@ -26,8 +26,8 @@ SIGN_OFF = "U-Tax, an AI accounting firm run by seven agents and one human"
 MEMO_SUBJECT = "Your Delaware franchise tax estimate"
 QUESTIONNAIRE_SUBJECT = "U-Tax: a few questions about the gig"
 DECISION_SUBJECT = "U-Tax: about the memo review gig"
-PLACEHOLDERS = ("masked_name", "authorized_method", "assumed_par_method", "annual_report_fee",
-                "total", "due_date", "form5472_note", "rnd_note")
+PLACEHOLDERS = ("greeting_name", "masked_name", "authorized_method", "assumed_par_method",
+                "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note")
 
 FORM5472_NOTE = ("Heads-up: with a 25%+ foreign owner, your company likely has to file IRS "
                  "Form 5472 with its federal return; the penalty for missing it is $25,000 "
@@ -82,7 +82,7 @@ class Spec:
 
 
 _BUILTIN_ASK = (
-    "Hi {{masked_name}},\n\n"
+    "Hi {{greeting_name}},\n\n"
     "Happy to check your Delaware franchise tax! To work it out we just need {{missing_list}}.\n\n"
     "{{problems_line}}\n\n"
     "Please don't send SSNs, EINs or any ID numbers. We never need them.\n\n"
@@ -99,15 +99,15 @@ _BUILTIN_NOT_ELIGIBLE = {
 }
 SPECS: dict[str, Spec] = {
     "memo": Spec(PLACEHOLDERS, lines=(DISCLAIMER,), builtin=(
-        "Hi {{masked_name}},\n"
+        "Hi {{greeting_name}},\n"
         "Using the assumed-par-value method instead of the authorized-shares method, your "
         "estimated 2026 Delaware franchise tax drops from {{authorized_method}} to "
         "{{assumed_par_method}} (+{{annual_report_fee}} annual report fee = {{total}}), "
         "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n" + DISCLAIMER)),
-    "ask-client": Spec(("masked_name", "missing_list", "problems_line"),
+    "ask-client": Spec(("greeting_name", "masked_name", "missing_list", "problems_line"),
                        required=("missing_list",), lines=(DISCLAIMER,), builtin=_BUILTIN_ASK),
-    **{f"not-eligible-{reason}": Spec(("masked_name",), lines=(DISCLAIMER,), builtin=(
-        "Hi {{masked_name}},\n\nThanks for reaching out to U-Tax! We check Delaware franchise "
+    **{f"not-eligible-{reason}": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,), builtin=(
+        "Hi {{greeting_name}},\n\nThanks for reaching out to U-Tax! We check Delaware franchise "
         f"tax for Delaware corporations, and {why}, and we'll run it for free.\n\n"
         f"{SIGN_OFF}\n\n{DISCLAIMER}")) for reason, why in _BUILTIN_NOT_ELIGIBLE.items()},
     "hr-questionnaire": Spec((), lines=(AI_SCREEN_LINE,), builtin=(
@@ -222,8 +222,9 @@ class Templates:
 
 
 def memo_values(*, masked_name: str, result: dict, form5472: bool, rnd: bool,
-                rnd_known: bool) -> dict[str, str]:
+                rnd_known: bool, greeting_name: str | None = None) -> dict[str, str]:
     return {
+        "greeting_name": greeting_name or masked_name,
         "masked_name": masked_name,
         "authorized_method": format_usd(result["authorized_method_cents"]),
         "assumed_par_method": format_usd(result["assumed_par_method_cents"]),
@@ -235,10 +236,12 @@ def memo_values(*, masked_name: str, result: dict, form5472: bool, rnd: bool,
     }
 
 
-def ask_values(masked_name: str, missing: list[str], problems: list[str]) -> dict[str, str]:
+def ask_values(masked_name: str, missing: list[str], problems: list[str],
+               greeting_name: str | None = None) -> dict[str, str]:
     labels = [FACT_LABELS.get(f, f.replace("_", " ")) for f in missing
               if f != "stated_par" or missing == ["stated_par"]]
-    return {"masked_name": masked_name, "missing_list": _join(labels) or "a few numbers",
+    return {"greeting_name": greeting_name or masked_name, "masked_name": masked_name,
+            "missing_list": _join(labels) or "a few numbers",
             "problems_line": ("Can you double-check: " + "; ".join(problems) + "?")
             if problems else ""}
 

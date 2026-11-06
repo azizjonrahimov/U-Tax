@@ -89,13 +89,14 @@ def sender_words(address: str) -> list[str]:
 
 _ENTITY_WORDS = re.compile(r"(?i)\b(delaware|[cs][ -]?corp(?:oration)?|our|my|a|an|the)\b")
 _NAMED_ENTITY = re.compile(
-    r"\b((?!(?:We|Our|My|I|It|This|Hi|Hey|Hello)\b)[A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})"
+    r"\b((?!(?:We|Our|My|I|It|This|Hi|Hey|Hello|Yes|No|Yeah|Sure|Ok|Okay|Yep|Nope|Correct|"
+    r"Right|Also|And|So|Well)\b)[A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})"
     r"((?i:,?\s+(?:is\s+|are\s+)?an?\s+delaware\s+(?:[cs][ -]?corp|corporation|company|inc))\w*)"
 )
 # "Acme Robotics Inc", "Acme Labs": capitalised words before a company suffix.
 _COMPANY_PHRASE = re.compile(
     r"\b(?:[A-Z][\w&'-]*\s+){0,3}[A-Z][\w&'-]*,?\s+"
-    r"(?:Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Ltd\.?|Labs|Technologies|PBC)(?!\w)"
+    r"(?P<suffix>Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Ltd\.?|Labs|Technologies|PBC)(?!\w)"
 )
 
 
@@ -117,6 +118,31 @@ SPOKEN_MAX_CHARS = 4000
 def mask_spoken_emails(text: str) -> str:
     """/talk transcripts: "jane at example dot com", "jane at gmail" -> hidden (v1.5)."""
     return _SPOKEN_EMAIL.sub("[email hidden]", text[:SPOKEN_MAX_CHARS])
+
+
+# v1.6: masking never hides a word from the tax vocabulary
+TAX_WORDS = frozenset({"delaware", "corporation", "corp", "inc", "llc", "shares", "authorized",
+                       "authorised", "issued", "assets", "foreign", "owner", "owners", "par",
+                       "s-corp", "c-corp", "yes", "no"})
+
+
+def html_to_text(body: str) -> str:
+    """v1.6: text/html bodies become plain text at ingress; no markup is ever stored."""
+    import html as _html
+
+    if not re.search(r"(?is)<\s*(html|body|div|p|br|span|table|td|a)\b", body):
+        return body
+    text = re.sub(r"(?is)<(script|style)\b.*?</\1\s*>", " ", body)
+    text = re.sub(r"(?i)<\s*br\s*/?>|</\s*(p|div|tr|li|h[1-6])\s*>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = _html.unescape(text)
+    text = re.sub(r"[ \t\u00a0]+", " ", text)
+    return re.sub(r"\n\s*\n+", "\n\n", text).strip()
+
+
+def agent_text(text: str) -> str:
+    """v1.6 get_case: only contact details and SSN/EIN removed; names and facts stay."""
+    return strip_contacts(text)
 
 
 def mail_identity(address: str) -> str:
@@ -157,11 +183,13 @@ def mask_text(text: str, *, masked_name: str, company: str | None,
     # "a Delaware C Corp", "our Delaware Corporation" describe the entity type, not a
     # name: never mask them (intake quotes them for incorporated_delaware)
     text = _COMPANY_PHRASE.sub(
-        lambda m: m.group(0) if _ENTITY_WORDS.search(m.group(0)) else replacement, text)
+        lambda m: m.group(0) if _ENTITY_WORDS.search(m.group(0))
+        else f"{replacement} {m.group('suffix')}", text)
     # "Zebra Robotics, a Delaware corporation": the capitalised words naming the entity go
     text = _NAMED_ENTITY.sub(lambda m: replacement + m.group(2), text)
-    if company:
+    if company and company.lower() not in TAX_WORDS:
         text = re.sub(rf"(?i)\b{re.escape(company)}\b", replacement, text)
     for word in hide_words or []:
-        text = re.sub(rf"(?i)\b{re.escape(word)}\b", "[name]", text)
+        if word.lower() not in TAX_WORDS:
+            text = re.sub(rf"(?i)\b{re.escape(word)}\b", "[name]", text)
     return text

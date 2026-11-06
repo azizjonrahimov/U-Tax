@@ -22,7 +22,8 @@ DONE_STATUSES = ("SENT", "CALL_BOOKED", "NOT_ELIGIBLE")
 # the CEO reopens with POST /api/cases/{id}/unblock.
 TRANSITIONS: dict[str, set[str]] = {
     "NEW": {"INTAKE_PENDING", "NOT_ELIGIBLE"},
-    "INTAKE_PENDING": {"READY", "STALLED", "NOT_ELIGIBLE", "BLOCKED"},
+    # INTAKE_PENDING -> SENT/CALL_BOOKED: a client reply re-read with no changed fact
+    "INTAKE_PENDING": {"READY", "STALLED", "NOT_ELIGIBLE", "BLOCKED", "SENT", "CALL_BOOKED"},
     "READY": {"COMPUTED", "INTAKE_PENDING", "BLOCKED", "NOT_ELIGIBLE"},
     "COMPUTED": {"QA_PASSED", "QA_FAILED", "INTAKE_PENDING", "BLOCKED"},
     "QA_PASSED": {"SENT", "INTAKE_PENDING", "BLOCKED"},
@@ -38,7 +39,8 @@ _STAGE_RANK = {"applicant": 0, "screened": 1, "shortlisted": 2, "declined": 3, "
 
 # Event types that count against an action type's hourly cap.
 CAP_EVENTS = {
-    "email": ("memo.sent", "client.asked", "case.not_eligible", "hr.questionnaire_sent"),
+    "email": ("memo.sent", "client.asked", "case.not_eligible", "hr.questionnaire_sent",
+              "hr.decision_mailed"),
     "social_post": ("post.published",),
     "calendar_invite": ("call.booked",),
     "voice_screen": ("screen.call",),
@@ -58,6 +60,17 @@ class Case:
     company: str | None = None
     subject: str = ""
     texts: list[str] = field(default_factory=list)  # masked client texts, oldest first
+    agent_texts: list[str] = field(default_factory=list)  # v1.6: names kept, contacts/ids gone
+    agent_subject: str = ""
+    conversation: list[dict] = field(default_factory=list)  # /talk turns, agent ones as context
+    resume_status: str | None = None  # a client reply reopened a sent case from this status
+    client_reply_log: list[str] = field(default_factory=list)
+    memos_sent: int = 0
+
+    @property
+    def revisions(self) -> int:
+        return max(0, self.memos_sent - 1)
+    decision_mailed: bool = False
     message_ids: list[str] = field(default_factory=list)
     facts: dict[str, Any] | None = None
     quotes: dict[str, str] = field(default_factory=dict)
@@ -98,7 +111,11 @@ class Case:
         """What get_case returns to an agent: masked, this case only."""
         return {
             "case_id": self.case_id, "masked_name": self.masked_name, "status": self.status,
-            "priority": self.priority, "subject": self.subject, "messages": list(self.texts),
+            "priority": self.priority, "subject": self.agent_subject or self.subject,
+            # v1.6: agents read the email with only contacts and SSN/EIN removed
+            "messages": list(self.agent_texts or self.texts),
+            # /talk: the whole conversation for context; quotes must come from customer turns
+            "conversation": list(self.conversation),
             "facts": self.facts, "quotes": dict(self.quotes), "assumed": list(self.assumed),
             "missing": list(self.missing), "problems": list(self.problems),
             "asks_so_far": self.asks, "result": self.result, "qa_checks": list(self.qa_checks),
@@ -226,6 +243,11 @@ class State:
             self.cases[e.case_id] = case
             self.case_by_sender[case.sender_key] = e.case_id
         case.texts.append(text)
+        case.agent_texts.append(private.get("agent_text", text))
+        if private.get("agent_subject") and not case.agent_subject:
+            case.agent_subject = private["agent_subject"]
+        if private.get("turns"):
+            case.conversation = list(private["turns"])
         case.reply_to = private.get("reply_to") or case.reply_to
         case.company = private.get("company") or case.company
         if private.get("message_id"):
@@ -237,7 +259,7 @@ class State:
             return
         case.facts = e.payload["facts"]
         case.facts_event_id = e.id
-        case.quotes = e.payload["quotes"]
+        case.quotes = (e.private or {}).get("quotes") or e.payload["quotes"]  # raw, for QA
         case.assumed = e.payload["assumed"]
         case.facts_version += 1
         case.facts_ts = e.ts
@@ -260,8 +282,14 @@ class State:
     def _on_case_status(self, e: Event) -> None:
         case = self._case(e)
         if case is not None:
-            if e.payload["from"] in ("BLOCKED", "SENT", "CALL_BOOKED", "NOT_ELIGIBLE"):
+            reason = (e.private or {}).get("reason")
+            if reason == "client_reply":  # v1.6: back to SENT/CALL_BOOKED if nothing changed
+                case.resume_status = e.payload["from"]
+                case.client_reply_log.append(e.ts)
+            elif e.payload["from"] in ("BLOCKED", "SENT", "CALL_BOOKED", "NOT_ELIGIBLE"):
                 case.reopens += 1  # a human reopened it: the next run is a fresh round
+            if e.payload["to"] in ("SENT", "CALL_BOOKED", "BLOCKED", "NOT_ELIGIBLE"):
+                case.resume_status = None
             case.status = e.payload["to"]
             if case.status != "BLOCKED":
                 case.blocked_reason = None
@@ -280,6 +308,11 @@ class State:
         case = self._case(e)
         if case is not None and e.payload["kind"] not in case.flags:
             case.flags.append(e.payload["kind"])
+
+    def _on_hr_decision_mailed(self, e: Event) -> None:
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is not None:
+            cand["decision_mailed"] = True
 
     def _on_hr_questionnaire_sent(self, e: Event) -> None:
         cand = self.candidates.get(e.payload["candidate_id"])
@@ -307,10 +340,12 @@ class State:
 
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)
-        if case is not None and e.status == "ok" and case.reply_to:
+        if case is not None and e.status == "ok" and case.reply_to and not case.memos_sent:
             from app.gateway.masking import mail_identity
 
             self.memo_log.setdefault(mail_identity(case.reply_to), []).append(e.ts)
+        if case is not None and e.status == "ok":
+            case.memos_sent += 1
         if case is not None and e.status == "ok":
             case.memo_message_id = e.payload["message_id"]
             case.memo_version = case.facts_version
