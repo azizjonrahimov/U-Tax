@@ -86,7 +86,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `hr.questionnaire_sent` | system | `{candidate_id, name_masked, note}` (the §6c auto-reply; counts against the `email` cap) |
 | `hr.decision_mailed` | system | `{candidate_id, name_masked, note}` (hire/decline mail sent; counts against the `email` cap) |
 | `screen.call` | hr | `{candidate_id, transcript_excerpt, seconds}` |
-| `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id}` (actor `intake` and `case_id` set for customer conversations) |
+| `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id, masked_name}` (`masked_name` set for customer cases) (actor `intake` and `case_id` set for customer conversations) |
 | `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"flagged"\|"shortlisted"\|"paused"\|"digest"\|"login"}` |
 | `approval.requested` | system | `{approval_id, action_type, summary}` |
 | `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id}` |
@@ -219,7 +219,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `send_memo` | acct | `{case_id}` | refuses unless `QA_PASSED`; memo from template + engine output only; `memo.sent` |
 | `book_call` | intake | `{case_id, start}` | `start` must be one of the case's `offered_slots`, else `refused`; trust type `calendar_invite`; `call.booked` |
 | `phone_check` | qa | `{case_id}` | DevicePort; `phone.checked` (never blocks the case) |
-| `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
+| `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; `image_url` must be null or an https URL on a host in `PUBLIC_ASSET_HOSTS` (comma-separated), else refused; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
 | `draft_dm` | mkt | `{recipient_label, text}` | `dm.drafted` (the human sends it) |
 | `get_candidate` | hr | `{candidate_id}` | the masked candidate: stated credentials, questionnaire answers, stage (no contact details) |
 | `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
@@ -326,6 +326,9 @@ falls back to a built-in template if the file is missing.
 
 ## 8. Theater flags and the two voice/console pages
 
+- The theater never shows the mail body of a case with a `case.flagged` (`possible_injection`)
+  event; it shows "hidden: flagged by QA" instead. It renders images only from hosts in
+  `NEXT_PUBLIC_ASSET_HOSTS`.
 - Theater env: `NEXT_PUBLIC_SHOW_BLOCKED` and `NEXT_PUBLIC_SHOW_QUEUE`, both default `1`
   (design D22): red BLOCKED card from `case.blocked` only (a `qa.failed` the firm resolves by
   re-asking never shows it), waiting chips from
@@ -343,6 +346,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.6.4 (2026-11-07, frontend slice 2): `masked_name` on customer `voice.command`; `image_url` host
+  allowlist (`PUBLIC_ASSET_HOSTS` / `NEXT_PUBLIC_ASSET_HOSTS`); flagged cases' mail bodies hidden on the theater.
 
 - v1.6.3 (2026-11-07, backend task 7): `get_case` names-kept copy for intake and qa only; other
   seats get the masked copy.

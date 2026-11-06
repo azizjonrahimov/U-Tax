@@ -16,7 +16,7 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 const FIXTURE = read("../../public/fixtures/events.sample.jsonl");
 const parsed = parseJsonl(FIXTURE);
 const events = parsed.events;
-const quiet = { log: () => {} };
+const quiet = { log: () => {}, onGap: () => {} };
 
 const ev = (id: number, type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent => ({
   id,
@@ -63,8 +63,8 @@ describe("buildScript on the happy-path fixture", () => {
   });
 
   it("is deterministic: same events, same script, whatever the input order", () => {
-    expect(buildScript(events, quiet)).toEqual({ steps, skipped });
-    expect(buildScript([...events].reverse(), quiet)).toEqual({ steps, skipped });
+    expect(buildScript(events, quiet)).toEqual(buildScript(events, quiet));
+    expect(buildScript([...events].reverse(), quiet)).toEqual(buildScript(events, quiet));
   });
 
   it("every step comes from a real event (premise 7)", () => {
@@ -204,9 +204,9 @@ describe("buildScript on the happy-path fixture", () => {
       ["social", "social.post", "click", "mkt"],
       ["social", "social.posted", "appear", null],
     ]);
-    expect(content(stepsOf(steps, "screen.call")).map((x) => [x.target, x.action, x.agent])).toEqual([
-      ["phone.dial", "dial", "hr"],
-      ["phone.transcript", "type", "hr"],
+    // The candidate's words and id stay off the projector: only the length of the screen shows.
+    expect(content(stepsOf(steps, "screen.call")).map((x) => [x.target, x.action, x.agent, x.text])).toEqual([
+      ["phone.dial", "dial", "hr", "5-min screen"],
     ]);
     expect(stepsOf(steps, "phone.checked").at(-1)).toMatchObject({ target: "phone.check", action: "tick", agent: "qa" });
   });
@@ -224,8 +224,16 @@ describe("buildScript on the happy-path fixture", () => {
     expect(stepsOf(steps, "crm.synced")[0].text).toBe("CRM deal · call booked");
   });
 
-  it("hr.* counts on the rail with the stage", () => {
-    expect(stepsOf(steps, "hr.shortlisted")[0]).toMatchObject({ target: "rail.hiring", agent: "hr", text: "Candidate A · shortlisted", meta: { stage: "shortlisted" } });
+  it("v1.4.1 hr.questionnaire_sent is a system update on the Hiring card", () => {
+    const { steps } = buildScript([ev(1, "hr.questionnaire_sent", { candidate_id: "cand_2", name_masked: "Candidate B", note: "auto-reply" }, { actor: "system", case_id: null })], quiet);
+    expect(steps).toMatchObject([{ target: "rail.hiring", agent: null, action: "count", text: "questionnaire sent", meta: { stage: "questionnaire_sent" } }]);
+    const mailed = buildScript([ev(1, "hr.decision_mailed", { candidate_id: "cand_2", name_masked: "Candidate B", note: "hired" }, { actor: "system", case_id: null })], quiet);
+    expect(mailed.steps).toMatchObject([{ target: "rail.hiring", text: "decision mailed" }]);
+  });
+
+  it("hr.* counts on the rail by stage, never by name", () => {
+    expect(stepsOf(steps, "hr.shortlisted")[0]).toMatchObject({ target: "rail.hiring", agent: "hr", text: "shortlisted", meta: { stage: "shortlisted", candidate_id: "cand_1" } });
+    expect(JSON.stringify(stepsOf(steps, "hr.applicant"))).not.toContain("Candidate A");
   });
 
   it("facts.missing marks the missing cells; client.asked types the re-ask", () => {
@@ -247,7 +255,7 @@ describe("buildScript on the happy-path fixture", () => {
 
 describe("validation: never animate what was not logged", () => {
   it("zero events → empty script", () => {
-    expect(buildScript([], quiet)).toEqual({ steps: [], skipped: [] });
+    expect(buildScript([], quiet)).toEqual({ steps: [], skipped: [], accepted: [] });
   });
 
   it("unknown types are skipped and logged, never animated", () => {
@@ -319,7 +327,7 @@ describe("validation: never animate what was not logged", () => {
 
   it("case_id __proto__ is just a string", () => {
     const { steps } = buildScript([ev(1, "call.booked", { start: "x", minutes: 15, invitee_masked: "m" }, { case_id: "__proto__" })], quiet);
-    expect(steps.find((s) => s.action === "drag")?.text).toBe("__proto__ · 15-min review");
+    expect(steps.find((s) => s.action === "drag")?.text).toBe("New client · 15-min review");
   });
 
   it("untrusted URLs: only https: and local: reach the renderer", () => {
@@ -443,9 +451,50 @@ describe("mapping details", () => {
     expect(steps.at(-1)).toMatchObject({ action: "circle", meta: { screenshot_url: "local://s.png" } });
   });
 
-  it("call.booked before any email falls back to the case id", () => {
+  it("v1.4 case.flagged puts an amber chip on the case card (QA cursor); a case is required", () => {
+    const { steps, skipped } = buildScript(
+      [ev(1, "case.flagged", { kind: "possible_injection" }, { actor: "qa" }), ev(2, "case.flagged", { kind: "unrealistic_inputs" }, { actor: "qa", case_id: null })],
+      quiet,
+    );
+    expect(steps).toMatchObject([{ pane: "rail", target: "rail.cases", agent: "qa", action: "flag", text: "possible injection", meta: { kind: "possible_injection" } }]);
+    expect(skipped).toMatchObject([{ eventId: 2, reason: "bad_payload" }]);
+  });
+
+  it("a case with no masked name yet shows a neutral label, never its raw id", () => {
     const { steps } = buildScript([ev(1, "call.booked", { start: "x", minutes: 15, invitee_masked: "m" })], quiet);
-    expect(steps.find((s) => s.action === "drag")?.text).toBe("case_1 · 15-min review");
+    expect(steps.find((s) => s.action === "drag")?.text).toBe("New client · 15-min review");
+  });
+
+  it("unmoderated customer text is clipped to 240 characters; CEO orders are not", () => {
+    const long = "x".repeat(500);
+    const { steps } = buildScript(
+      [
+        ev(1, "voice.command", { text: long, channel: "voice", speaker: "customer", case_id: "case_9" }, { case_id: "case_9" }),
+        ev(2, "voice.command", { text: long, channel: "typed", speaker: "ceo", case_id: null }, { actor: "ceo", case_id: null }),
+      ],
+      quiet,
+    );
+    expect(steps[0].text).toHaveLength(240);
+    expect(steps[0].text?.endsWith("…")).toBe(true);
+    expect(steps[1].text).toHaveLength(500);
+  });
+
+  it("clip never splits an emoji; long email bodies are clipped for the projector", () => {
+    const text = "a".repeat(238) + "😀😀😀"; // 241 code points
+    const { steps } = buildScript([ev(1, "voice.command", { text, channel: "voice", speaker: "customer", case_id: "c" }, { case_id: "c" })], quiet);
+    expect(steps[0].text).toBe("a".repeat(238) + "😀…");
+    const body = "b".repeat(5000);
+    const mail = buildScript([ev(2, "email.received", { masked_name: "T", from_masked: "f", subject: "s".repeat(500), body })], quiet).steps;
+    const open = mail.find((s) => s.action === "open")!;
+    expect(Array.from(open.text ?? "")).toHaveLength(1200);
+    expect(String(open.meta?.subject)).toHaveLength(160);
+  });
+
+  it("accepted lists each applied event once and leaves out malformed ones", () => {
+    const ok = ev(1, "case.status", { from: "NEW", to: "READY" }, { actor: "system" });
+    const bad = ev(2, "tax.computed", {}, { actor: "tax" });
+    const unknown = ev(3, "ufo.landed", {});
+    expect(buildScript([ok, ok, bad, unknown], quiet).accepted.map((e) => e.id)).toEqual([1, 3]);
   });
 
   it("concurrent cases: the mail pane switches back before highlighting the right email", () => {
@@ -537,11 +586,15 @@ describe("review pass 2", () => {
     expect(skipped.map((s) => s.detail)).toEqual(Array(3).fill("checks contradict the verdict"));
   });
 
-  it("missing ids are reported as a gap; a late arrival is then dropped", () => {
+  it("id gaps are info only (contract v1.3.2): events after a gap still apply, nothing is skipped", () => {
     const log = vi.fn<(s: SkippedEvent) => void>();
-    const a = appendEvents(startScript(), [events[0], events[3]], { log });
-    expect(a.skipped).toEqual([{ eventId: 2, type: "?", reason: "gap", detail: "ids 2..3 never arrived" }]);
-    expect(log).toHaveBeenCalledOnce();
+    const onGap = vi.fn();
+    const a = appendEvents(startScript(), [events[0], events[3]], { log, onGap });
+    expect(a.gaps).toEqual([{ from: 2, to: 3 }]);
+    expect(onGap).toHaveBeenCalledExactlyOnceWith({ from: 2, to: 3 });
+    expect(a.skipped).toEqual([]);
+    expect(log).not.toHaveBeenCalled();
+    expect(a.steps.some((s) => s.eventId === 4)).toBe(true);
     expect(appendEvents(a.cursor, [events[1]], quiet).steps).toEqual([]);
   });
 

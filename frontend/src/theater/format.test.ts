@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCents, formatInt, formatUsd, normalizeDecimal } from "./format";
+import { formatCents, formatClock, formatInt, formatUsd, normalizeDecimal } from "./format";
 
 describe("formatCents", () => {
   it.each([
@@ -68,5 +68,18 @@ describe("normalizeDecimal", () => {
     ["-3", "-3"],
   ])("%s → %s", (decimal, canonical) => {
     expect(normalizeDecimal(decimal)).toBe(canonical);
+  });
+});
+
+describe("formatClock", () => {
+  it("prints local wall-clock time without a leading zero on the hour", () => {
+    expect(formatClock(new Date(2026, 10, 8, 9, 30).toISOString())).toBe("9:30");
+    expect(formatClock(new Date(2026, 10, 8, 13, 5, 7).toISOString(), true)).toBe("13:05:07");
+    expect(formatClock(new Date(2026, 10, 8, 0, 15).toISOString())).toBe("0:15");
+  });
+
+  it("returns an empty string for missing or invalid times", () => {
+    expect(formatClock(undefined)).toBe("");
+    expect(formatClock("not a date")).toBe("");
   });
 });
