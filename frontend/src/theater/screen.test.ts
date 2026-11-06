@@ -164,7 +164,10 @@ describe("review pass: rail and screen hardening", () => {
     const touch = events.find((e) => e.type === "touch.training")!;
     expect(railFromEvents([...events, touch]).touches.training).toBe(1);
     const failed = ev(99, "cost.booked", { provider: "openrouter", model: "m", estimated: true }, { status: "failed", cost_usd: "0.01" });
-    expect(railFromEvents([...events, failed]).money.spent_usd).toBe("0.4324");
+    expect(railFromEvents([...events, failed]).money.spent_usd).toBe("0.0134");
+    // v1.7.4: a cost shown on another event is display only, never summed (it is booked by its own cost.booked).
+    const bought = ev(101, "tool.bought", { tool: "Monid", amount_usd: "1.50", provider: "monid" }, { cost_usd: "1.50" });
+    expect(railFromEvents([...events, bought]).money.spent_usd).toBe("0.0034");
     const talk = ev(100, "voice.command", { text: "hi", channel: "voice", speaker: "customer", case_id: "case_9" }, { actor: "intake", case_id: "case_9" });
     expect(railFromEvents([...events, talk]).firm.clients).toBe(3);
   });
@@ -243,7 +246,7 @@ describe("rail numbers (fixture projection of /api/state)", () => {
     expect(n.touches).toEqual({ training: 1, operating: 1, engineering: 0 });
     expect(humanTouches(n)).toBe(2);
     expect(n.money.tax_saved_cents).toBe(8516500 - (45000 - 5000));
-    expect(n.money.spent_usd).toBe("0.4224"); // 0.0021 + 0.0034 + 0.0017 + 0.4100 + 0.0052
+    expect(n.money.spent_usd).toBe("0.0034"); // v1.7.4: the one cost.booked; post/search/call/brief costs are display only
     expect(n.hiring).toEqual({ applicants: 1, screened: 0, shortlisted: 1, hired: 0, declined: 0, awaiting: 1 });
     expect(n.queue).toEqual({ waiting: 0, blocked: 0 });
   });

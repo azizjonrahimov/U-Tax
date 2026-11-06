@@ -3,7 +3,7 @@
 // events played so far, following the contract's definitions:
 //   tax_saved_cents = Σ over sent cases of max(0, authorized − (total − annual fee))
 //                     (v1.4.1: the fee is paid either way, so it is never a saving)
-//   spent_usd       = Σ envelope cost_usd (decimal strings, no floats)
+//   spent_usd       = Σ cost_usd of cost.booked events only (v1.7.4; decimal strings, no floats)
 
 import type { UTaxEvent } from "./events";
 import { normalizeDecimal } from "./format";
@@ -79,8 +79,10 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
   for (const e of [...events].sort((a, b) => a.id - b.id)) {
     if (!Number.isSafeInteger(e.id) || seen.has(e.id) || skip.has(e.id)) continue;
     seen.add(e.id);
-    // Contract §4: spent = Σ envelope cost_usd. A failed provider call still costs money.
-    if (typeof e.cost_usd === "string") costs.push(e.cost_usd);
+    // Contract v1.7.4: spent = Σ cost_usd over cost.booked only. Other events (tool.bought,
+    // law.searched, post.published, screen.call) may show a cost but are booked separately, so
+    // summing them would double-count. A failed provider call still books its cost.
+    if (e.type === "cost.booked" && typeof e.cost_usd === "string") costs.push(e.cost_usd);
     if (e.status !== "ok") continue;
     const p = (e.payload ?? {}) as Record<string, unknown>;
     const c = e.case_id;
