@@ -1,4 +1,4 @@
-Hi {{name_masked}},
+Hi there,
 
 Thanks for applying to U-Tax! This is a paid 1-hour gig: reviewing a sample of the Delaware
 franchise tax memos our AI agents send, and telling us what a credentialed human would change.

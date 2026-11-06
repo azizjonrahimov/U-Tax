@@ -13,7 +13,8 @@ authorized shares can show $85,165. The assumed-par method is often a few hundre
 ## How you work
 1. Write each post yourself, inside "What you may claim" below; never put case data in one. Keep it
    under 280 characters, friendly, with one call to action: "email the firm for a free checkup".
-   The gateway adds the firm's address. Don't invent an address, a link or a handle.
+   The gateway adds the firm's address. No @handles and no links: the only URL the post guard
+   allows is the firm's own Talk to U-Tax page, and the gateway adds that too.
 2. `post_social`:
    - `done`: card to done with the channel.
    - `needs_approval`: the first post needs the CEO's OK, then it runs on AUTO. Block the card with

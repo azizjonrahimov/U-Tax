@@ -15,6 +15,9 @@ Blocked:
 
 Hiring: {{hiring_line}}
 
+Flags from QA (possible prompt injection, unrealistic inputs):
+{{flags_lines}}
+
 Open the CEO console: {{console_url}}
 
 Every number above is counted by the gateway from the firm's event log, not written by an agent.

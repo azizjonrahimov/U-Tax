@@ -7,12 +7,14 @@
 //  5. a system prompt without the firm rules or the disclaimer,
 //  6. templates/memo.md missing, using placeholders outside contract §7, or without the disclaimer line,
 //  7. a `tasks[]` declaration (the engine would create an extra org "CEO" agent outside the policy),
-//  8. an agent without its own identity + vault + token env (contract v1.3 §1),
-//  9. the config ACCEPTING a bad env (http / localhost / non-/mcp URL, short, padded or shared tokens).
+//  8. an agent without its own identity + vault + token env + seat URL /mcp/<actor> (contract v1.4 §1, §6),
+//  9. the config ACCEPTING a bad env (http / localhost / non-/mcp URL, short, padded or shared tokens),
+// 10. a template breaking its rule (placeholders, disclaimer, AI-screen disclosure, post guard),
+// 11. prompts/voice-intake.md missing its hard rules.
 // Run: npm run check   (sets dummy UTAX_MCP_URL / UTAX_TOOL_TOKEN_* when none are set)
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createJiti } from "jiti";
@@ -99,6 +101,7 @@ for (const [key, seat] of Object.entries(CREW)) {
   if (creds.length !== 1 || creds[0].kind !== "static_bearer" || creds[0].value.from_env !== seat.tokenEnv)
     fail(`${seat.name}: its identity's vault must hold exactly one static_bearer from ${seat.tokenEnv}`);
   else if (creds[0].mcp_server_url !== agent.mcp_servers?.[0]?.url) fail(`${seat.name}: vault credential URL != its MCP server URL`);
+  if (!agent.mcp_servers?.[0]?.url?.endsWith(`/mcp/${seat.actor}`)) fail(`${seat.name}: MCP URL must be its own seat, <base>/mcp/${seat.actor} (contract v1.4 §6)`);
   const server = agent.mcp_servers?.find((s) => s.name === MCP_SERVER);
   if (server?.headers?.["X-UTax-Actor"] !== seat.actor) fail(`${seat.name}: X-UTax-Actor header is not ${seat.actor}`);
 
@@ -138,6 +141,69 @@ if (!existsSync(memoPath)) {
   if (/^\s*subject:/i.test(memo)) fail("templates/memo.md: starts with a Subject: line; the gateway sets the subject and sends the whole file as the body");
   if (!memo.includes(`${DISCLAIMER}.`)) fail(`templates/memo.md: missing the line "${DISCLAIMER}."`);
   if (/\$\s?\d/.test(memo.replace(/\{\{[^}]*\}\}/g, ""))) fail("templates/memo.md: contains a literal dollar amount; amounts come only from placeholders");
+}
+
+// 10. every template has a rule: its placeholders, the disclaimer where a client reads it, the
+// disclosure line where an applicant reads it, and the post guard's limits on posts.
+const TEMPLATE_RULES = {
+  "memo.md": { client: true }, // placeholders checked in 6
+  "ask-client.md": { client: true, placeholders: ["masked_name", "missing_list", "problems_line"] },
+  "not-eligible-not_incorporated.md": { client: true, placeholders: ["masked_name"] },
+  "not-eligible-outside_delaware.md": { client: true, placeholders: ["masked_name"] },
+  "not-eligible-not_a_corporation.md": { client: true, placeholders: ["masked_name"] },
+  "hr-questionnaire.md": { applicant: true, placeholders: [] },
+  "ceo-update-email.md": { placeholders: ["headline", "lead", "summary", "console_url"] },
+  "ceo-digest-email.md": {
+    placeholders: ["period", "clients_new", "memos_sent", "calls_booked", "tax_saved", "agent_spend", "touches_training",
+      "touches_operating", "pending_approvals", "blocked_lines", "hiring_line", "flags_lines", "console_url"],
+  },
+  "login-brief.md": {
+    placeholders: ["greeting", "clients_new", "memos_sent", "tax_saved", "agent_spend", "approvals_line", "blocked_line", "hiring_line"],
+  },
+  "sourcing-posts.md": { posts: true, placeholders: [] },
+  "job-post.md": { posts: true, placeholders: [] },
+  "demo-script.md": { notes: true },
+  "backup-slide.md": { notes: true },
+};
+const DISCLOSURE = "This screen is run by an AI agent. A human makes the final hiring decision.";
+const POST_AMOUNTS = new Set(["$85,165", "$400", "$450", "$50"]);
+const templatesDir = join(ROOT, "templates");
+for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).filter((f) => f.endsWith(".md")) : []) {
+  const rule = TEMPLATE_RULES[file];
+  if (!rule) {
+    fail(`templates/${file}: no rule in check.mjs TEMPLATE_RULES (add one)`);
+    continue;
+  }
+  const text = readFileSync(join(templatesDir, file), "utf8");
+  if (text.includes("\r")) fail(`templates/${file}: has CR characters; keep LF`);
+  if (rule.placeholders) {
+    const used = [...new Set([...text.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]))];
+    const extra = used.filter((p) => !rule.placeholders.includes(p));
+    const absent = rule.placeholders.filter((p) => !used.includes(p));
+    if (extra.length) fail(`templates/${file}: unknown placeholders ${extra}`);
+    if (absent.length) fail(`templates/${file}: missing placeholders ${absent}`);
+  }
+  if (rule.client) {
+    if (!text.includes(`${DISCLAIMER}.`)) fail(`templates/${file}: missing the line "${DISCLAIMER}."`);
+    if (/\$\s?\d/.test(text.replace(/\{\{[^}]*\}\}/g, ""))) fail(`templates/${file}: literal dollar amount in a client template`);
+  }
+  if (rule.applicant && !text.includes(DISCLOSURE)) fail(`templates/${file}: missing the AI-screen disclosure line`);
+  if (rule.posts) {
+    for (const amount of text.match(/\$\s?\d+(,\d{3})*(\.\d+)?/g) ?? []) if (!POST_AMOUNTS.has(amount)) fail(`templates/${file}: dollar amount ${amount} would be refused by the post guard`);
+    if (/https?:\/\/|www\./i.test(text)) fail(`templates/${file}: contains a URL (the gateway adds the only allowed one)`);
+    if (/(^|\s)@\w/.test(text)) fail(`templates/${file}: contains an @handle`);
+    for (const m of text.matchAll(/^## X[^\n]*\n(.+)$/gm)) if (m[1].length > 280) fail(`templates/${file}: X post is ${m[1].length} characters`);
+  }
+}
+for (const required of Object.keys(TEMPLATE_RULES)) if (!existsSync(join(templatesDir, required))) fail(`templates/${required} is missing`);
+
+// 11. the /talk voice agent's prompt (backend uses it for the OpenAI Realtime session)
+const voicePath = join(ROOT, "prompts", "voice-intake.md");
+if (!existsSync(voicePath)) fail("prompts/voice-intake.md is missing");
+else {
+  const voice = readFileSync(voicePath, "utf8");
+  for (const must of ["not tax advice", "SSN", "EIN", "AI", "Read everything back", "Never compute"]) if (!voice.includes(must)) fail(`prompts/voice-intake.md: must mention "${must}"`);
+  if (/utax\.\w+/.test(voice)) fail("prompts/voice-intake.md: the voice agent has no gateway tools; it must not name any");
 }
 
 // 9. the config must REFUSE a bad env. Each case loads the config in a fresh process.

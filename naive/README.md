@@ -2,7 +2,7 @@
 
 Seven agents (Chief of Staff as coordinator, plus Intake, Tax, QA, Accounting, Marketing and HR) on
 one shared board, declared in `naive.config.ts` and applied with `naive up`. Their only tools are
-the U-Tax gateway's MCP tools (`contracts/api.md` §6) plus the board. Native email, social, phone,
+the U-Tax gateway's MCP tools (`contracts/api.md` §6, each agent on its own `/mcp/<actor>` seat) plus the board. Native email, social, phone,
 paid and escalation tools are denied by name.
 
 | Path | What |
@@ -11,11 +11,28 @@ paid and escalation tools are denied by name.
 | `src/crew.ts` | the agent → gateway-tool map (one source of truth) |
 | `src/policy.ts` | deny-by-default toolsets |
 | `prompts/*.md` | one system prompt per agent; `_firm-rules.md` is appended to each |
+| `prompts/voice-intake.md` | the `/talk` voice agent (OpenAI Realtime, run by the backend; not a Naïve agent, no tools) |
 | `templates/memo.md` | the client memo (contract §7 placeholders only) |
-| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names, prompts, memo |
+| `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
+| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts, every template's rules, bad-env guard tests |
+
+## Templates the gateway fills (values come from code and projections, never from an agent)
+| File | Sent | Placeholders |
+|---|---|---|
+| `memo.md` | `send_memo` | contract §7 |
+| `ask-client.md` | `ask_client` | `masked_name`, `missing_list` (joined fact labels), `problems_line` (a line dropped when empty) |
+| `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `masked_name` |
+| `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
+| `ceo-update-email.md` | approval needed / case BLOCKED | `headline`, `lead`, `summary`, `console_url` |
+| `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |
+| `login-brief.md` | `/ceo` login brief (spoken + shown) | `greeting`, `clients_new`, `memos_sent`, `tax_saved`, `agent_spend`, `approvals_line`, `blocked_line`, `hiring_line` |
+
+`sourcing-posts.md` and `job-post.md` are what Marketing posts (or the owner, by hand); they pass
+the post guard (dollar amounts only $85,165, $400, $450, $50; no links or @handles; X posts ≤ 280).
+`demo-script.md` and `backup-slide.md` are for the presenter.
 
 ## Env vars (see `.env.example`)
-`NAIVE_API_KEY`, `UTAX_MCP_URL` (required; public HTTPS ending in `/mcp`), one token per agent
+`NAIVE_API_KEY`, `UTAX_MCP_URL` (required; public HTTPS base ending in `/mcp`; each agent uses `<base>/<actor>`), one token per agent
 `UTAX_TOOL_TOKEN_COS|_INTAKE|_TAX|_QA|_ACCT|_MKT|_HR` (required; the backend's values, 32+ characters,
 all different), `UTAX_PHONE_E164` (optional, off).
 The config reads `process.env`, so export them in your shell before `naive up`.

@@ -76,8 +76,13 @@ Act on them: "open the firm", "retry case_7", "skip case_12", "stop posting", "w
 and offer the allowed version.
 
 ## Hiring
-Only the CEO hires. When `hr` shortlists someone, tell the CEO the masked name and HR's one-line note,
-and ask "hire or decline?". Don't recommend more strongly than HR's note.
+Only the CEO hires or declines, in the CEO console; the gateway emails the CEO every shortlist. Your
+part is routing: one `hr` card per `New applicant cand_N`. Never recommend a candidate.
+
+## Standing orders
+"Stop posting", "pause email" and similar are switches the CEO flips in the CEO console, and the
+gateway enforces them. You don't keep them: each of your sessions starts fresh. If a `CEO:` order
+asks for one, do nothing else for it; the console switch is what makes it stick.
 
 ## The morning brief (Sunday 8 AM, and on "brief me")
 The CEO console shows the brief and reads it out loud when the CEO logs in, and the gateway
