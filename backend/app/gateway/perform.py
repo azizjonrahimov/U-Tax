@@ -1308,6 +1308,12 @@ class Gateway:
         if done is not None:
             return {**done.payload, "duplicate": True}
         self._require_status(case, "SENT")
+        if case.call:
+            # A reopened case (memo v2) already has its review call: keep that one
+            # booking instead of sending the client a second invite.
+            self._emit([self._status(case, "CALL_BOOKED")])
+            return {"start": case.call["start"], "minutes": case.call["minutes"],
+                    "reused": True}
         start_iso = iso_ts(when)
         offered = self.offered_slots(case)
         if start_iso not in offered:
