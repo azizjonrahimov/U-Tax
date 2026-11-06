@@ -60,7 +60,10 @@ type Pos = { x: number; y: number };
 /** Desk positions along the bottom, for a viewport size "WxH". */
 function parkedAt(size: string): Record<string, Pos> {
   const [W, H] = size.split("x").map(Number);
-  return Object.fromEntries(AGENTS.map(([id], i) => [id, { x: W * 0.06 + i * W * 0.1, y: H - 110 + (i % 2) * 14 }]));
+  // Desks sit just above the footer, whose height scales with the projector size.
+  const footerTop = document.querySelector(".theater footer")?.getBoundingClientRect().top ?? H - 74;
+  const y0 = Math.max(0, footerTop - 46);
+  return Object.fromEntries(AGENTS.map(([id], i) => [id, { x: W * 0.06 + i * W * 0.1, y: y0 + (i % 2) * 14 }]));
 }
 
 const subscribeResize = (cb: () => void) => {
