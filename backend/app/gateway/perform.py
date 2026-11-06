@@ -926,7 +926,8 @@ class Gateway:
             payload={"text": mask_text(text, masked_name=masked_name,
                                        company=company_label(reply),
                                        hide_words=sender_words(reply)),
-                     "channel": channel, "speaker": "customer", "case_id": case_id},
+                     "channel": channel, "speaker": "customer", "case_id": case_id,
+                     "masked_name": masked_name},  # v1.6.4
             private={"reply_to": reply, "sender_key": sender_key, "masked_name": masked_name,
                      "company": None, "agent_text": agent_text(text), "turns": context},
             idempotency_key=f"voice:{request_id}" if request_id else None,
@@ -1727,7 +1728,10 @@ class Gateway:
         if not link:
             raise Refused("no_hiring_inbox", "hiring posts need MAIL_INBOX_HIRING")
         text, _ = redact_ids(raw)
-        image_url = _str(args, "image_url", required=False, max_len=2000)
+        image_url = _str(args, "image_url", required=False, max_len=2000) or None
+        if image_url is not None and not self._asset_url_ok(image_url):
+            # v1.6.4: the theater renders it, so only our own asset hosts, over https
+            raise Refused("bad_input", "image_url must be https on a host in PUBLIC_ASSET_HOSTS")
         key = f"post:{_digest([channel, kind, text, image_url])}"
         done = self._done_from(key)
         if done is not None:
@@ -1762,6 +1766,17 @@ class Gateway:
                              payload={"channel": channel, "text": text, "url": posted.url,
                                       "image_url": image_url}, idempotency_key=key)])
         return {"url": posted.url}
+
+    def _asset_url_ok(self, url: str) -> bool:
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(url)
+            host = (parts.hostname or "").lower()
+        except ValueError:
+            return False
+        return parts.scheme == "https" and not parts.username and not parts.password \
+            and host in self.settings.public_asset_hosts
 
     def _names_a_client(self, text: str) -> str | None:
         lowered = text.lower()

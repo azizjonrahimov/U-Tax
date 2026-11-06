@@ -52,6 +52,7 @@ class Settings:
     agentmail_webhook_secret: str = ""  # whsec_... (Svix); verifies /hooks/agentmail
     agentmail_base_url: str = "https://api.agentmail.to"
     hook_token: str = ""  # fallback for /hooks/*: ?token=<this> when no signing secret
+    public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
 
     @property
     def events_file(self) -> Path:
@@ -100,4 +101,6 @@ class Settings:
             agentmail_webhook_secret=_env("AGENTMAIL_WEBHOOK_SECRET"),
             agentmail_base_url=_env("AGENTMAIL_BASE_URL") or "https://api.agentmail.to",
             hook_token=_env("UTAX_HOOK_TOKEN"),
+            public_asset_hosts=frozenset(h.strip().lower() for h in
+                                         _env("PUBLIC_ASSET_HOSTS").split(",") if h.strip()),
         )
