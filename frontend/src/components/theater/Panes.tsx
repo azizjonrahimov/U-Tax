@@ -376,12 +376,12 @@ export function Rail({ screen, numbers }: { screen: ScreenState; numbers: FirmNu
       </section>
       <section className="pane" data-target="rail.hiring" aria-label="Hiring">
         <div className="ph">Hiring</div>
-        <div className="pb" style={{ fontSize: 12, color: "var(--dim)" }}>
+        <div className="pb hiring">
           {plural(numbers.hiring.applicants, "applicant")} → {numbers.hiring.screened} screened · {numbers.hiring.shortlisted} shortlisted
           {screen.rail.hiring.at(-1) && (
             <>
               <br />
-              <span style={{ color: "var(--text)" }}>{screen.rail.hiring.at(-1)}</span>
+              <b>{screen.rail.hiring.at(-1)}</b>
             </>
           )}
         </div>

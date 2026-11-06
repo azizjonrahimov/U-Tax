@@ -295,7 +295,7 @@ export function Theater() {
             <span key={id} className="av" style={{ background: color }} />
           ))}
         </div>
-        <span className="mono" style={{ fontSize: 12, whiteSpace: "nowrap" }}>
+        <span className="mono firmline">
           Firm run by <b>{plural(numbers.firm.agents, "agent")}</b> · <b>{plural(numbers.firm.clients, "client")}</b> ·{" "}
           <b>{plural(humanTouches(numbers), "human touch", "human touches")}</b>
         </span>
