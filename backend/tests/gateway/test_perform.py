@@ -16,9 +16,10 @@ SAMPLE = REPO_ROOT / "contracts" / "events.sample.jsonl"
 def test_happy_path_event_sequence(h):
     case_id = h.to_sent()
     h.ok("phone_check", case_id=case_id)
-    booked = h.do("book_call", case_id=case_id, start="2026-11-08T17:30:00Z")
+    slot = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    booked = h.do("book_call", case_id=case_id, start=slot)
     h.approve_pending(booked)
-    h.ok("book_call", case_id=case_id, start="2026-11-08T17:30:00Z")
+    h.ok("book_call", case_id=case_id, start=slot)
     assert h.types() == [
         "email.received", "case.status", "facts.extracted", "case.status", "tax.computed",
         "case.status", "qa.passed", "case.status", "approval.requested", "touch.training",
@@ -263,9 +264,12 @@ def test_not_eligible_reply(h):
     case_id = h.new_case(body="We're an LLC in Wyoming.", sender="x@wyo.co")
     refused = h.do("extract_facts", case_id=case_id, quotes={}, incorporated_delaware=False)
     assert refused.error["code"] == "not_eligible"
-    result = h.do("mark_not_eligible", case_id=case_id, reason="Wyoming LLC")
+    assert h.do("mark_not_eligible", case_id=case_id,
+                reason="Wyoming LLC").error["code"] == "bad_input"  # enum only
+    result = h.do("mark_not_eligible", case_id=case_id, reason="not_a_corporation")
     h.approve_pending(result)
-    h.ok("mark_not_eligible", case_id=case_id, reason="Wyoming LLC")
+    h.ok("mark_not_eligible", case_id=case_id, reason="not_a_corporation")
+    assert h.events("case.not_eligible")[0].payload == {"reason": "not_a_corporation"}
     assert h.gw.state.cases[case_id].status == "NOT_ELIGIBLE"
     sent = json.loads(h.outbox()[0].read_text(encoding="utf-8"))
     assert "Wyoming" not in sent["body"]  # agent text never reaches the client
@@ -305,10 +309,11 @@ def test_phone_check_failure_is_skipped_not_blocking(h):
 
 def test_calendar_failure_blocks_but_memo_stays_sent(h):
     case_id = h.to_sent()
-    pending = h.do("book_call", case_id=case_id, start="2026-11-08T17:30:00Z")
+    slot = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    pending = h.do("book_call", case_id=case_id, start=slot)
     h.ok("approve", approval_id=pending.approval_id, decision="allow")
     h.ports.calendar.faults.add(Rejected("oauth expired"))
-    result = h.do("book_call", case_id=case_id, start="2026-11-08T17:30:00Z")
+    result = h.do("book_call", case_id=case_id, start=slot)
     assert result.status == "error"
     assert h.gw.state.cases[case_id].status == "BLOCKED"
     assert h.gw.state.cases[case_id].memo_message_id
@@ -359,39 +364,57 @@ def test_template_without_disclaimer_is_refused(make_harness, tmp_path):
 # ---------------------------------------------------------------- voice, cost, hr, brief
 
 
-def test_ceo_voice_is_an_operating_touch(h):
-    h.ok("voice", text="open the firm", channel="mic", speaker="ceo")
+def test_ceo_order_is_an_operating_touch_and_wakes_cos(h):
+    wakes = []
+    h.gw.on_wake(wakes.append)
+    h.ok("voice", text="open the firm", channel="typed", speaker="ceo")
     assert h.types() == ["voice.command", "touch.operating"]
-    assert h.events("voice.command")[0].payload == {"text": "open the firm", "channel": "mic",
+    assert h.events("voice.command")[0].payload == {"text": "open the firm", "channel": "typed",
                                                     "speaker": "ceo", "case_id": None}
-    assert h.events("touch.operating")[0].payload["note"] == 'voice: "open the firm"'
+    assert h.events("touch.operating")[0].payload["note"] == 'order: "open the firm"'
+    assert wakes == ["CEO: open the firm"]
 
 
-def test_judge_voice_opens_a_priority_case(h):
+def test_customer_voice_opens_a_priority_case(h):
     h.new_case()
+    wakes = []
+    h.gw.on_wake(wakes.append)
     data = h.ok("voice", text="We're a Delaware C-corp with 10M authorized shares",
-                channel="mic", speaker="judge", reply_email="judge@yc.com")
+                channel="voice", speaker="customer", reply_email="judge@yc.com")
+    assert wakes == [f"FAST PATH {data['case_id']}"]
+    assert h.events("voice.command")[-1].actor == "intake"
     case = h.gw.state.cases[data["case_id"]]
     assert case.priority and case.status == "INTAKE_PENDING"
     assert case.reply_to == "judge@yc.com"
     listed = h.ok("list_open_cases")["cases"]
     assert listed[0]["case_id"] == data["case_id"]  # fast path: first in line
-    assert h.gw.state.touches["operating"] == 0  # a judge isn't a CEO touch
+    assert h.gw.state.touches["operating"] == 0  # a customer isn't a CEO touch
+    assert h.do("voice", text="hi", speaker="customer").error["code"] == "bad_input"
     assert h.do("voice", text="hi", speaker="judge").error["code"] == "bad_input"
 
 
-def test_book_cost_estimates_when_no_cost_given(h):
-    data = h.ok("book_cost", provider="openrouter", model="openai/gpt-5-mini",
-                tokens_in=1430, tokens_out=210, agent="intake")
+def test_gateway_books_spend(h):
+    data = h.ok("book_spend", provider="openrouter", model="openai/gpt-5-mini",
+                tokens_in=1430, tokens_out=210)
     assert data["estimated"] is True
     event = h.events("cost.booked")[0]
+    assert event.actor == "system"
     assert event.payload == {"provider": "openrouter", "model": "openai/gpt-5-mini",
                              "estimated": True}
     assert event.cost_usd == data["cost_usd"]
-    h.ok("book_cost", provider="openrouter", model="x", cost_usd="0.0100")
+    h.ok("book_spend", provider="openrouter", model="x", cost_usd="0.0100")
+    h.ok("book_spend", provider="naive", model="vetta/auto", consumed_micro_usd=2023)
+    assert h.events("cost.booked")[-1].cost_usd == "0.0020"  # micro-USD converted in code
     money = h.gw.state.public()["money"]
-    assert money["spent_by_provider"]["openrouter"] == money["spent_usd"]
-    assert h.do("book_cost", provider="openrouter", cost_usd=0.01).error["code"] == "bad_input"
+    assert set(money["spent_by_provider"]) == {"openrouter", "naive"}
+    assert h.do("book_spend", provider="openrouter", cost_usd=0.01).error["code"] == "bad_input"
+    assert h.do("book_spend", provider="naive", consumed_micro_usd=1.5).error["code"] == "bad_input"
+
+
+def test_tiny_costs_stay_fixed_point(h):
+    h.ok("book_spend", provider="openrouter", model="m", cost_usd="0.0000001")
+    assert h.events("cost.booked")[0].cost_usd == "0.0000"
+    assert "E" not in h.gw.state.public()["money"]["spent_usd"]
 
 
 def test_hr_flow_and_human_hire(h):
@@ -412,6 +435,25 @@ def test_firm_brief_text(h):
     data = h.ok("firm_brief")
     assert data["text"].startswith("2 cases: Team #1 memo sent, Team #2 waiting on numbers.")
     assert data["counts"] == {"clients": 2, "sent": 1, "blocked": 0}
+
+
+@pytest.mark.parametrize("text, ok", [
+    ("Delaware C-corp? Your bill may say $85,165. We often get it to $450.", True),
+    ("Free checkup, back in minutes.", True),
+    ("Team #7 just saved $84,715!", False),
+    ("We helped case_7 today", False),
+    ("Write to founder@team7.dev", False),
+    ("Call us at (415) 555-0100", False),
+    ("One startup owed $12,345", False),
+    ("Bills of $85k are common", False),
+])
+def test_post_social_content_guard(h, text, ok):
+    from app.gateway.perform import post_problem
+
+    assert (post_problem(text) is None) is ok
+    if not ok:
+        assert h.do("post_social", channel="x", text=text).error["code"] == "content_guard"
+        assert h.types() == []
 
 
 def test_post_social_needs_first_approval_then_auto(h):

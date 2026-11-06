@@ -67,6 +67,20 @@ def test_share_counts_survive_redaction(text):
     assert redact_ids(text) == (text, 0)
 
 
+@pytest.mark.parametrize("text, phone", [
+    ("call (415) 555-0100", True),  # regression: no country code was missed
+    ("call 415.555.0100", True),
+    ("call +1 415 555 0100", True),
+    ("10,000,000 authorized shares", False),
+    ("SSN 123-45-6789", False),
+    ("due 2027-03-01", False),
+])
+def test_phone_detection(text, phone):
+    from app.gateway.masking import has_phone
+
+    assert has_phone(text) is phone
+
+
 def test_mask_email_and_company():
     assert mask_email("founder@team7.dev") == "f•••@t•••.dev"
     assert company_label("founder@team7.dev") == "team7"

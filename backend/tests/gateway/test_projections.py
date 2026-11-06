@@ -9,7 +9,7 @@ from app.gateway.projections import rebuild
 def test_restart_rebuilds_identical_state(h):
     case_id = h.to_sent()
     h.ok("voice", text="good work", speaker="ceo")
-    h.ok("book_cost", provider="openrouter", model="m", cost_usd="0.0034", agent="intake")
+    h.ok("book_spend", provider="openrouter", model="m", cost_usd="0.0034")
     before = h.gw.state.public()
     h.restart()
     assert h.gw.state.public() == before

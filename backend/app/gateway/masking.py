@@ -66,7 +66,8 @@ def company_label(address: str) -> str | None:
     return name
 
 
-_PHONE = re.compile(r"(?<![\w$])\+?\d{1,2}?[\s.-]?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)")
+# optional country code, then 3-3-4: (415) 555-0100, 415.555.0100, +1 415 555 0100
+_PHONE = re.compile(r"(?<![\w$])(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}(?!\d)")
 
 
 def has_email(text: str) -> bool:
