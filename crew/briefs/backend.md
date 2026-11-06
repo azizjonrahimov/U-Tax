@@ -143,3 +143,19 @@ DRIVER
 - D4: per-seat MCP is task 7.
 The agents lane's scripts (qa_validate.py, qa_routes.sh, qa_oddmail.py) can become tests; ask
 it for them.
+
+## Task 8: sponsor adapters tonight (2026-11-07, controller; auto-decided per the owner's standing approval)
+Build the real adapters now, against each sponsor's **documented** API, with httpx MockTransport
+tests and the port contract suites (each factory skips when its key is missing). Saturday then
+means pasting keys. Real calls stay UNVERIFIED until keys exist. The agents lane builds four of
+them in new files only (below); you own registry.py, test_ports.py FACTORIES, .env.example and
+the wiring for all of them.
+Your order:
+1. `ADAPTER_MAIL=agentmail`: send, inbound webhook `/hooks/agentmail` (signature or path
+   token, idempotent by message id), the two inboxes.
+2. `ADAPTER_SOCIAL=naive` and `ADAPTER_CALENDAR=google` via Naïve identity social and
+   connections, using your Naïve REST client (research/naive-sdk.md; the agents report's
+   Saturday steps name the CLI equivalents).
+3. Wire the agents lane's four adapters as their READYs land.
+4. `ADAPTER_LLM=openrouter` last, only if anything still calls LLMPort.
+Skip Stripe: the owner's Stripe account is blocked until January 2027.

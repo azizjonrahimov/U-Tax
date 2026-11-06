@@ -89,3 +89,18 @@ removed from §6. Wake messages are exactly as in §6b, plus `New applicant cand
   changed fact leads to a new memo through the normal QA path).
 - get_case now returns the real wording (contact details and SSN/EIN redacted only); prompts
   must still never repeat contact details.
+
+## Task 4: four sponsor adapters (2026-11-07, controller; temporary ownership)
+While Naïve waits, you build four backend adapters, **in new files only**:
+`backend/app/gateway/adapters/{mobilerun,apify,hubspot,monid}.py` and
+`backend/tests/adapters/test_{mobilerun,apify,hubspot,monid}.py`. You own exactly those 8
+files. The backend lane owns registry.py, test_ports.py FACTORIES and .env.example, and wires
+your adapters in.
+Order: Mobilerun (DevicePort: open the memo on a cloud phone and screenshot it; Best Mobile
+Automation prize), Apify (ScrapePort: the Delaware fee page), HubSpot (CRMPort: contact + deal
+stage, never cap-table numbers), Monid (ToolBuyPort). Read each sponsor's official API docs
+(start from research/sponsors.md), implement the port interface in backend/app/gateway/ports/,
+and test with httpx.MockTransport (auth header, success, 429 mapped, error mapped,
+idempotency where the port has a key). Never call a live API, and mark unverified shapes
+`# UNVERIFIED`. Make a venv in your worktree's backend/ for pytest. One READY per adapter or
+per pair.
