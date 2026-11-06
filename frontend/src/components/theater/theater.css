@@ -3,7 +3,7 @@
 
 .theater {
   --bg: #07070b; --panel: #0f0f16; --panel2: #151520; --line: #24243a;
-  --text: #ecebf5; --dim: #8b8aa3; --faint: #6b6a82;
+  --text: #ecebf5; --dim: #8b8aa3; --faint: #85849f; /* faint ≈ 4.6:1 on --panel (AA) */
   --red: #ff4d3d; --green: #3ddc84; --amber: #ffb547;
   --a-cos: #ff4d3d; --a-intake: #4da3ff; --a-tax: #ffb547; --a-qa: #3ddc84;
   --a-acct: #c77dff; --a-mkt: #ff6fb5; --a-hr: #2ee6d6; --a-ceo: #ffffff;
@@ -36,7 +36,8 @@
 .theater .col.mid { grid-template-rows: 1.2fr 1fr; transition: grid-template-rows calc(.6s * var(--t)) ease; }
 .theater .low { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-height: 0; transition: grid-template-columns calc(.6s * var(--t)) ease; }
 
-.theater main[data-focus] .pane { opacity: .45; }
+.theater main[data-focus] .pane { opacity: .62; } /* dimmed, still readable on a projector */
+.theater.stage main[data-focus] .pane { opacity: .72; }
 .theater main[data-focus] .pane.focus, .theater aside .pane { opacity: 1; }
 .theater main[data-focus="mail"] { grid-template-columns: 2.1fr .8fr var(--rail); }
 .theater main[data-focus="mail"] .col.left { grid-template-rows: 2.4fr .5fr; }
