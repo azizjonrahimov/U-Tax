@@ -216,7 +216,8 @@ export function Theater() {
   const [liveNumbers, setLiveNumbers] = useState<FirmNumbers | null>(null);
   /** The last event whose steps have all played: log-derived rail numbers move when its animation is done. */
   const [doneId, setDoneId] = useState(0);
-  const [finale, setFinale] = useState<{ banner: string; saved: number } | null>(null);
+  /** Replay ending; `lined` = the cursors have lined up at the money (their name tags step aside). */
+  const [finale, setFinale] = useState<{ banner: string; saved: number; lined?: boolean } | null>(null);
   const speedRef = useRef(1);
   const soundRef = useRef(false);
   const feedRef = useRef<Feed>(newFeed());
@@ -613,10 +614,20 @@ export function Theater() {
       if (!alive) return;
       const money = visible(document.querySelector(".stagebox .g")) ?? visible(document.querySelector('[data-target="rail.money"] .big'));
       if (money) {
-        // Line up across the whole card (the number itself is narrow and right-aligned).
-        const r = (money.closest(".pane, .stagebox") ?? money).getBoundingClientRect();
-        const step = Math.min(34, (r.width - 40) / AGENTS.length);
-        AGENTS.forEach(([id], k) => place(id, r.left + 12 + step * k, r.bottom - 22));
+        // Eight arrows in a row pointing at the number; their name tags hide so they don't pile up
+        // over the card (the footer dots carry the same colors).
+        const r = money.getBoundingClientRect();
+        const label = money.closest(".k") ? money.previousElementSibling?.getBoundingClientRect() : undefined;
+        if (label && label.right < r.left) {
+          // Rail card: in the gap between "Clients saved" and the figure, on the figure's line.
+          const step = clamp((r.left - label.right - 16) / AGENTS.length, 12, 26);
+          const x0 = r.left - 8 - step * AGENTS.length;
+          AGENTS.forEach(([id], k) => place(id, x0 + step * k, r.top + r.height / 2 - 6));
+        } else {
+          // Stage box: a row just under the figure.
+          AGENTS.forEach(([id], k) => place(id, r.left + 26 * k, r.bottom + 8));
+        }
+        setFinale((f) => (f ? { ...f, lined: true } : f));
       }
       await realSleep(MOVE_MS);
       const ticks = 30;
@@ -763,7 +774,7 @@ export function Theater() {
   const onReplay = () => (source === "live" ? setOverride("replay") : setRun((r) => r + 1));
 
   return (
-    <div className={`theater${stage ? " stage" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
+    <div className={`theater${stage ? " stage" : ""}${finale?.lined ? " lined" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
       <header>
         <span className="logo">U</span>
         <span className="title">U-Tax</span>
