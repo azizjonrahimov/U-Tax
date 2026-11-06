@@ -328,3 +328,60 @@ def test_the_domain_label_hides_the_spaced_company_name():
     out = mask_text("zebra robotics and Zebra-Robotics and ZebraRobotics owe tax",
                     masked_name="Team #3", company="zebrarobotics")
     assert "ebra" not in out and out.count("Team #3") == 3
+
+
+# ---------------------------------------------------------------- 6c LOW
+
+
+def test_the_approved_slot_is_the_one_booked(h):
+    # the first approval earns AUTO; it must not let the retry move the call elsewhere
+    case_id = h.to_sent()
+    a, b = h.ok("get_case", case_id=case_id)["offered_slots"][:2]
+    h.approve_pending(h.do("book_call", case_id=case_id, start=a))
+    moved = h.do("book_call", case_id=case_id, start=b)
+    assert moved.error["code"] == "slot_not_approved" and moved.data["approved_start"] == a
+    assert h.ok("book_call", case_id=case_id, start=a)["start"] == a
+
+
+def test_subjects_and_notes_are_cut_at_a_word():
+    from app.gateway.perform import clip
+
+    text = "Approve? First calendar invite: Team #12, 2026-11-09T17:00:00Z and a long tail"
+    out = clip(text, 40)
+    assert len(out) <= 40 and out.endswith("…") and text.startswith(out[:-1])
+    assert out[-2] != " " and text[len(out) - 1] == " "  # cut on a boundary
+    assert clip("short", 40) == "short"
+
+
+def test_three_newlines_collapse(h):
+    case_id = h.new_case(body="We're a Delaware C-corp.\n\n\n\n\n10,000,000 authorized shares  \n")
+    body = h.events("email.received")[0].payload["body"]
+    assert "\n\n\n" not in body and "  \n" not in body
+    assert "\n\n\n" not in h.ok("get_case", case_id=case_id)["messages"][0]
+    h.to_sent()
+    assert "\n\n\n" not in h.events("memo.sent")[0].payload["body"]
+
+
+def test_two_approved_slots_never_block_each_other(h):
+    # review: approvals for A and B (made while paused) refused both bookings
+    case_id = h.to_sent()
+    a, b = h.ok("get_case", case_id=case_id)["offered_slots"][:2]
+    first, second = h.do("book_call", case_id=case_id, start=a), \
+        h.do("book_call", case_id=case_id, start=b)
+    h.ok("set_trust", action_type="calendar_invite", state="PAUSED")
+    h.ok("approve", approval_id=first.approval_id, decision="allow")
+    h.ok("approve", approval_id=second.approval_id, decision="allow")
+    h.ok("set_trust", action_type="calendar_invite", state="AUTO")
+    assert h.ok("book_call", case_id=case_id, start=b)["start"] == b
+
+
+def test_tidy_and_clip_edges():
+    import time
+
+    from app.gateway.perform import clip, tidy_lines
+
+    start = time.perf_counter()
+    tidy_lines("Delaware C-corp " + " \t" * 25_000 + "x")
+    assert time.perf_counter() - start < 0.5  # was 7 s under the gateway lock
+    assert tidy_lines("a  \n\n\n\nb\t\n") == "a\n\nb\n"
+    assert clip("abcdef", 0) == "" and len(clip("abcdef", 1)) <= 1

@@ -210,15 +210,20 @@ class Templates:
             text = _fill(template, values)
             problems = [f"missing line {line!r}" for line in spec.lines if line not in text]
             if not problems:
-                return text
+                return _tidy(text)
         if name == "memo":  # contract §7: a broken memo file is refused, never replaced
             raise TemplateError(f"memo template {origin}: {'; '.join(problems)}")
         log.warning("template %s (%s) not used: %s; built-in text sent", name, origin,
                     "; ".join(problems))
-        return _fill(spec.builtin, values)
+        return _tidy(_fill(spec.builtin, values))
 
 
 # ---------------------------------------------------------------- value builders
+
+
+def _tidy(text: str) -> str:
+    text = "\n".join(line.rstrip(" \t") for line in text.split("\n"))  # linear
+    return re.sub(r"\n{3,}", "\n\n", text)
 
 
 def memo_values(*, masked_name: str, result: dict, form5472: bool, rnd: bool,
