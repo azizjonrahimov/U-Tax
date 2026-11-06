@@ -1225,6 +1225,13 @@ class Gateway:
         time (2 h after it), so the list an agent saw, and the CEO approved, stays the same
         until those slots pass; never earlier than 30 min from now."""
         booked = {c.call["start"] for c in self.state.cases.values() if c.call}
+        # e2e finding: a time another case is waiting on the CEO for (or was approved for,
+        # not yet booked) is held, so two cases are never offered and approved the same slot
+        for approval in self.state.approvals.values():
+            parts = approval.action_key.split(":", 3)  # call:<case>:v<n>r<m>:<start>
+            if len(parts) == 4 and parts[0] == "call" and approval.decision in (None, "allow") \
+                    and (case is None or parts[1] != case.case_id):
+                booked.add(parts[3])
         anchor = parse_ts(case.memo_ts) if case is not None and case.memo_ts else self._now()
         start = max(anchor + SLOT_LEAD, self._now() + timedelta(minutes=30))
         start = start.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1) \
