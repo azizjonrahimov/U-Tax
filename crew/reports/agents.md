@@ -76,15 +76,7 @@ the real org. Not one of these could be checked without a key.
    `naive identity social portal --identity utax-mkt --platform x --platform linkedin`. Open the
    link it prints and authorize both accounts. Confirm with
    `naive identity social accounts --identity utax-mkt`.
-5. Google Calendar (review-call invites, as Intake's persona):
-   1. `naive identity connections apps --search calendar` and note the Google Calendar app id.
-   2. `naive identity connections app <app-id>` to confirm `managed_oauth` is offered.
-   3. `naive identity connections config-add --connector <app-id> --auth managed_oauth` and note
-      the `ac_…` id.
-   4. `naive identity connect --identity utax-intake --auth-config ac_…`. Open the `connect_link`
-      and authorize.
-   5. Check with `naive identity connections show --connection ca_…` until it shows active.
-6. First live check (with the agents lane): run one new case end to end. Confirm that each agent's
+5. First live check (with the agents lane): run one new case end to end. Confirm that each agent's
    session shows its own identity, that the gateway logs the right actor, and that no MCP call
    stops for approval.
 
