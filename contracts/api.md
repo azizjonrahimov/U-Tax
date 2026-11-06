@@ -27,8 +27,9 @@ Who builds what:
 | Admin token | `ADMIN_TOKEN` | The CEO's mic/approve page, dev tools | `Authorization: Bearer <t>` on `/api/approve`, `/api/dev/*` |
 
 - Frontend env: `NEXT_PUBLIC_API_URL` (default `http://localhost:8000`), `NEXT_PUBLIC_THEATER_TOKEN`.
-- Money: tax amounts are **integer cents** (`*_cents`). Agent cost is a **decimal string**
-  of USD (`"0.0123"`), because it is fractional. Shares are integers. Stated par is a
+- Money: tax amounts are **integer cents** (`*_cents`). Agent cost is a **fixed-point decimal
+  string** of USD (`"0.0123"`, never exponent form like `"1E-7"`; in Python `format(d, 'f')`),
+  because it is fractional. Shares are integers. Stated par is a
   decimal string (`"0.00001"`). Never floats on the wire for money.
 - Times: ISO 8601 UTC strings (`2026-11-07T21:14:03.120Z`).
 
@@ -263,6 +264,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.3.1 (2026-11-06): cost strings are fixed-point (no exponent form); fixture `voice.command`
+  channel is `voice`.
 
 - v1.3 (2026-11-06, from the agents lane's review): one tool token per agent, and the token
   decides the actor and the allowed tools; no empty-secret bypass; `book_cost` removed
