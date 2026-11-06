@@ -65,3 +65,13 @@ with `speaker` and judge fast-path cases (priority, memo to `reply_email`),
 `POST /api/voice/session` (ephemeral OpenAI Realtime session, `503 voice_unavailable`
 without `OPENAI_API_KEY`), and `GET /api/brief/audio` (TTS of a `brief.generated`
 event, 503 without a key). Stand-ins work with no key. See contract §5 and §8.
+
+## Contract v1.2 (2026-11-06, design D23-D26)
+- `POST /api/voice`: `speaker` is now `customer|ceo` (customer = `/talk`, opens the
+  fast-path case; public, so rate-limit per IP with no admin token; `/api/voice/session` the same).
+- `GET /api/ceo/brief?since_id=`: a deterministic template brief over the projections
+  tonight, writing `brief.generated`; it returns pending approvals.
+- CEO email updates to `CEO_EMAIL` via MailPort (approval needed, case BLOCKED, digest
+  every `CEO_DIGEST_HOURS`=3), each writing `ceo.notified`. Stand-in: the console outbox.
+- Naïve access arrives Saturday at the event (D26): everything tonight runs on stand-ins
+  plus your local driver.
