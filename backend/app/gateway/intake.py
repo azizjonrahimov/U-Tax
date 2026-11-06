@@ -74,10 +74,25 @@ def quote_found(quote: str, texts: list[str]) -> bool:
     return any(pattern.search(_squash(t)) for t in texts)
 
 
+def _speaks_to(fact: str, text: str) -> bool:
+    found = mentions(text)
+    if any(m.label == fact for m in found):
+        return True
+    return fact in ("authorized_shares", "issued_shares") and any(
+        m.is_share and m.label is None for m in found)
+
+
+def _latest_about(fact: str, texts: list[str]) -> str | None:
+    """v1.6.2: a later message supersedes earlier ones for a fact it mentions."""
+    return next((t for t in reversed(texts) if _speaks_to(fact, t)), None)
+
+
 def matches_mentions(fact: str, value: Decimal, texts: list[str]) -> bool:
-    """The parsed value is a number the client actually wrote for this fact: one of the
-    numbers labelled with it, or (when nothing is labelled) one of the numbers present."""
-    all_mentions = [m for t in texts for m in mentions(t)]
+    """The parsed value is a number the client wrote for this fact in their latest message
+    that mentions it: one labelled with it, or (when nothing is labelled) one present."""
+    latest = _latest_about(fact, texts)
+    pool = [latest] if latest is not None else texts
+    all_mentions = [m for t in pool for m in mentions(t)]
     labelled = {m.value for m in all_mentions if m.label == fact}
     if labelled:
         return value in labelled
@@ -113,6 +128,10 @@ def mentions(text: str) -> list[Mention]:
         label = next((f for f, p in _LABELS.items() if p.search(after_words)), None)
         if label is None:
             label = next((f for f, p in _LABELS.items() if p.search(before_words)), None)
+        if "$" in span and label in ("authorized_shares", "issued_shares"):
+            # "8,000,000 issued, $500k.": a dollar amount is never a share count, even when
+            # the only nearby label word belongs to the number before it
+            label = None
         is_money = "$" in span or label == "gross_assets"
         is_share = not is_money and bool(_SHARE_WORD.search(after_words)
                                          or _SHARE_WORD.search(before_words))
@@ -122,8 +141,11 @@ def mentions(text: str) -> list[Mention]:
 
 
 def _conflict(fact: str, value: Decimal, texts: list[str]) -> bool:
-    """Does the client's text give another, different number for this fact?"""
-    all_mentions = [m for t in texts for m in mentions(t)]
+    """Does the client's text give another, different number for this fact? Judged within
+    one message, the latest that mentions the fact (v1.6.2): a correction in a later
+    email supersedes, it is not a conflict."""
+    latest = _latest_about(fact, texts)
+    all_mentions = mentions(latest) if latest is not None else []
     if fact in ("authorized_shares", "issued_shares"):
         labelled = {m.value for m in all_mentions if m.label == fact}
         unlabelled = {m.value for m in all_mentions if m.is_share and m.label is None}

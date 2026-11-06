@@ -141,19 +141,22 @@ def test_flag_mails_are_throttled_to_one_an_hour(make_harness):
 
 def test_at_most_three_memos_a_day_per_address(h):
     auto_email(h)
-    for _ in range(3):
-        case_id = h.to_qa_passed(h.new_case(sender="founder@team7.dev"))
+    body = ("We're a Delaware C-corp. We have 10,000,000 authorized shares, 8,000,000 "
+            "issued, and about $500k in assets. No foreign owners.")
+    cases = [h.new_case(sender="founder@team7.dev")]  # an email case, then /talk cases
+    cases += [h.ok("voice", text=body, speaker="customer",
+                   reply_email="founder@team7.dev")["case_id"] for _ in range(3)]
+    for case_id in cases[:3]:
+        h.to_qa_passed(case_id)
         h.ok("send_memo", case_id=case_id)
-        h.ok("unblock", case_id=case_id)  # reopen for another round
-        h.new_case(body="again", sender="founder@team7.dev")
-    case_id = h.to_qa_passed("case_1")
-    assert h.do("send_memo", case_id=case_id).error["code"] == "memo_cap"
-    assert h.gw.state.cases[case_id].status == "BLOCKED"  # the CEO sees it, not stranded
+    last = h.to_qa_passed(cases[3])
+    assert h.do("send_memo", case_id=last).error["code"] == "memo_cap"
+    assert h.gw.state.cases[last].status == "BLOCKED"  # the CEO sees it, not stranded
     h.clock.advance(days=1, minutes=1)
-    h.ok("unblock", case_id=case_id, to="READY")
-    h.ok("compute_tax", case_id=case_id)
-    h.ok("qa_check", case_id=case_id)
-    assert h.ok("send_memo", case_id=case_id)["message_id"]
+    h.ok("unblock", case_id=last, to="READY")
+    h.ok("compute_tax", case_id=last)
+    h.ok("qa_check", case_id=last)
+    assert h.ok("send_memo", case_id=last)["message_id"]
 
 
 # ---------------------------------------------------------------- 7. decisions, hiring list
@@ -180,7 +183,8 @@ def test_screened_candidates_are_listed_for_the_ceo(h):
     h.ok("inject_email", **{"from": "a@x.io", "subject": "g", "body": "EA", "inbox": "hiring"})
     h.ok("inject_email", **{"from": "b@y.io", "subject": "g", "body": "-", "inbox": "hiring"})
     h.ok("hr_record", stage="screened", candidate_id="cand_2", note="")
-    listed = h.gw.public_state()["hiring"]["candidates"]
+    assert "candidates" not in h.gw.public_state()["hiring"]  # theater: counts only
+    listed = h.gw.public_state(admin=True)["hiring"]["candidates"]
     # every candidate is visible to the CEO, screened or still waiting
     assert [(c["candidate_id"], c["stage"]) for c in listed] == [("cand_1", "applicant"),
                                                                   ("cand_2", "screened")]

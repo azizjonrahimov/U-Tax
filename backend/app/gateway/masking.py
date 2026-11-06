@@ -89,13 +89,14 @@ def sender_words(address: str) -> list[str]:
 
 _ENTITY_WORDS = re.compile(r"(?i)\b(delaware|[cs][ -]?corp(?:oration)?|our|my|a|an|the)\b")
 _NAMED_ENTITY = re.compile(
-    r"\b((?!(?:We|Our|My|I|It|This|Hi|Hey|Hello)\b)[A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})"
+    r"\b((?!(?:We|Our|My|I|It|This|Hi|Hey|Hello|Yes|No|Yeah|Sure|Ok|Okay|Yep|Nope|Correct|"
+    r"Right|Also|And|So|Well)\b)[A-Z][\w&'-]*(?:\s+[A-Z][\w&'-]*){0,3})"
     r"((?i:,?\s+(?:is\s+|are\s+)?an?\s+delaware\s+(?:[cs][ -]?corp|corporation|company|inc))\w*)"
 )
 # "Acme Robotics Inc", "Acme Labs": capitalised words before a company suffix.
 _COMPANY_PHRASE = re.compile(
     r"\b(?:[A-Z][\w&'-]*\s+){0,3}[A-Z][\w&'-]*,?\s+"
-    r"(?:Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Ltd\.?|Labs|Technologies|PBC)(?!\w)"
+    r"(?P<suffix>Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Ltd\.?|Labs|Technologies|PBC)(?!\w)"
 )
 
 
@@ -117,6 +118,62 @@ SPOKEN_MAX_CHARS = 4000
 def mask_spoken_emails(text: str) -> str:
     """/talk transcripts: "jane at example dot com", "jane at gmail" -> hidden (v1.5)."""
     return _SPOKEN_EMAIL.sub("[email hidden]", text[:SPOKEN_MAX_CHARS])
+
+
+# v1.6: masking never hides a word from the tax vocabulary
+TAX_WORDS = frozenset({"delaware", "corporation", "corp", "inc", "llc", "shares", "authorized",
+                       "authorised", "issued", "assets", "foreign", "owner", "owners", "par",
+                       "s-corp", "c-corp", "yes", "no"})
+
+
+MAX_BODY_CHARS = 50_000  # every inbound body is capped before any parsing
+
+
+_TAG = re.compile(r"<(/?)\s*([a-zA-Z][a-zA-Z0-9]*)?[^<>]*>")  # linear: stops at the next "<"
+_TAG_LEFTOVER = re.compile(r"<[/!?]?[a-zA-Z][^<>]*")  # an unclosed "<img src=x ..." fragment
+_BLOCK_TAGS = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table"}
+
+
+def html_to_text(body: str) -> str:
+    """v1.6: text/html bodies become plain text at ingress; no markup is ever stored.
+    One linear pass (the stdlib HTMLParser is quadratic on unclosed tags): script/style
+    content dropped, entities decoded, and any tag that decoding produces removed too."""
+    import html as _html
+
+    body = body[:MAX_BODY_CHARS]
+    if not re.search(r"<\s*/?\s*[a-zA-Z!]", body) and "&" not in body:
+        return body
+    parts: list[str] = []
+    skip: str | None = None  # inside <script>/<style> until its close tag
+    pos = 0
+    for m in _TAG.finditer(body):
+        if skip is None:
+            parts.append(body[pos:m.start()])
+        name = (m.group(2) or "").lower()
+        closing = bool(m.group(1))
+        if skip is not None:
+            if closing and name == skip:
+                skip = None
+        elif name in ("script", "style") and not closing:
+            skip = name
+        elif name in _BLOCK_TAGS:
+            parts.append("\n")
+        else:
+            parts.append(" ")
+        pos = m.end()
+    if skip is None:
+        parts.append(body[pos:])
+    text = _html.unescape("".join(parts))
+    text = _TAG.sub(" ", text)  # "&lt;img&gt;" decoded into a tag
+    text = _TAG_LEFTOVER.sub(" ", text)
+    text = re.sub(r"[ \t ]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
+    return re.sub(r"\n\s*\n+", "\n\n", text).strip()
+
+
+def agent_text(text: str) -> str:
+    """v1.6 get_case: only contact details and SSN/EIN removed; names and facts stay."""
+    return strip_contacts(text)
 
 
 def mail_identity(address: str) -> str:
@@ -157,11 +214,16 @@ def mask_text(text: str, *, masked_name: str, company: str | None,
     # "a Delaware C Corp", "our Delaware Corporation" describe the entity type, not a
     # name: never mask them (intake quotes them for incorporated_delaware)
     text = _COMPANY_PHRASE.sub(
-        lambda m: m.group(0) if _ENTITY_WORDS.search(m.group(0)) else replacement, text)
+        lambda m: m.group(0) if _ENTITY_WORDS.search(m.group(0))
+        else f"{replacement} {m.group('suffix')}", text)
     # "Zebra Robotics, a Delaware corporation": the capitalised words naming the entity go
     text = _NAMED_ENTITY.sub(lambda m: replacement + m.group(2), text)
-    if company:
-        text = re.sub(rf"(?i)\b{re.escape(company)}\b", replacement, text)
+    if company and company.lower() not in TAX_WORDS:
+        # "zebrarobotics" (the domain label) also hides "Zebra Robotics" / "zebra-robotics"
+        spaced = r"[\s.-]?".join(re.escape(c) for c in company) if len(company) >= 4 \
+            else re.escape(company)
+        text = re.sub(rf"(?i)\b{spaced}\b", replacement, text)
     for word in hide_words or []:
-        text = re.sub(rf"(?i)\b{re.escape(word)}\b", "[name]", text)
+        if word.lower() not in TAX_WORDS:
+            text = re.sub(rf"(?i)\b{re.escape(word)}\b", "[name]", text)
     return text

@@ -78,6 +78,7 @@ class InMail:
     sender: str
     subject: str
     body: str
+    auto_reply: bool = False  # Auto-Submitted / X-Autoreply / Precedence: auto_reply
 
 
 @dataclass(frozen=True)
