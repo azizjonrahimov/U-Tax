@@ -125,3 +125,82 @@ def test_oversized_bodies_and_batches_are_refused(mcp):
     assert client.post("/mcp/cos", json=batch, headers=auth).status_code == 400
     ok = client.post("/mcp/cos", json=batch[:2], headers=auth)
     assert [r["id"] for r in ok.json()] == [0, 1]
+
+
+# ---------------------------------------------------------------- review of task 7
+
+
+def _post(client, seat, body, **kw):
+    hdrs = {"Authorization": f"Bearer {TOKENS[seat]}", "Content-Type": "application/json"}
+    return client.post(f"/mcp/{seat}", content=body, headers=hdrs, **kw)
+
+
+def test_bad_params_and_odd_json_are_rpc_errors_not_500s(mcp):
+    h, client = mcp
+    for params in ([1], "x", 5):
+        r = call(client, "cos", "tools/call", params)
+        assert r.status_code == 200 and r.json()["error"]["code"] == -32602
+    assert call(client, "cos", "initialize", "x").json()["error"]["code"] == -32602
+    batch = [{"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": [1]},
+             {"jsonrpc": "2.0", "id": 2, "method": "ping"}]
+    replies = client.post("/mcp/cos", json=batch,
+                          headers={"Authorization": f"Bearer {TOKENS['cos']}"}).json()
+    assert [r.get("error", {}).get("code") for r in replies] == [-32602, None]
+    assert _post(client, "cos", b'{"jsonrpc":"2.0","id":NaN,"method":"ping"}').status_code == 400
+    assert _post(client, "cos", b"[" * 100_000).json()["error"]["code"] == -32700
+    old = _post(client, "cos", b'{"jsonrpc":"1.0","id":5,"method":"ping"}').json()
+    assert old["id"] == 5 and old["error"]["code"] == -32600
+    assert _post(client, "cos", b'{"jsonrpc":"2.0","id":9,"result":{}}').status_code == 202
+
+
+def test_a_token_shared_between_seats_opens_neither(make_harness):
+    from app.mcp import seat_problems
+
+    shared = "s" * 40
+    h = make_harness(tool_tokens={**TOKENS, "tax": shared, "qa": shared, "hr": "short"})
+    problems = seat_problems(h.gw.settings.tool_tokens)
+    assert problems == {"tax": "token shared with another seat",
+                        "qa": "token shared with another seat",
+                        "hr": "token shorter than 32 characters"}
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        for seat in ("tax", "qa"):
+            r = client.post(f"/mcp/{seat}", json={"jsonrpc": "2.0", "id": 1, "method": "ping"},
+                            headers={"Authorization": f"Bearer {shared}"})
+            assert r.status_code == 401
+        assert call(client, "cos", "ping").status_code == 200
+
+
+def test_a_seat_with_calls_running_gets_429(mcp, monkeypatch):
+    from app import mcp as mcp_mod
+
+    h, client = mcp
+    monkeypatch.setitem(mcp_mod._in_flight, "intake", mcp_mod.SEAT_CONCURRENCY)
+    r = call(client, "intake", "ping")
+    assert r.status_code == 429 and r.headers["retry-after"] == "2"
+    assert call(client, "tax", "ping").status_code == 200  # other seats unaffected
+    monkeypatch.setitem(mcp_mod._in_flight, "intake", 0)
+    assert call(client, "intake", "ping").status_code == 200
+
+
+def test_control_actions_are_not_tools_and_actor_cant_be_forged(mcp):
+    h, client = mcp
+    for name in ("approve", "inject_email", "set_trust", "voice", "candidate_decision"):
+        r = call(client, "cos", "tools/call", {"name": name, "arguments": {}})
+        assert r.json()["error"]["code"] == -32602
+    case_id = h.new_case(body="We're Zebra Robotics, a Delaware corporation. 10,000,000 "
+                              "authorized shares.", sender="ceo@zebrarobotics.ai")
+    seen = tool(client, "cos", "get_case", case_id=case_id, _actor="intake")["data"]
+    assert "Zebra" not in seen["messages"][0]  # cos still gets the masked copy
+
+
+def test_schemas_use_plain_types():
+    from app.mcp import TOOLS
+
+    def walk(node):
+        if isinstance(node, dict):
+            assert not isinstance(node.get("type"), list), node
+            assert "additionalProperties" not in node, node
+            for v in node.values():
+                walk(v)
+
+    walk(TOOLS)
