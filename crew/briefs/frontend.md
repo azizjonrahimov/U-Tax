@@ -60,3 +60,14 @@ tools). Screenshots of each slice in your READY are welcome.
   (fallback: browser `speechSynthesis`).
 - The BLOCKED card and queue chips are decided: build both, flags default on
   (`NEXT_PUBLIC_SHOW_BLOCKED`, `NEXT_PUBLIC_SHOW_QUEUE`).
+
+## Contract v1.2 (2026-11-06, design D23-D25): replaces the `/mic` slice above
+The owner never has to speak. Slice 4 is now two pages (contract §8):
+- **`/talk` "Talk to U-Tax"**: public; a customer or the finale judge talks with the firm's
+  AI agent (OpenAI Realtime via `POST /api/voice/session`; fallback typed chat + browser
+  speech). The agent speaks for the firm, gathers the facts, reads the numbers back, takes
+  a reply email, posts to `POST /api/voice` with `speaker: "customer"`, then shows the case
+  moving live. This is the finale, so make it big and calm.
+- **`/ceo` console**: admin token; on login it plays and shows the brief from
+  `GET /api/ceo/brief?since_id=` (remember `last_event_id` locally), lists pending approvals
+  with Approve/Deny (`POST /api/approve`), and has an optional typed order box.
