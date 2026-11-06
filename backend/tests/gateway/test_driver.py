@@ -97,3 +97,63 @@ def test_read_facts_points_at_spans():
     assert read["quotes"]["gross_assets"] == "$500k"
     assert read["incorporated_delaware"] is True and read["foreign_owner_25"] is False
     assert read_facts(["We're an LLC"])["not_eligible_reason"] == "not_a_corporation"
+
+
+# ---------------------------------------------------------------- D2
+
+
+def inject(h, crew, body, sender="founder@team31.dev"):
+    case_id = h.ok("inject_email", **{"from": sender, "subject": "franchise tax?",
+                                      "body": body})["case_id"]
+    assert crew.wait_idle()
+    return case_id
+
+
+def test_delaware_corp_is_read_and_runs_to_a_memo(h, crew):
+    case_id = inject(h, crew, "We're a Delaware corp. 10,000,000 authorized shares, 8,000,000 "
+                              "issued, about $500k in assets. No foreign owners.")
+    approve_all(h, crew)
+    assert h.events("facts.extracted")[0].payload["facts"]["incorporated_delaware"] is True
+    assert h.gw.state.cases[case_id].status in ("SENT", "CALL_BOOKED")
+
+
+@pytest.mark.parametrize("body,reason", [
+    ("We're a Wyoming corporation with 5,000,000 authorized shares.", "outside_delaware"),
+    ("We're incorporated in Nevada, 10,000,000 authorized shares.", "outside_delaware"),
+    ("We're a Wyoming LLC with no shares at all.", "not_a_corporation"),
+])
+def test_other_states_and_llcs_get_the_kind_reply(h, crew, body, reason):
+    case_id = inject(h, crew, body)
+    approve_all(h, crew)
+    assert h.gw.state.cases[case_id].status == "NOT_ELIGIBLE"
+    assert h.events("case.not_eligible")[0].payload["reason"] == reason
+
+
+def test_a_uk_company_owning_40_percent_flags_form_5472(h, crew):
+    case_id = inject(h, crew, "We're a Delaware C-corp. A UK company owns 40% of us. "
+                              "10,000,000 authorized shares, 8,000,000 issued, $500k in assets.")
+    approve_all(h, crew)
+    facts = h.events("facts.extracted")[0]
+    assert facts.payload["facts"]["foreign_owner_25"] is True
+    assert h.gw.state.cases[case_id].result["form5472_flag"] is True
+    assert h.gw.state.cases[case_id].status in ("SENT", "CALL_BOOKED")
+
+
+@pytest.mark.parametrize("sentence,expected", [
+    ("Our German parent holds 10% of the shares.", False),
+    ("30% is owned by a Canadian fund.", True),
+    ("Our Texas office has 10 people. No foreign owners.", False),
+])
+def test_read_facts_foreign_owners(sentence, expected):
+    out = read_facts([f"We're a Delaware C-corp. {sentence}"])
+    assert out["foreign_owner_25"] is expected and out["incorporated_delaware"] is True
+
+
+def test_read_facts_is_bounded_on_hostile_lines():
+    import time
+
+    start = time.perf_counter()
+    for text in ("UK company " + "1% " * 15_000, "40% " * 12_000 + "owned by", "Wyoming " * 7_000,
+                 "a " * 25_000):
+        read_facts([text[:50_000]])
+    assert time.perf_counter() - start < 5.0

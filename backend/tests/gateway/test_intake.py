@@ -111,3 +111,16 @@ def test_a_dollar_amount_is_never_labelled_as_shares():
     assert labels[500_000] is None and labels[8_000_000] == "issued_shares"
     out = check(body, {**HAPPY_QUOTES, "incorporated_delaware": ""})
     assert "issued_shares" not in out.missing
+
+
+def test_filler_words_cannot_make_number_reading_quadratic():
+    # regression (found timing D2): "a a a ..." made _NUMBER rescan the line from every word;
+    # 4,000 words took 8.7 s under the gateway lock
+    import time
+
+    start = time.perf_counter()
+    mentions("a " * 25_000)
+    mentions("and one " * 6_000)
+    assert time.perf_counter() - start < 2.0
+    assert [str(m.value) for m in mentions("one hundred and twenty issued, a million authorized")] \
+        == ["120", "1000000"]

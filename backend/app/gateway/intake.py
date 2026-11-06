@@ -44,12 +44,12 @@ MAX_ASSETS_CENTS = 1_000_000_000_00
 _NUMBER = re.compile(
     r"(?i)(?<![\w.,])\$?\s?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[a-z]{1,2})?(?![\w])"
     r"(?:\s+(?:thousand|million|mil|billion)\b)?"
-    r"|\b(?:(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
-    r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|"
-    r"seventy|eighty|ninety|hundred|thousand|million|billion|a|an|and)[\s-]+)*"
-    r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|"
-    r"fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|"
-    r"eighty|ninety|hundred|thousand|million|billion)\b"
+    # Linear: "a"/"an" only first, "and" only between number words, so a run of filler
+    # words ("a a a ...", 50 kB) can't make every start position rescan the line.
+    r"|\b(?:(?:a|an)[\s-]+)?{w}(?:[\s-]+(?:and[\s-]+)?{w})*\b".replace("{w}", (
+        r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+        r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|"
+        r"seventy|eighty|ninety|hundred|thousand|million|billion)"))
 )
 _LABELS = {
     "authorized_shares": re.compile(r"(?i)\bauthori[sz]ed\b"),

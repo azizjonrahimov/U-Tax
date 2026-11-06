@@ -34,6 +34,45 @@ _INJECTION = re.compile(r"(?i)\bignore (?:that|this|the above|your rules|previou
                         r"|\bdisregard\b|\bsend me every\b")
 
 
+_CORP_WORD = r"(?:c[- ]?corp(?:oration)?|corp(?:oration)?|\binc\b|incorporated)"
+_STATES = ("Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Florida|Georgia|"
+           "Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|"
+           "Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|"
+           "New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|"
+           "Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|"
+           "Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming")
+# "a Wyoming corporation", "incorporated in Nevada", "a Texas C-corp"
+_OTHER_STATE = re.compile(
+    rf"(?i)\b(?:(?:{_STATES})\s+{_CORP_WORD}|incorporated\s+in\s+(?:the\s+state\s+of\s+)?"
+    rf"(?:{_STATES}))\b")
+_FOREIGN_WHO = (r"(?:foreign|non-?U\.?S\.?|overseas|offshore|international|UK|U\.K\.|British|"
+                r"English|German|French|Canadian|Chinese|Indian|Japanese|Korean|Singapore(?:an)?|"
+                r"Israeli|Dutch|Swiss|Swedish|Irish|Australian|Brazilian|Mexican|Spanish|"
+                r"Italian|Emirati|Hong Kong|Cayman|European)")
+# "a UK company owns 40%", "our German parent holds 30% of the shares", "40% is owned by
+# a Canadian fund"
+_FOREIGN_PCT = re.compile(
+    rf"(?i)\b{_FOREIGN_WHO}\s+(?:\w+\s+){{0,3}}?(?:company|parent|fund|investor|"
+    rf"entity|firm|corporation|citizen|person|founder|shareholder|owner|holding|vc)s?\b"
+    rf"[^.\n%]{{0,40}}?\b(\d{{1,3}}(?:\.\d+)?)\s?(?:%|percent)"
+    rf"|\b(\d{{1,3}}(?:\.\d+)?)\s?(?:%|percent)[^.\n]{{0,40}}?\b(?:owned|held)\s+by\s+"
+    rf"(?:a|an|our|one)?\s*{_FOREIGN_WHO}\b")
+SENTENCE_MAX = 400
+
+
+def _sentences(text: str) -> list[str]:
+    """Verbatim pieces split at . ! ? and newlines, each cut to SENTENCE_MAX characters, so
+    every pattern runs on a bounded string (a 50 kB line can't make a regex quadratic)."""
+    return [piece[:SENTENCE_MAX] for piece in re.split(r"[.!?\n]", text) if piece.strip()]
+
+
+def _sentence_with(pattern: re.Pattern[str] | str, text: str) -> str | None:
+    for sentence in _sentences(text):
+        if re.search(pattern, sentence):
+            return sentence.strip()
+    return None
+
+
 def read_facts(texts: list[str]) -> dict[str, Any]:
     """The stand-in Intake agent: point at spans; the gateway parses and checks them."""
     text = "\n".join(texts)
@@ -46,13 +85,13 @@ def read_facts(texts: list[str]) -> dict[str, Any]:
     if "authorized_shares" not in quotes and unlabelled:
         quotes["authorized_shares"] = unlabelled[0].span  # the gateway re-asks a conflict
     inc = None
-    match = re.search(r"(?i)[^.\n]*\bdelaware\b[^.\n]*", text)
+    delaware = _sentence_with(r"(?i)\bdelaware\b", text)
     if re.search(r"(?i)\b(llc|partnership|not incorporated|haven't incorporated|"
                  r"not yet incorporated)\b", text):
         inc = False
-    elif match and re.search(r"(?i)c-?corp|corporation|\binc\b|incorporated", match.group(0)):
+    elif delaware and re.search(rf"(?i){_CORP_WORD}", delaware):
         inc = True
-        quotes["incorporated_delaware"] = match.group(0).strip()
+        quotes["incorporated_delaware"] = delaware
     foreign = None
     no_foreign = re.search(r"(?i)\bno foreign (?:owners?|shareholders?|investors?)\b", text)
     yes_foreign = re.search(r"(?i)\bforeign (?:owner|shareholder|investor)s?\b[^.\n]{0,40}"
@@ -61,12 +100,18 @@ def read_facts(texts: list[str]) -> dict[str, Any]:
         foreign, quotes["foreign_owner_25"] = False, no_foreign.group(0)
     elif yes_foreign:
         foreign, quotes["foreign_owner_25"] = True, yes_foreign.group(0)
+    else:
+        named = next((m for m in map(_FOREIGN_PCT.search, _sentences(text)) if m), None)
+        if named:  # D2: "a UK company owns 40%" (25% or more is the Form 5472 line)
+            pct = float(named.group(1) or named.group(2))
+            foreign, quotes["foreign_owner_25"] = pct >= 25, named.group(0).strip()
     reason = None
     if inc is False:
         reason = "not_a_corporation" if re.search(r"(?i)\b(llc|partnership)\b", text) \
             else "not_incorporated"
-    elif match is None and re.search(r"(?i)incorporated in (?!delaware)\w+", text):
-        inc, reason = False, "outside_delaware"
+    elif delaware is None and (re.search(r"(?i)incorporated in (?!delaware)\w+", text)
+                               or _sentence_with(_OTHER_STATE, text)):
+        inc, reason = False, "outside_delaware"  # D2: "a Wyoming corporation"
     return {"quotes": quotes, "incorporated_delaware": inc, "foreign_owner_25": foreign,
             "not_eligible_reason": reason, "suspicious": bool(_INJECTION.search(text))}
 
