@@ -209,7 +209,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | Tool | Agent | Input | Effect |
 |---|---|---|---|
 | `list_open_cases` | cos | `{}` | open cases with status, masked name, waiting reason |
-| `get_case` | any | `{case_id}` | the case for agents: the email body with **only contact details and SSN/EIN redacted** (company and person names left as written, so facts like "a Delaware corporation" survive), plus facts, quotes, status, result, and `offered_slots: [ISO...]` (the next free 15-minute slots the gateway can book) |
+| `get_case` | any | `{case_id}` | **intake and qa** get the email body with only contact details and SSN/EIN redacted (names left as written, so facts like "a Delaware corporation" survive); **cos, mkt and hr** get the masked copy. Plus facts, quotes, status, result, and `offered_slots: [ISO...]` (the next free 15-minute slots the gateway can book) |
 | `extract_facts` | intake | `{case_id, quotes: {<fact>: "<verbatim span from the email>"}, incorporated_delaware, foreign_owner_25}` | code parses each quote (`parse_amount`), checks it appears verbatim, conflicting spans → re-ask; `facts.extracted` or `facts.missing` |
 | `ask_client` | intake | `{case_id, missing: [<fact>...]}` | templated re-ask email (trust type `email`, max 2); `client.asked` |
 | `mark_not_eligible` | intake | `{case_id, reason: "not_incorporated"\|"outside_delaware"\|"not_a_corporation"}` | kind templated reply chosen by the enum (no free text reaches the client); anything else → `refused`; `case.not_eligible` |
@@ -343,6 +343,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.6.3 (2026-11-07, backend task 7): `get_case` names-kept copy for intake and qa only; other
+  seats get the masked copy.
 
 - v1.6.2 (2026-11-07, agents v1.6 review): greeting_name from the sender domain only; Client
   replied caps, new-text-only digits, revision send bucket, CALL_BOOKED restore; auto-reply drop;
