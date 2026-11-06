@@ -7,3 +7,34 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-06 16:30Z OWNER "I want to create a frontend and backend terminals as well while you will be a lead to manage all of them in this folder" (direct)
 - 2026-11-06 16:30Z OWNER chose "Next.js + FastAPI (recommended)", "Hackathon-lite (recommended)", "New standalone repo (recommended)" (direct); no product idea given yet
 - 2026-11-06 16:30Z SETUP repo init on main; contract v0; crew rules; briefs for frontend and backend (scaffold only, plan exempt)
+- 2026-11-06 16:28Z LANE backend started: gstack ok, Task 1 FastAPI scaffold, owns backend/
+- 2026-11-06 16:31Z CORRECTION previous line's time should read 16:31Z (backend start), not 16:28Z
+- 2026-11-06 16:31Z LANE frontend started: gstack ok, Task 1 Next.js scaffold, owns frontend/
+- 2026-11-06 16:40Z READY lane/backend 2b9742f46c2c from backend (pytest 8 passed; owner-path check clean; controller reran pytest at pin: 8 passed)
+- 2026-11-06 16:40Z MERGED lane/backend 2b9742f46c2c into main as d9a5461
+- 2026-11-06 16:40Z NOTE backend: CORS headers absent on unhandled 500s (ServerErrorMiddleware outside CORSMiddleware); deferred until the frontend reads 500 bodies
+- 2026-11-06 16:41Z ADDRESSES ListAgents does not list the lanes; reply by pipe address. backend = uds:\.\pipe\LOCAL\cc-msg-c6cf18b40803c8f3b3a8d6b8fcfa3627 · frontend = uds:\.\pipe\LOCAL\cc-msg-046d19a1fe0c480120308f833af5cfbd
+- 2026-11-06 16:41Z SENT backend MERGED d9a5461, stand by for product brief
+- 2026-11-06 16:42Z LANE backend synced to main 3d366c6, idle, waiting for product brief
+- 2026-11-06 16:55Z OWNER sent hackathon page + shared Claude Desktop chat; "continue the task with your frontend and backend terminals ... research, learn and find out anything you need all across the web and you can use as many subagents as you want"
+- 2026-11-06 16:55Z RESEARCH event page read -> research/event.md (Naive SDK required; judged on how much runs without you; hacking Nov 7 13:00 to Nov 8 11:00)
+- 2026-11-06 16:55Z BLOCKED shared chat claude.ai/share/ca3d21ad... behind Cloudflare for the headless browser (403 on snapshot API); asked owner to paste it
+- 2026-11-06 16:55Z RESEARCH started: Naive SDK docs -> research/naive-sdk.md; sponsors -> research/sponsors.md
+- 2026-11-06 17:10Z RESEARCH done: research/naive-sdk.md (TS-only SDK; FastAPI uses REST api.vetta.sh/v1; $20 plan or card trial needed before any route works) and research/sponsors.md (Stripe, AgentMail, Apify/Monid, Mobilerun most useful; closed loop lead->email->reply->pay->fulfil)
+- 2026-11-06 17:10Z DECISION keep FastAPI: REST path is documented (quickstart curl arc); no stack change, within owner's stack choice
+- 2026-11-06 17:10Z SENT backend Task 3 (Naive REST client, mocked tests, no routes)
+- 2026-11-06 17:40Z OWNER "can you look into it one more time, if you get access dont start antyhing wait for me"
+- 2026-11-06 17:40Z ACCESS shared chat read via headed browser (copy in controller scratchpad); nothing started per owner
+- 2026-11-06 17:40Z READY lane/backend 07a8c25080c3 from backend (Task 3 Naive REST client; pytest 34 passed; controller rerun 34 passed; owned paths only). HELD, not merged: owner said wait
+- 2026-11-06 18:20Z OWNER "look into the folder, there should be new files and resources and docs; also if you need to install new CLI, you can do it if its for the best"
+- 2026-11-06 18:20Z FOUND owner's U-Tax package: U-TAX-CLAUDE.md, HANDOFF.md, docs/designs/u-tax.md, theater mockup, reference media; committed f9109ff
+- 2026-11-06 18:20Z INSTALLED @usenaive-sdk/cli 1.0.0 globally (naive whoami: no key yet)
+- 2026-11-06 18:22Z OWNER chose "FastAPI + Next.js (recommended)", "Add agents lane (recommended)", "Start now (recommended)" (direct)
+- 2026-11-06 18:22Z MERGED lane/backend 07a8c25080c3 (Naive REST client) as d08ce40
+- 2026-11-06 18:40Z CONTRACT v1 + events.sample.jsonl; design doc D16-D20; CREW rules 12-14, agents lane, SPEND $5 Naive spikes; briefs rewritten for U-Tax
+- 2026-11-06 18:50Z LANE agents started: gstack ok, Task 1 naive/ project, owns naive/. Address uds:\.\pipe\LOCAL\cc-msg-48bc0d666bd4751fb67b2ea15d975318
+- 2026-11-06 19:05Z FINDING agents: Naive phone numbers have no voice ("`voice` is always `false`", docs/api/messaging.md; outbound SMS 501, docs/identity/phone.md). Controller verified both pages.
+- 2026-11-06 19:05Z DECISION applied owner's pre-decided fallback (design E2): no number purchase; CEO voice = OpenAI Realtime mic page -> /api/voice; finale = judge emails the firm. Real phone line outside Naive asked as owner decision.
+- 2026-11-06 19:15Z OWNER chose "Mic page, judge speaks (recommended)" and "Both, on by default (recommended)" (direct). Design D21-D22; contract v1.1; briefs updated
+- 2026-11-06 19:35Z READY lane/backend 5ff382d0158e task 4 engine (controller rerun at pin: 133 passed); MERGED as 7af9034. DECISION (controller, within owner D6): optional R&D facts gross_receipts/years_with_receipts added to contract v1.1; unknown -> conditional memo note
+- 2026-11-06 19:45Z OWNER "for the next times if I need to make a choice, do it yourself with recommended ones and continue building it and also use gstack skills and instructions to build the best version of this product" -> CREW standing approval auto-decide; rules 15 (gstack skills default) and 16 (lanes do not wait on choices); saved to memory

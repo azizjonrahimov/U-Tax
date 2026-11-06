@@ -12,10 +12,11 @@ session start. Add rules at the end; never renumber.
 | `REPO` | local git repo at `D:\Claude Projects\Naive YC Hackathon` (no remote yet) |
 | `BASE` | `main` (the controller's checkout; only the controller commits here) |
 | `CONTROLLER` | Claude session `naive-yc-hackathon-99` (message it with SendMessage) |
-| `LANES` | `frontend` (branch `lane/frontend`, worktree `.worktrees/frontend`), `backend` (branch `lane/backend`, worktree `.worktrees/backend`) |
+| `LANES` | `frontend` (branch `lane/frontend`, worktree `.worktrees/frontend`), `backend` (branch `lane/backend`, worktree `.worktrees/backend`), `agents` (branch `lane/agents`, worktree `.worktrees/agents`) |
 | `MERGE_METHOD` | `git merge --no-ff <pinned sha>` into `main`, by the controller only |
-| `CHECKS` | frontend: `npm run lint` and `npm run build` in `frontend/`; backend: `pytest` in `backend/` |
-| `SPEND` | no paid services or API keys without the owner's word, asked through the controller |
+| `CHECKS` | frontend: `npm run lint` and `npm run build` in `frontend/`; backend: `pytest` in `backend/`; agents: `npx tsc --noEmit` in `naive/` plus `naive up --dry-run` once a key exists |
+| `PRODUCT` | U-Tax. Source of truth: `docs/designs/u-tax.md`; rules: `U-TAX-CLAUDE.md`; shapes: `contracts/api.md` v1 |
+| `SPEND` | no paid services or API keys without the owner's word, asked through the controller. Standing: the agents lane may spend up to $5 of Naïve credit on the voice and config spikes once the owner's key exists (design doc E2, owner said "Start now (recommended)" 2026-11-06) |
 
 ## Standing approvals (the owner's words)
 
@@ -25,6 +26,7 @@ session start. Add rules at the end; never renumber.
 | stack | 2026-11-06 | chose "Next.js + FastAPI (recommended)" | Next.js/React/TypeScript/Tailwind in `frontend/`, Python FastAPI in `backend/` |
 | process | 2026-11-06 | chose "Hackathon-lite (recommended)" | the rules below in place of full trains |
 | repo | 2026-11-06 | chose "New standalone repo (recommended)" | this folder is its own git repo |
+| auto-decide | 2026-11-06 | "for the next times if I need to make a choice, do it yourself with recommended ones and continue building it and also use gstack skills and instructions to build the best version of this product" | the controller takes the recommended option on every decision and logs it in NOTES and the design doc; lanes send choices to the controller with a recommendation and keep building on that recommendation unless told otherwise |
 
 ## Rules
 
@@ -34,8 +36,10 @@ session start. Add rules at the end; never renumber.
    by SendMessage, never lane to lane. Make the first line of every message a
    self-contained summary.
 3. **File ownership.** `frontend` owns `frontend/` and `crew/reports/frontend.md`.
-   `backend` owns `backend/` and `crew/reports/backend.md`. Everything else (root
-   files, `contracts/`, `crew/` apart from your report) is the controller's; ask.
+   `backend` owns `backend/`, `fixtures/`, `db/` and `crew/reports/backend.md`.
+   `agents` owns `naive/` and `crew/reports/agents.md`. Everything else (root files,
+   `contracts/`, `docs/`, `research/`, `reference/`, `crew/` apart from your report) is
+   the controller's; ask.
 4. **The contract.** Build to `contracts/api.md` exactly. Need a change? Send the
    controller the exact diff you want and why; keep working on something else until
    it lands on `main`, then `git merge main`.
@@ -72,3 +76,28 @@ session start. Add rules at the end; never renumber.
 ## Crew-specific rules
 
 Number from 12, each with its date and the owner's words where there are any.
+
+12. **U-Tax rules are product law** (2026-11-06, owner's `U-TAX-CLAUDE.md`): math only in
+    tested code; one gateway `perform(action)`; events are the only truth; every theater
+    animation comes from a real event; sponsors behind ports with stand-ins; legal limits
+    (no filings, no SSN/EIN, "Educational estimate — not tax advice", human makes the hire,
+    no automated LinkedIn DMs); masked by default on screen. Changing any of them needs the
+    owner's word through the controller.
+13. **Plan is approved.** `docs/designs/u-tax.md` went through office hours, CEO, outside
+    voice, eng and design review with the owner, and the owner said "Start now
+    (recommended)" on 2026-11-06. Briefs say `Plan: approved: docs/designs/u-tax.md`. New
+    scope outside the design doc still needs a rule-5 plan.
+14. **Owner instructions go in chat, with exact commands** (2026-11-06, `U-TAX-CLAUDE.md`:
+    "The user doesn't read generated README files"). Anything the owner must do goes to the
+    controller as numbered steps with exact commands.
+15. **gstack skills are the default toolset** (2026-11-06, owner: "use gstack skills and
+    instructions to build the best version of this product"). Before every READY, run
+    `/review` on your diff and fix what it finds; say "review: clean" or list what you
+    left and why. Use `/investigate` for any failing test or wrong output (root cause
+    first). frontend: run `/design-review` and `/qa` on the running theater (via the
+    gstack browser) before the screen and live slices' READYs. backend: `/qa` on the HTTP
+    surface once task 6 runs. agents: `/review` on prompts and config. Skills that push,
+    open PRs or deploy (`/ship`, `/land-and-deploy`) are the controller's, not lanes'.
+16. **Don't wait on the controller for choices.** Send the choice with your
+    recommendation, then keep building on the recommendation. The controller replies
+    only to change it.
