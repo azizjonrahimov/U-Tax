@@ -62,7 +62,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | type | actor | payload |
 |---|---|---|
 | `email.received` | intake | `{masked_name, from_masked, subject, body}` (body masked; SSNs/EINs redacted) |
-| `facts.extracted` | intake | `{facts: {incorporated_delaware, authorized_shares, issued_shares, stated_par, gross_assets_cents, foreign_owner_25}, quotes: {<fact>: "<verbatim span>"}, assumed: [<fact>...]}` |
+| `facts.extracted` | intake | `{facts: {incorporated_delaware, authorized_shares, issued_shares, stated_par, gross_assets_cents, foreign_owner_25, gross_receipts_cents?, years_with_receipts?}, quotes: {<fact>: "<verbatim span>"}, assumed: [<fact>...]}` |
 | `facts.missing` | intake | `{missing: [<fact>...], asks_so_far}` |
 | `client.asked` | intake | `{missing: [<fact>...], body}` |
 | `case.not_eligible` | intake | `{reason}` |
@@ -183,7 +183,10 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `firm_brief` | cos | `{}` | counts, blocked cards, touches; `brief.generated` |
 
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
-`gross_assets`, `foreign_owner_25`.
+`gross_assets`, `foreign_owner_25`. Optional (never required to finish a case, asked once
+at most): `gross_receipts` (cents) and `years_with_receipts` (int), used only for the R&D
+payroll-credit flag. Unknown → `rnd_flag: false` and the memo's `{{rnd_note}}` carries a
+conditional "you may qualify if…" line instead of a claim.
 
 ## 7. Memo template
 
@@ -207,7 +210,8 @@ falls back to a built-in template if the file is missing.
 
 - v1.1 (2026-11-06): voice moved to a mic page (design D21): `POST /api/voice` gains
   `speaker`/`reply_email` and judge fast-path cases; `POST /api/voice/session`;
-  `GET /api/brief/audio`; `voice.command` payload; theater flags (D22).
+  `GET /api/brief/audio`; `voice.command` payload; theater flags (D22); optional R&D
+  facts `gross_receipts` and `years_with_receipts`.
 
 - v1 (2026-11-06): U-Tax gateway: event envelope and types, `/api/state`, `/api/events`,
   SSE stream, approve/voice/dev endpoints, MCP tools, memo template placeholders.

@@ -36,3 +36,4 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-06 19:05Z FINDING agents: Naive phone numbers have no voice ("`voice` is always `false`", docs/api/messaging.md; outbound SMS 501, docs/identity/phone.md). Controller verified both pages.
 - 2026-11-06 19:05Z DECISION applied owner's pre-decided fallback (design E2): no number purchase; CEO voice = OpenAI Realtime mic page -> /api/voice; finale = judge emails the firm. Real phone line outside Naive asked as owner decision.
 - 2026-11-06 19:15Z OWNER chose "Mic page, judge speaks (recommended)" and "Both, on by default (recommended)" (direct). Design D21-D22; contract v1.1; briefs updated
+- 2026-11-06 19:35Z READY lane/backend 5ff382d0158e task 4 engine (controller rerun at pin: 133 passed); MERGED as 7af9034. DECISION (controller, within owner D6): optional R&D facts gross_receipts/years_with_receipts added to contract v1.1; unknown -> conditional memo note
