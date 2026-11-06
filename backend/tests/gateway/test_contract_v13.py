@@ -112,6 +112,9 @@ def test_ceo_login_brief(h):
 
 def test_ceo_digest_waits_for_the_interval(make_harness):
     h = make_harness(ceo_email="ceo@u-tax.dev", ceo_digest_hours=3)
+    # decided: the first digest waits a full period from boot (no mail per demo restart)
+    assert h.ok("ceo_digest")["sent"] is False
+    h.clock.advance(hours=3, minutes=1)
     assert h.ok("ceo_digest")["sent"] is True
     assert h.ok("ceo_digest")["sent"] is False
     h.clock.advance(hours=3, minutes=1)

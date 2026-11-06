@@ -282,6 +282,7 @@ class Gateway:
         self._jobs_lock = threading.Lock()
         self._fee_refresh_lock = threading.Lock()
         self._epoch: str | None = None
+        self._booted_at = self._now()  # the first CEO digest waits a full period from here
         self._law_inflight = 0  # law searches reserved but not yet recorded (cap, §6f)
         self._fee_tried_at = 0.0
         self.state: State = rebuild(store.since(0))
@@ -1288,7 +1289,10 @@ class Gateway:
         last = next((e for e in reversed(list(self.store.since(0)))
                      if e.type == "ceo.notified" and e.payload["reason"] == "digest"), None)
         due = timedelta(hours=self.settings.ceo_digest_hours)
-        if last is not None and self._now() - parse_ts(last.ts) < due:
+        # the first digest is due CEO_DIGEST_HOURS after boot, never right after it (a demo
+        # restart must not mail the CEO)
+        anchor = parse_ts(last.ts) if last is not None else self._booted_at
+        if self._now() - anchor < due:
             return {"sent": False, "reason": "not due"}
         text, counts = self._brief_text()
         since = last.id if last is not None else 0
