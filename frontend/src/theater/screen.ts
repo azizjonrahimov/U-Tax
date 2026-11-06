@@ -322,6 +322,14 @@ export function seedScreen(base: ScreenState, cases: readonly SeedCase[], flagge
     if (c.flagged && !s.flagged.includes(c.caseId)) s.flagged.push(c.caseId);
   }
   for (const id of flagged) if (!s.flagged.includes(id)) s.flagged.push(id);
+  // Mail already on screen for a case we now know is flagged comes down right away.
+  for (const id of s.flagged) {
+    const v = own(s.cases, id);
+    if (v && !v.mail.hidden) {
+      if (s.cases === base.cases) s.cases = { ...base.cases };
+      s.cases[id] = { ...v, mail: { ...v.mail, hidden: true } };
+    }
+  }
   return s;
 }
 

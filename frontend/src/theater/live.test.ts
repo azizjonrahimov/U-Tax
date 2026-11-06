@@ -247,6 +247,10 @@ describe("v1.6.4 and slice-2 follow-ups in the fold", () => {
     expect(live.caseRows.case_7).toMatchObject({ name: "Team #7", status: "call booked", raw: "CALL_BOOKED" });
     expect(live.caseOrder).toEqual(["case_7"]);
     expect(live.flagged).toEqual(["case_7"]);
+    // A flag that arrives after the mail played hides it at once, not when the flag step plays.
+    const shown = applySteps(emptyScreen(), buildScript([mail], quiet).steps);
+    expect(shown.cases.case_3.mail.hidden).toBeUndefined();
+    expect(seedScreen(shown, [], ["case_3"]).cases.case_3.mail.hidden).toBe(true);
   });
 
   it("a short screen call shows its seconds", () => {

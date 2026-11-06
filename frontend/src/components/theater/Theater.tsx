@@ -386,6 +386,10 @@ export function Theater() {
       let queued: UTaxEvent[] = [];
       /** A rejected token stops live mode for good: no more polls or reconnects that would flap the screen. */
       let stopped = false;
+      /** Only the newest /api/state answer counts: an older, slower one must not move the stall count. */
+      let pollGen = 0;
+      /** One 401/403 can be a token rotation or a deploy blip; two in a row is a wrong token. */
+      let authFails = 0;
       const stop = (e: unknown) => {
         stopped = true;
         es?.close();
@@ -400,14 +404,23 @@ export function Theater() {
         const before = cursor.lastId;
         const msgsBefore = messages;
         messages = 0;
+        const gen = ++pollGen;
         let s: unknown;
         try {
           s = await getJson(stateUrl(GATEWAY));
         } catch (e) {
-          if (isAuthError(e)) stop(e);
+          if (gen !== pollGen) return;
+          if (isAuthError(e)) {
+            if (++authFails >= 2) stop(e);
+            else scheduleRefresh(); // check again soon rather than waiting a whole watchdog tick
+          }
           return; // an outage shows through the stream's own errors
         }
-        if (!alive || stopped) return;
+        if (!alive || stopped || gen !== pollGen) {
+          messages += msgsBefore; // a newer poll owns the window: hand the count back
+          return;
+        }
+        authFails = 0;
         const n = numbersFromState(s);
         if (n) setLiveNumbers(n);
         const v = liveVerdict({ stateLastId: seedFromState(s).lastId, cursorLastId: before, messagesSinceLastPoll: msgsBefore + messages, stalledPolls: stalled });
@@ -477,7 +490,7 @@ export function Theater() {
           if (seed.lastId === null) console.warn("[theater] /api/state has no last_event_id; streaming from the start");
           cursor = startScript({ caseNames: seed.caseNames, lastId: seed.lastId ?? 0 });
           // Cards for cases already open, so a reload shows rows that match the rail's numbers.
-          feed.seed = (sc) => seedScreen(sc, seed.cases);
+          addSeed(feed, (sc) => seedScreen(sc, seed.cases));
           feed.wake?.();
           const n = numbersFromState(s);
           if (n) setLiveNumbers(n);
@@ -640,6 +653,7 @@ export function Theater() {
           if (!alive) return;
           // A new scene: idle cursors go back to their desks instead of floating over moved panes.
           if (step.action === "focus") setMoves({ layout: "", pos: {} });
+          applySeed(); // a flag can arrive while the cursor was moving: hide before the mail lands
           state = applyStep(state, step);
           // Public /talk text can't stall the stage: under a live backlog its captions are skipped.
           const skipCaption = live && isCustomerSay(step) && backlog > CUSTOMER_CAPTION_BACKLOG;
