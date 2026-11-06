@@ -9,6 +9,10 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- frontend · 0m · MERGED slice 2: the Agent Theater screen (172 tests); plays the fixture, matches the mockup
+- backend + agents · 25m · task 8: sponsor adapters tonight (AgentMail, Naïve social/calendar; Mobilerun, Apify, HubSpot, Monid)
+- backend · 40m · MERGED LOW items + D2 (461 tests) and its report
+
 - backend · 0m · MERGED task 7: per-seat MCP /mcp/<actor> (434 tests); all backend must-haves for the event are on main
 - backend + agents · 45m · MERGED 6c + agents v1.6 together (greeting_name, Client replied, ingress rules, masking stop list)
 - backend · 1.5h · MERGED 6b (v1.5, EIN redaction, memo/day cap)
@@ -19,6 +23,6 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | slice 2 screen: /qa + /review → READY; then live, /talk, /ceo | 2h |
-| backend | `backend/`, `fixtures/`, `db/` | 6c LOW items + driver D2 (nice-to-have) | 0m |
-| agents | `naive/` | idle until Naïve access Saturday (task 3) | 45m |
+| frontend | `frontend/` | slice 3: live + replay against the gateway; then /talk, /ceo | 0m |
+| backend | `backend/`, `fixtures/`, `db/` | task 8: AgentMail, Naïve social/calendar, adapter wiring | 25m |
+| agents | `naive/` + 8 adapter files | task 4: Mobilerun, Apify, HubSpot, Monid adapters; Naïve task 3 Saturday | 25m |
