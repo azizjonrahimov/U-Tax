@@ -177,3 +177,9 @@ Also wire mobilerun.py and apify.py (merged on main as a251fe6) into registry, F
 MOBILERUN_DEVICE_ID, MOBILERUN_MAIL_APP, MOBILERUN_MEMO_SENDER, MOBILERUN_MODEL) and
 ADAPTER_SCRAPE=apify (APIFY_TOKEN). The cloud phone needs a QA mailbox that gets a BCC of
 every memo: add `MAIL_QA_BCC`.
+Add to task 9 (contract v1.7.1, from the frontend's slice 3 review):
+7. `/api/state` cases[].flagged; hiring awaiting + declined.
+8. Event.public(): once a case is flagged possible_injection, serve all of its events to
+   theater-token readers with subject/body = "[hidden: flagged by QA]" (stream, /api/events,
+   /api/state). Admin sees the originals.
+9. tax_saved per case from the tax.computed preceding its latest memo.sent.
