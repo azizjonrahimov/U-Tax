@@ -35,7 +35,9 @@ Who builds what:
 
 ## 2. Event envelope
 
-Events are append-only and are the only truth. Ids are monotonic integers starting at 1.
+Events are append-only and are the only truth. Ids are strictly increasing integers starting
+at 1. **Ids may have gaps** (a Postgres sequence skips a number on rollback): consumers
+treat a gap as information, never as an error or a reason to drop events.
 Payloads are **already masked** when written (company → `masked_name` like `Team #7`,
 emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 
@@ -73,7 +75,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `case.blocked` | system | `{reason, needs: "human"}` |
 | `law.searched` | tax | `{query, results: [{cite, snippet}]}` |
 | `tax.computed` | tax | `{authorized_method_cents, assumed_par_method_cents, chosen: "assumed_par"\|"authorized", annual_report_fee_cents, fee_source, total_cents, due_date: "2027-03-01", form5472_flag, rnd_flag, engine_version}` |
-| `qa.passed` / `qa.failed` | qa | `{checks: [{field, ok, note}]}` |
+| `qa.passed` / `qa.failed` | qa | `{checks: [{field, ok, note}]}`; `qa.failed` carries at least one check with `ok: false`, and `qa.passed` has none |
 | `memo.sent` | acct | `{to_masked, subject, body, message_id, seconds_since_last_fact}` |
 | `call.booked` | intake | `{start, minutes, invitee_masked}` |
 | `phone.checked` | qa | `{screenshot_url, rendered_ok}` |
@@ -249,7 +251,8 @@ falls back to a built-in template if the file is missing.
 ## 8. Theater flags and the two voice/console pages
 
 - Theater env: `NEXT_PUBLIC_SHOW_BLOCKED` and `NEXT_PUBLIC_SHOW_QUEUE`, both default `1`
-  (design D22): red BLOCKED card from `case.blocked` / `qa.failed`, waiting chips from
+  (design D22): red BLOCKED card from `case.blocked` only (a `qa.failed` the firm resolves by
+  re-asking never shows it), waiting chips from
   `/api/state` `queue.waiting`.
 - **`/talk`: "Talk to U-Tax"** (design D23), public-facing, no admin token. A customer or
   the finale judge talks with the firm's AI agent (OpenAI Realtime session from
@@ -264,6 +267,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.3.2 (2026-11-06, frontend review): ids increase but may have gaps; `qa.failed` names a
+  failing check; the BLOCKED card comes only from `case.blocked`.
 
 - v1.3.1 (2026-11-06): cost strings are fixed-point (no exponent form); fixture `voice.command`
   channel is `voice`.
