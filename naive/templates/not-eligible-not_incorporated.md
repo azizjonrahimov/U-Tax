@@ -1,4 +1,4 @@
-Hi {{masked_name}},
+Hi {{greeting_name}},
 
 Thanks for reaching out to U-Tax! Our free checkup estimates Delaware franchise tax for Delaware
 corporations, and it sounds like your company isn't incorporated yet, so there's nothing to

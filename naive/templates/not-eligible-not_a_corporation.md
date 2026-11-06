@@ -1,4 +1,4 @@
-Hi {{masked_name}},
+Hi {{greeting_name}},
 
 Thanks for reaching out to U-Tax! Delaware taxes LLCs and partnerships differently from
 corporations (a flat annual tax instead of the share-based franchise tax), so our corporation
