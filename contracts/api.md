@@ -135,6 +135,10 @@ is admin-only, for `/ceo`.
 Per case, the saving comes from the `tax.computed` that preceded that case's **latest**
 `memo.sent`; the theater's replay projection follows the same rule and keeps the last valid
 value (never drops a case's saving on a malformed later event).
+`spent_usd` = Σ `cost_usd` over **`cost.booked` events only**. Other events (`tool.bought`,
+`law.searched`, …) may carry `cost_usd` for display but are never summed, so nothing is counted
+twice; the theater's money rail follows the same rule.
+
 `tax_saved_cents` = Σ over sent cases of max(0, `authorized_method_cents` − (`total_cents` −
 `annual_report_fee_cents`)): franchise tax saved only. The fee is paid under either method,
 so it is never counted as a saving, and the sum never goes negative.
@@ -167,6 +171,8 @@ For Replay mode and catch-up. Ordered by `id`.
 - A cap hit (10/hr per action type or `SPEND_CAP_USD`) flips that type to PAUSED, writes
   `trust.changed`, and mails the CEO; further calls get `refused` with code `paused` until
   `POST /api/trust {state: "AUTO"}` (design: PAUSED → human operating touch → AUTO).
+- `POST /api/dev/resolve-purchase` `{key, charged: true|false, cost_usd}` (admin) → clears an
+  "unsure" Monid purchase as not charged, or books it as charged (`cost.booked`).
 - `POST /api/candidates/{candidate_id}/decision` `{decision: "hire"|"decline"}` (admin) →
   `hr.hired` / `hr.declined` with actor `ceo`, a `touch.operating`, and the `hr-hired` /
   `hr-declined` mail to the candidate (trust type `email`). `/ceo` lists **every screened
@@ -364,6 +370,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.4 (2026-11-07, backend task 10): spend counts `cost.booked` only (theater rail too);
+  `POST /api/dev/resolve-purchase`.
 
 - v1.7.3 (2026-11-07, backend task 10): `buy_tool` for mkt (Monid; allowlist, per-tool ceiling, daily
   cap, outside the lock, rebuilt from events at boot). Nothing is bought until the owner names tools.
