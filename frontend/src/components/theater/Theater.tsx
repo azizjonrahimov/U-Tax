@@ -12,6 +12,7 @@ import { applyStep, emptyScreen, type ScreenState } from "@/theater/screen";
 import { buildScript, type CursorStep, type Pane } from "@/theater/script";
 import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
 import { CalendarPane, MailPane, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
+import { PaneBoundary } from "./PaneBoundary";
 import "./theater.css";
 
 /** Agents in desk order: id, cursor label, color token (theater.css owns the hexes). */
@@ -160,10 +161,9 @@ export function Theater() {
   // (deduplicated, valid), so they can never disagree with what the screen showed.
   const accepted = useMemo(() => script?.accepted ?? [], [script]);
   const byId = useMemo(() => new Map(accepted.map((e) => [e.id, e])), [accepted]);
-  const numbers = useMemo(
-    () => railFromEvents(accepted.filter((e) => e.id <= screen.lastEventId)),
-    [accepted, screen.lastEventId],
-  );
+  /** The last event whose steps have all played: rail numbers move when its animation is done, not before. */
+  const [doneId, setDoneId] = useState(0);
+  const numbers = useMemo(() => railFromEvents(accepted.filter((e) => e.id <= doneId)), [accepted, doneId]);
 
   // S toggles stage mode.
   useEffect(() => {
@@ -221,6 +221,7 @@ export function Theater() {
       setCaption(null);
       setProgress(0);
       setPlaying(true);
+      setDoneId(0);
       setMoves({ layout: "", pos: {} });
       await sleep(400);
       const steps = script.steps;
@@ -262,6 +263,7 @@ export function Theater() {
           console.error(`[theater] step ${step.key} (${step.action} ${step.target}) failed`, err);
           if (!alive) return;
         }
+        if (i === steps.length - 1 || steps[i + 1].eventId !== step.eventId) setDoneId(step.eventId);
         setProgress((i + 1) / steps.length);
       }
       if (alive) setPlaying(false);
@@ -303,6 +305,7 @@ export function Theater() {
         </div>
       </header>
 
+      <PaneBoundary resetKey={screen.lastEventId}>
       <main data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined}>
         <div className="col left">
           <MailPane screen={screen} typed={typed} />
@@ -320,6 +323,7 @@ export function Theater() {
         </div>
         <Rail screen={screen} numbers={numbers} />
       </main>
+      </PaneBoundary>
 
       <footer>
         <div className="avs" aria-hidden>

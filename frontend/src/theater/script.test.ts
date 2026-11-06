@@ -204,9 +204,9 @@ describe("buildScript on the happy-path fixture", () => {
       ["social", "social.post", "click", "mkt"],
       ["social", "social.posted", "appear", null],
     ]);
-    expect(content(stepsOf(steps, "screen.call")).map((x) => [x.target, x.action, x.agent])).toEqual([
-      ["phone.dial", "dial", "hr"],
-      ["phone.transcript", "type", "hr"],
+    // The candidate's words and id stay off the projector: only the length of the screen shows.
+    expect(content(stepsOf(steps, "screen.call")).map((x) => [x.target, x.action, x.agent, x.text])).toEqual([
+      ["phone.dial", "dial", "hr", "5-min screen"],
     ]);
     expect(stepsOf(steps, "phone.checked").at(-1)).toMatchObject({ target: "phone.check", action: "tick", agent: "qa" });
   });
@@ -477,6 +477,17 @@ describe("mapping details", () => {
     expect(steps[0].text).toHaveLength(240);
     expect(steps[0].text?.endsWith("…")).toBe(true);
     expect(steps[1].text).toHaveLength(500);
+  });
+
+  it("clip never splits an emoji; long email bodies are clipped for the projector", () => {
+    const text = "a".repeat(238) + "😀😀😀"; // 241 code points
+    const { steps } = buildScript([ev(1, "voice.command", { text, channel: "voice", speaker: "customer", case_id: "c" }, { case_id: "c" })], quiet);
+    expect(steps[0].text).toBe("a".repeat(238) + "😀…");
+    const body = "b".repeat(5000);
+    const mail = buildScript([ev(2, "email.received", { masked_name: "T", from_masked: "f", subject: "s".repeat(500), body })], quiet).steps;
+    const open = mail.find((s) => s.action === "open")!;
+    expect(Array.from(open.text ?? "")).toHaveLength(1200);
+    expect(String(open.meta?.subject)).toHaveLength(160);
   });
 
   it("accepted lists each applied event once and leaves out malformed ones", () => {

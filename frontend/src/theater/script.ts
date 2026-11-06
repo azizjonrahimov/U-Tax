@@ -88,6 +88,8 @@ export interface ScriptState {
   caseNames: Readonly<Record<string, string>>;
   /** Which case each case-scoped pane is showing. */
   onScreen: Readonly<Partial<Record<CasePane, string>>>;
+  /** approval_id → action_type, so a touch can be labelled without its free-text note. */
+  approvalTypes: Readonly<Record<string, string>>;
 }
 
 export interface ScriptCursor {
@@ -122,7 +124,7 @@ export function startScript(seed: { caseNames?: Record<string, string>; lastId?:
   const caseNames: Record<string, string> = Object.create(null);
   for (const [id, name] of Object.entries(seed.caseNames ?? {})) caseNames[id] = name;
   const lastId = seed.lastId !== undefined && Number.isSafeInteger(seed.lastId) && seed.lastId >= 0 ? seed.lastId : 0;
-  return { state: { camera: null, caseNames, onScreen: {} }, lastId };
+  return { state: { camera: null, caseNames, onScreen: {}, approvalTypes: Object.create(null) }, lastId };
 }
 
 /** Sheet rows for extracted facts, in display order. */
@@ -186,7 +188,18 @@ export const NEW_CLIENT = "New client";
 /** Public /talk text is unmoderated: the theater shows at most this many characters of a customer turn. */
 export const MAX_CUSTOMER_TEXT = 240;
 
-export const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+/** Clip to at most `max` characters (code points, so an emoji is never split), ending in "…". */
+export const clip = (text: string, max: number) => {
+  const chars = Array.from(text);
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
+};
+
+/** Email text is public input too: keep a single message to a readable length on the projector. */
+export const MAX_EMAIL_BODY = 1200;
+export const MAX_EMAIL_SUBJECT = 160;
+
+/** "social_post" → "social post". */
+const words = (s: string) => s.replace(/_/g, " ");
 
 // ---------------------------------------------------------------------------
 // Payload checks. Each throws PayloadError, which becomes a bad_payload skip.
@@ -213,6 +226,12 @@ function strOrNull(o: Obj, k: string): string | null {
 function int(o: Obj, k: string): number {
   const v = has(o, k) ? o[k] : undefined;
   if (typeof v !== "number" || !Number.isSafeInteger(v)) throw new PayloadError(`${k}: expected integer`);
+  return v;
+}
+/** Money and counts are never negative on the wire. */
+function nonNeg(o: Obj, k: string): number {
+  const v = int(o, k);
+  if (v < 0) throw new PayloadError(`${k}: negative`);
   return v;
 }
 /** Strict: only true/false. A string "false" from an agent is malformed, never truthy. */
@@ -354,6 +373,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
   let camera = state.camera;
   let caseNames = state.caseNames; // copy-on-write: only email.received changes it
   let onScreen = state.onScreen;
+  let approvalTypes = state.approvalTypes; // copy-on-write: only approval.requested changes it
   const out: CursorStep[] = [];
   let n = 0;
   // Never show a raw case id as a name: a /talk case has no masked name yet.
@@ -375,7 +395,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     }
     out.push({ ...s, ...base(p), key: `${ev.id}:${n++}` });
   };
-  const done = () => ({ state: { camera, caseNames, onScreen }, steps: out });
+  const done = () => ({ state: { camera, caseNames, onScreen, approvalTypes }, steps: out });
 
   // The cursor shown for this event; a customer's own words get no agent cursor.
   const agent: Agent | null = ev.actor === "system" ? null : ev.actor;
@@ -390,8 +410,8 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     case "email.received": {
       const masked = str(p, "masked_name");
       const from = str(p, "from_masked");
-      const subject = str(p, "subject");
-      const body = str(p, "body");
+      const subject = clip(str(p, "subject"), MAX_EMAIL_SUBJECT);
+      const body = clip(str(p, "body"), MAX_EMAIL_BODY);
       if (ev.case_id !== null) {
         const next: Record<string, string> = Object.create(null);
         Object.assign(next, caseNames, { [ev.case_id]: masked });
@@ -461,11 +481,11 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       break;
     }
     case "tax.computed": {
-      const authorized = formatCents(int(p, "authorized_method_cents"));
-      const assumedPar = formatCents(int(p, "assumed_par_method_cents"));
+      const authorized = formatCents(nonNeg(p, "authorized_method_cents"));
+      const assumedPar = formatCents(nonNeg(p, "assumed_par_method_cents"));
       const chosen = oneOf(p, "chosen", ["assumed_par", "authorized"] as const);
-      const fee = formatCents(int(p, "annual_report_fee_cents"));
-      const total = formatCents(int(p, "total_cents"));
+      const fee = formatCents(nonNeg(p, "annual_report_fee_cents"));
+      const total = formatCents(nonNeg(p, "total_cents"));
       const due = str(p, "due_date");
       const f5472 = bool(p, "form5472_flag");
       const rnd = bool(p, "rnd_flag");
@@ -526,11 +546,12 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       break;
     }
     case "screen.call": {
-      const candidate = str(p, "candidate_id");
-      const excerpt = str(p, "transcript_excerpt");
-      const seconds = int(p, "seconds");
-      push({ target: "phone.dial", agent, action: "dial", text: candidate, meta: { seconds } });
-      push({ target: "phone.transcript", agent, action: "type", text: excerpt });
+      // A candidate's own words and id stay off the projector (hiring is counts only):
+      // the phone pane shows that a screen happened and how long it took.
+      str(p, "candidate_id");
+      str(p, "transcript_excerpt");
+      const seconds = nonNeg(p, "seconds");
+      push({ target: "phone.dial", agent, action: "dial", text: `${Math.max(1, Math.round(seconds / 60))}-min screen`, meta: { seconds } });
       break;
     }
     case "phone.checked": {
@@ -603,13 +624,26 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       break;
     }
     case "approval.requested": {
-      push({ target: "rail.touches", agent: null, action: "appear", text: str(p, "summary"), meta: { approval_id: str(p, "approval_id"), action_type: str(p, "action_type") } });
+      // The free-text summary can name a candidate ("declined mail: Candidate B"):
+      // the projector shows only the action type.
+      const approvalId = str(p, "approval_id");
+      const actionType = str(p, "action_type");
+      str(p, "summary");
+      const nextTypes: Record<string, string> = Object.create(null);
+      Object.assign(nextTypes, approvalTypes, { [approvalId]: actionType });
+      approvalTypes = nextTypes;
+      push({ target: "rail.touches", agent: null, action: "appear", text: `${words(actionType)} approval`, meta: { approval_id: approvalId, action_type: actionType } });
       break;
     }
     case "touch.training":
     case "touch.operating":
     case "touch.engineering": {
-      push({ target: "rail.touches", agent, action: "count", text: str(p, "note"), meta: { kind: suffix(ev.type), approval_id: strOrNull(p, "approval_id") } });
+      // Notes are free text ("decline Candidate B"): never shown. Label by kind and the approval's action type.
+      str(p, "note");
+      const kind = suffix(ev.type);
+      const approvalId = strOrNull(p, "approval_id");
+      const actionType = approvalId !== null && Object.hasOwn(approvalTypes, approvalId) ? approvalTypes[approvalId] : null;
+      push({ target: "rail.touches", agent, action: "count", text: actionType ? `${kind} · ${words(actionType)}` : kind, meta: { kind, approval_id: approvalId, action_type: actionType } });
       break;
     }
     case "trust.changed": {

@@ -18,6 +18,9 @@ export interface FirmNumbers {
 }
 
 export const AGENT_COUNT = 7;
+
+/** Candidate stages in order; hired and declined are both final. */
+const STAGE_RANK: Record<string, number> = { applicant: 0, screened: 1, shortlisted: 2, hired: 3, declined: 3 };
 /** Action types with a one-time training touch (contract: trust action_type values). */
 export const TRAINABLE_ACTION_TYPES = 4;
 
@@ -62,7 +65,11 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
   const clients = new Set<string>();
   const touches = { training: 0, operating: 0, engineering: 0 };
   const hiring = { applicants: 0, screened: 0, shortlisted: 0, hired: 0, declined: 0, awaiting: 0 };
-  const stageOf = new Map<string, string>(); // candidate → latest stage
+  // Hiring mirrors the gateway projection: each candidate counts once per stage
+  // reached, and stages only move forward (a questionnaire reply re-sends
+  // hr.applicant for an existing candidate; it must not demote them).
+  const reached = new Map<string, Set<string>>(); // candidate → stages reached
+  const furthest = new Map<string, number>(); // candidate → furthest stage rank
   const seen = new Set<number>();
   const lastTax = new Map<string, number>(); // case → franchise tax saved
   const sent = new Set<string>();
@@ -78,8 +85,12 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
     const p = (e.payload ?? {}) as Record<string, unknown>;
     const c = e.case_id;
     const candidate = typeof p.candidate_id === "string" ? p.candidate_id : null;
-    if (candidate && e.type.startsWith("hr.") && e.type !== "hr.decision_mailed" && e.type !== "hr.questionnaire_sent") {
-      stageOf.set(candidate, e.type.slice(3));
+    const stage = e.type.startsWith("hr.") ? e.type.slice(3) : "";
+    if (candidate && Object.hasOwn(STAGE_RANK, stage)) {
+      const set = reached.get(candidate) ?? new Set<string>();
+      set.add(stage);
+      reached.set(candidate, set);
+      furthest.set(candidate, Math.max(furthest.get(candidate) ?? -1, STAGE_RANK[stage]));
     }
     switch (e.type) {
       case "email.received":
@@ -94,26 +105,11 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
       case "touch.engineering":
         touches[e.type.slice(e.type.indexOf(".") + 1) as keyof typeof touches] += 1;
         break;
-      case "hr.applicant":
-        hiring.applicants += 1;
-        break;
-      case "hr.screened":
-        hiring.screened += 1;
-        break;
-      case "hr.shortlisted":
-        hiring.shortlisted += 1;
-        break;
-      case "hr.hired":
-        hiring.hired += 1;
-        break;
-      case "hr.declined":
-        hiring.declined += 1;
-        break;
       case "tax.computed": {
         const a = num(p.authorized_method_cents);
         const t = num(p.total_cents);
         const fee = num(p.annual_report_fee_cents);
-        if (c && a !== null && t !== null && fee !== null) lastTax.set(c, Math.max(0, a - (t - fee)));
+        if (c && a !== null && t !== null && fee !== null && a >= 0 && t >= fee && fee >= 0) lastTax.set(c, Math.max(0, a - (t - fee)));
         break;
       }
       case "memo.sent":
@@ -128,10 +124,20 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
     }
   }
 
-  hiring.awaiting = [...stageOf.values()].filter((s) => s === "shortlisted").length;
+  for (const stages of reached.values()) {
+    if (stages.has("applicant")) hiring.applicants += 1;
+    if (stages.has("screened")) hiring.screened += 1;
+    if (stages.has("shortlisted")) hiring.shortlisted += 1;
+    if (stages.has("hired")) hiring.hired += 1;
+    if (stages.has("declined")) hiring.declined += 1;
+  }
+  hiring.awaiting = [...furthest.values()].filter((r) => r === STAGE_RANK.shortlisted).length;
 
   let saved = 0;
-  for (const c of sent) saved += lastTax.get(c) ?? 0;
+  for (const c of sent) {
+    const next = saved + (lastTax.get(c) ?? 0);
+    if (Number.isSafeInteger(next)) saved = next; // an absurd value can never break the money panel
+  }
   const blocked = [...status.values()].filter((s) => s === "BLOCKED").length;
 
   return {

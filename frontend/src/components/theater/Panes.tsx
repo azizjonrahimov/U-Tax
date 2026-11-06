@@ -216,7 +216,8 @@ export function SearchPane({ screen, typed }: { screen: ScreenState; typed: Type
 export const CalendarPane = memo(function CalendarPane({ screen }: { screen: ScreenState }) {
   const last = screen.calendar.blocks.at(-1);
   const start = last?.start ? new Date(last.start) : null;
-  const base = start && !Number.isNaN(start.getTime()) ? new Date(start) : null;
+  // Guard the date math: a time at the edge of the Date range must not break the render.
+  const base = start && Number.isFinite(start.getTime()) && Math.abs(start.getTime()) < 8.6e15 - 3_600_000 ? new Date(start) : null;
   if (base) base.setMinutes(base.getMinutes() < 30 ? 0 : 30, 0, 0);
   const slots = Array.from({ length: 4 }, (_, i) => (base ? new Date(base.getTime() + (i - 1) * 30 * 60_000) : null));
   const day = base ? base.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "today";
@@ -363,7 +364,7 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           </div>
           {screen.rail.pending.map((p) => (
             <div key={p.approvalId} className="pending">
-              ⏳ waiting on CEO · {p.text}
+              ⏳ {p.text} · waiting on CEO
             </div>
           ))}
         </div>
@@ -410,7 +411,7 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           {screen.caseOrder.length === 0 && <div className="empty">No clients yet. Marketing is posting.</div>}
           {screen.caseOrder.slice(-MAX_CASE_ROWS).map((c) => {
             const r = screen.caseRows[c];
-            const tone = CASE_TONE[r.raw ?? ""] ?? "run";
+            const tone = r.raw && Object.hasOwn(CASE_TONE, r.raw) ? CASE_TONE[r.raw] : "run";
             return (
               <div key={c} className="case">
                 <span>

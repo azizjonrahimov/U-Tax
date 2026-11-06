@@ -52,20 +52,20 @@ describe("screen fold over the fixture script", () => {
     expect(end.caseRows.case_12).toMatchObject({ name: "Team #12", status: "new" });
     expect(end.rail.trust).toEqual({ email: "AUTO" });
     expect(end.rail.pending).toEqual([]);
-    // The touches log lists human touches only; voice shows as a caption, trust as the AUTO count.
+    // The touches log lists human touches by kind and action type only (never free-text notes).
     expect(end.rail.log.map((l) => [l.kind, l.text])).toEqual([
-      ["operating", 'voice: "open the firm"'],
-      ["training", "email → AUTO"],
+      ["operating", "operating"],
+      ["training", "training · email"],
     ]);
     expect(end.calendar.blocks.map((b) => b.text)).toEqual(["Team #7 · 15-min review"]);
     expect(end.search.results).toHaveLength(1);
     expect(upTo(19).phone.check).toEqual({ ok: true, text: "Memo renders on phone" });
     // A later screen call replaces the phone pane (event 24).
-    expect(end.phone).toMatchObject({ dial: "cand_1", transcript: expect.stringContaining("run by an AI agent") });
+    expect(end.phone).toEqual({ dial: "5-min screen" });
   });
 
   it("an approval is pending until its touch arrives", () => {
-    expect(upTo(14).rail.pending).toEqual([{ approvalId: "apr_1", text: "First memo email: Team #7, $85,165 → $450" }]);
+    expect(upTo(14).rail.pending).toEqual([{ approvalId: "apr_1", text: "email approval" }]);
     expect(upTo(15).rail.pending).toEqual([]);
   });
 
@@ -122,7 +122,7 @@ describe("review pass: rail and screen hardening", () => {
 
   it("a repeated approval request replaces its row instead of duplicating it", () => {
     const req = (id: number) => ev(id, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: `v${id}` });
-    expect(fold([req(1), req(2)]).rail.pending).toEqual([{ approvalId: "apr_1", text: "v2" }]);
+    expect(fold([req(1), req(2)]).rail.pending).toEqual([{ approvalId: "apr_1", text: "email approval" }]);
   });
 
   it("a failure note stays on its pane until the next real step there", () => {
@@ -169,11 +169,48 @@ describe("review pass: rail and screen hardening", () => {
     expect(railFromEvents([...events, talk]).firm.clients).toBe(3);
   });
 
+  it("free text from notes, summaries and transcripts never reaches the screen", () => {
+    const secret = "decline Candidate B";
+    const s = fold([
+      ev(1, "approval.requested", { approval_id: "apr_2", action_type: "email", summary: `declined mail: Candidate B` }),
+      ev(2, "touch.operating", { note: secret, approval_id: "apr_2" }, { actor: "ceo" }),
+      ev(3, "touch.operating", { note: secret, approval_id: null }, { actor: "ceo" }),
+      ev(4, "screen.call", { candidate_id: "cand_9", transcript_excerpt: "Hi, I am Candidate B", seconds: 300 }, { actor: "hr" }),
+    ]);
+    const shown = JSON.stringify(s);
+    expect(shown).not.toContain("Candidate B");
+    expect(shown).not.toContain("cand_9");
+    expect(s.rail.log.map((l) => l.text)).toEqual(["operating · email", "operating"]);
+    expect(s.phone.dial).toBe("5-min screen");
+  });
+
+  it("hiring counts each candidate once per stage, and stages only move forward", () => {
+    const hr = (id: number, type: string, cand: string) => ev(id, type, { candidate_id: cand, name_masked: "X", note: "n" }, { actor: "hr" });
+    const evs = [
+      hr(1, "hr.applicant", "c1"),
+      hr(2, "hr.applicant", "c2"),
+      hr(3, "hr.shortlisted", "c1"),
+      hr(4, "hr.applicant", "c1"), // questionnaire reply re-sends hr.applicant
+      hr(5, "hr.declined", "c2"),
+    ];
+    expect(railFromEvents(evs).hiring).toEqual({ applicants: 2, screened: 0, shortlisted: 1, hired: 0, declined: 1, awaiting: 1 });
+  });
+
+  it("an absurd tax value can't break the money panel", () => {
+    const tax = (id: number, total: number) => ev(id, "tax.computed", {
+      authorized_method_cents: 100, assumed_par_method_cents: 50, chosen: "assumed_par", annual_report_fee_cents: 0,
+      fee_source: "s", total_cents: total, due_date: "d", form5472_flag: false, rnd_flag: false, engine_version: "1",
+    }, { case_id: "c" });
+    const memo = ev(3, "memo.sent", { to_masked: "a", subject: "s", body: "b", message_id: "m", seconds_since_last_fact: 1 }, { case_id: "c" });
+    expect(Number.isSafeInteger(railFromEvents([tax(1, -Number.MAX_SAFE_INTEGER), memo]).money.tax_saved_cents)).toBe(true);
+    expect(buildScript([tax(1, -5)], quiet).skipped).toMatchObject([{ reason: "bad_payload", detail: "total_cents: negative" }]);
+  });
+
   it("the touches log keeps the last 12 lines", () => {
     const touches = Array.from({ length: 13 }, (_, i) => ev(i + 1, "touch.operating", { note: `n${i + 1}`, approval_id: null }, { actor: "ceo" }));
     const log = fold(touches).rail.log;
     expect(log).toHaveLength(12);
-    expect(log[0].text).toBe("n2");
+    expect(log[0].eventId).toBe(2);
   });
 });
 
