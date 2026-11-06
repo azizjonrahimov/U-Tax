@@ -1,7 +1,6 @@
-Hi {{masked_name}},
+Hi {{greeting_name}},
 
 Happy to check your Delaware franchise tax! To work it out we just need {{missing_list}}.
-
 {{problems_line}}
 
 Reply to this email with whatever you have. Rough numbers are fine for assets (a projection for

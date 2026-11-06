@@ -20,13 +20,15 @@ paid and escalation tools are denied by name.
 Status: the gateway loads `memo.md` today. The others are the agreed wording with these exact
 placeholders, for the backend to load the same strict way (unknown or missing placeholder → refuse,
 built-in fallback); until then it sends its own hard-coded text. Every file is sent as the body; the
-gateway sets the subject.
+gateway sets the subject. Placeholders that may be empty (`form5472_note`, `rnd_note`, `problems_line`,
+`approvals_line`, `blocked_line`, `hiring_line`) sit inline in a sentence, never alone on a line, so an
+empty value leaves no blank gap; a client is greeted by `greeting_name`, never the masked name.
 
 | File | Sent when | Placeholders |
 |---|---|---|
-| `memo.md` | `send_memo` | contract §7 |
-| `ask-client.md` | `ask_client` | `masked_name`, `missing_list` (joined fact labels, never `stated_par`), `problems_line` (the line is dropped when empty) |
-| `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `masked_name` |
+| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note` (`masked_name` allowed, unused) |
+| `ask-client.md` | `ask_client` | `greeting_name`, `missing_list` (joined fact labels, never `stated_par`), `problems_line` (may be empty) |
+| `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
 | `hr-hired.md` / `hr-declined.md` | the CEO's decision in `/ceo` | none |
 | `ceo-update-email.md` | approval needed, BLOCKED, flagged, shortlisted, paused | `headline`, `lead`, `summary`, `action_line` (per reason: "Approve or Deny it in the console", "Unblock or skip it", …), `console_url` |

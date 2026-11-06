@@ -1,4 +1,4 @@
-Hi {{masked_name}},
+Hi {{greeting_name}},
 
 Thanks for reaching out to U-Tax! Our free checkup covers Delaware franchise tax only, and your
 company is incorporated in another state, so our estimate doesn't apply to you.
