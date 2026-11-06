@@ -20,3 +20,6 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-06 16:55Z RESEARCH event page read -> research/event.md (Naive SDK required; judged on how much runs without you; hacking Nov 7 13:00 to Nov 8 11:00)
 - 2026-11-06 16:55Z BLOCKED shared chat claude.ai/share/ca3d21ad... behind Cloudflare for the headless browser (403 on snapshot API); asked owner to paste it
 - 2026-11-06 16:55Z RESEARCH started: Naive SDK docs -> research/naive-sdk.md; sponsors -> research/sponsors.md
+- 2026-11-06 17:10Z RESEARCH done: research/naive-sdk.md (TS-only SDK; FastAPI uses REST api.vetta.sh/v1; $20 plan or card trial needed before any route works) and research/sponsors.md (Stripe, AgentMail, Apify/Monid, Mobilerun most useful; closed loop lead->email->reply->pay->fulfil)
+- 2026-11-06 17:10Z DECISION keep FastAPI: REST path is documented (quickstart curl arc); no stack change, within owner's stack choice
+- 2026-11-06 17:10Z SENT backend Task 3 (Naive REST client, mocked tests, no routes)
