@@ -13,6 +13,13 @@ from app.gateway.ports import AuthExpired, CrmContact, FaultPlan, NotConfigured,
 TOKEN = "pat-na1-test-0123456789"
 
 
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    """The owner exports these for the live portal; the tests must not read them."""
+    for name in ("HUBSPOT_PIPELINE", "HUBSPOT_STAGE_MAP"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def store_handler(seen: list[httpx.Request]):
     """A tiny HubSpot: records are keyed by utax_key, so a repeated upsert returns the same id."""
     records: dict[tuple[str, str], str] = {}
@@ -59,17 +66,29 @@ def test_only_the_masked_label_key_and_stage_leave_the_gateway():
     crm.upsert_contact(CrmContact(key="cand_1", label="Candidate A", kind="candidate"))
     crm.set_stage("deal:case_7", "memo_sent")
     sent = [json.loads(r.content)["inputs"][0]["properties"] for r in seen]
-    assert set(sent[0]) == {KEY_PROPERTY, "firstname", "lastname", "lifecyclestage"}
-    assert set(sent[1]) == {KEY_PROPERTY, "firstname", "lastname"}, "candidates aren't sales leads"
+    assert set(sent[0]) == set(sent[1]) == {KEY_PROPERTY, "firstname", "lastname"}
+    assert sent[0]["firstname"] == "Team #7" and sent[1]["firstname"] == "Candidate A"
     assert set(sent[2]) == {KEY_PROPERTY, "dealname", "pipeline", "dealstage"}
     assert not any(k in ("email", "amount", "phone", "company") for props in sent for k in props)
 
 
-def test_labels_and_keys_are_stripped_of_odd_characters():
+@pytest.mark.parametrize("label", ["Jane Doe", "jane.doe@acme.com", "Team #7 Jane", "Acme Inc", "", "Candidate Anna"])
+def test_a_label_that_is_not_a_masked_shape_never_leaves(label):
     seen: list[httpx.Request] = []
-    make(store_handler(seen)).upsert_contact(CrmContact(key="case_7<script>", label="Team #7 <b>x</b> jane@x.io"))
+    make(store_handler(seen)).upsert_contact(CrmContact(key="case_7<script>", label=label))
     props = json.loads(seen[0].content)["inputs"][0]["properties"]
-    assert "<" not in props["firstname"] and "@" not in props["firstname"] and props[KEY_PROPERTY] == "case_7script"
+    assert props["firstname"] == "U-Tax case_7script" and props[KEY_PROPERTY] == "case_7script"
+
+
+def test_a_stage_never_moves_back():
+    seen: list[httpx.Request] = []
+    crm = make(store_handler(seen))
+    crm.set_stage("deal:case_7", "call_booked")
+    crm.set_stage("deal:case_7", "memo_sent")  # a late retry of the earlier job
+    crm.set_stage("deal:case_8", "memo_sent")
+    stages = [json.loads(r.content)["inputs"][0]["properties"]["dealstage"] for r in seen]
+    assert stages == [DEFAULT_STAGES["call_booked"], DEFAULT_STAGES["memo_sent"]]
+    assert json.loads(seen[1].content)["inputs"][0]["id"] == "deal:case_8"
 
 
 def test_set_stage_maps_to_pipeline_stage_ids():
@@ -90,7 +109,12 @@ def test_stage_map_and_pipeline_can_be_configured(monkeypatch):
     make(store_handler(seen)).set_stage("deal:case_7", "memo_sent")
     props = json.loads(seen[0].content)["inputs"][0]["properties"]
     assert props["dealstage"] == "1234567" and props["pipeline"] == "98765"
-    monkeypatch.setenv("HUBSPOT_STAGE_MAP", "not json")
+
+
+
+@pytest.mark.parametrize("raw", ["not json", "[1]", "null", '"x"', '{"memo_sent": 5}', '{"memo_sent": ""}'])
+def test_bad_stage_map_is_not_configured(monkeypatch, raw):
+    monkeypatch.setenv("HUBSPOT_STAGE_MAP", raw)
     with pytest.raises(NotConfigured):
         HubSpotCRM(TOKEN)
 
@@ -109,13 +133,14 @@ def test_partial_batch_failure_is_rejected():
         make(lambda r: httpx.Response(207, json=body)).upsert_contact(CrmContact(key="case_7", label="Team #7"))
 
 
-def test_ten_secondly_429_retries_after_the_window():
+@pytest.mark.parametrize("headers,expected", [({"retry-after": "3"}, 3.0), ({"retry-after": "soon"}, None), ({}, None)])
+def test_ten_secondly_429_is_rate_limited(headers, expected):
     body = {"status": "error", "message": "You have reached your ten_secondly_rolling limit.",
             "errorType": "RATE_LIMIT", "policyName": "TEN_SECONDLY_ROLLING"}
-    crm = make(lambda r: httpx.Response(429, headers={"x-hubspot-ratelimit-interval-milliseconds": "10000"}, json=body))
+    crm = make(lambda r: httpx.Response(429, headers=headers, json=body))
     with pytest.raises(RateLimited) as err:
         crm.set_stage("deal:case_7", "memo_sent")
-    assert err.value.retry_after == 10.0 and err.value.retryable
+    assert err.value.retry_after == expected and err.value.retryable
 
 
 def test_daily_429_backs_off_for_an_hour():
@@ -125,15 +150,23 @@ def test_daily_429_backs_off_for_an_hour():
     assert err.value.retry_after == 3600.0
 
 
-def test_missing_unique_property_says_what_to_set_up():
-    body = {"status": "error", "category": "VALIDATION_ERROR",
-            "message": f"Property {KEY_PROPERTY} doesn't exist or is not a unique property"}
+@pytest.mark.parametrize("status", [400, 207])
+def test_missing_unique_property_says_what_to_set_up(status):
+    error = {"status": "error", "category": "VALIDATION_ERROR",
+             "message": f"Property {KEY_PROPERTY} does not exist"}
+    body = error if status == 400 else {"status": "COMPLETE", "results": [], "errors": [error]}
     with pytest.raises(NotConfigured, match=KEY_PROPERTY):
-        make(lambda r: httpx.Response(400, json=body)).upsert_contact(CrmContact(key="case_7", label="Team #7"))
+        make(lambda r: httpx.Response(status, json=body)).upsert_contact(CrmContact(key="case_7", label="Team #7"))
 
 
-@pytest.mark.parametrize("status,error", [(401, AuthExpired), (403, AuthExpired), (400, Rejected), (409, Rejected),
-                                          (500, Unavailable), (502, Unavailable)])
+def test_a_duplicate_key_conflict_is_not_mistaken_for_missing_setup():
+    body = {"status": "error", "category": "CONFLICT", "message": f"{KEY_PROPERTY} must be unique: value already used"}
+    with pytest.raises(Rejected):
+        make(lambda r: httpx.Response(409, json=body)).upsert_contact(CrmContact(key="case_7", label="Team #7"))
+
+
+@pytest.mark.parametrize("status,error", [(401, NotConfigured), (403, NotConfigured), (400, Rejected), (404, Rejected),
+                                          (409, Rejected), (500, Unavailable), (502, Unavailable), (503, Unavailable)])
 def test_errors_map(status, error):
     body = {"status": "error", "message": "m", "category": "X"}
     with pytest.raises(error):
@@ -175,7 +208,7 @@ def contract_factory(tmp_path, faults: FaultPlan) -> HubSpotCRM:
         try:
             faults.check()
         except RateLimited:
-            return httpx.Response(429, headers={"x-hubspot-ratelimit-interval-milliseconds": "10000"},
+            return httpx.Response(429, headers={"retry-after": "1"},
                                   json={"status": "error", "message": "x", "policyName": "TEN_SECONDLY_ROLLING"})
         except AuthExpired:
             return httpx.Response(401, json={"status": "error", "message": "x"})
