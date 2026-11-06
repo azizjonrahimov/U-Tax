@@ -88,3 +88,12 @@ event, 503 without a key). Stand-ins work with no key. See contract §5 and §8.
 - §6c two inboxes plus HR ingress (auto-reply questionnaire, masked `hr.applicant`, wake).
 - `mark_not_eligible` reason enum; `get_case.offered_slots` and `book_call.start` limited
   to them; `post_social` content guard.
+
+## Contract v1.4 (2026-11-06, agents review pass 3)
+- MCP is **per seat**: `/mcp/cos|intake|tax|qa|acct|mkt|hr`, and the token must match the seat.
+- New tools: `get_candidate` (hr, masked) and `flag_case` (qa) → `case.flagged`. `hr_record`
+  takes only screened|shortlisted.
+- New admin endpoints: `POST /api/trust` (pause/resume per action type; perform() refuses
+  PAUSED) and `POST /api/candidates/{id}/decision` (hire|decline, actor ceo).
+- The post guard also blocks @handles and any URL except `PUBLIC_TALK_URL`. CEO emails also
+  fire on `case.flagged` and `hr.shortlisted`. Wake sessions pass identity `utax-cos`.

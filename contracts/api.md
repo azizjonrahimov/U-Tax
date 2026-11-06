@@ -1,4 +1,4 @@
-# API contract (v1.3): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.4): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -22,7 +22,7 @@ Who builds what:
 
 | Token | Env var | Who sends it | Where |
 |---|---|---|---|
-| Tool tokens, one per agent | `UTAX_TOOL_TOKEN_COS`, `_INTAKE`, `_TAX`, `_QA`, `_ACCT`, `_MKT`, `_HR` (each ≥ 32 chars) | each Naïve agent, from its own vault entry | `Authorization: Bearer <token>` on `/mcp`; **the token decides the actor** |
+| Tool tokens, one per agent | `UTAX_TOOL_TOKEN_COS`, `_INTAKE`, `_TAX`, `_QA`, `_ACCT`, `_MKT`, `_HR` (each ≥ 32 chars) | each Naïve agent, from its own vault entry | `Authorization: Bearer <token>` on `/mcp/<actor>`; **the token must match the seat** |
 | Theater token | `THEATER_TOKEN` | Theater, read-only | `?token=<t>` on `/api/state`, `/api/events*` |
 | Admin token | `ADMIN_TOKEN` | The CEO's mic/approve page, dev tools | `Authorization: Bearer <t>` on `/api/approve`, `/api/dev/*` |
 
@@ -92,6 +92,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
 | `tool.bought` | any agent | `{tool, provider}` (amount in envelope `cost_usd`) |
 | `brief.generated` | cos | `{text, counts}` |
+| `case.flagged` | qa | `{kind: "possible_injection"\|"unrealistic_inputs"}` |
 
 Trust `action_type` values: `email`, `social_post`, `calendar_invite`, `voice_screen`.
 
@@ -144,6 +145,11 @@ For Replay mode and catch-up. Ordered by `id`.
   **fast-path case** from the transcript (priority, no queue), memo goes to `reply_email`;
   returns `{case_id}` so the page can follow it. `speaker: "ceo"`: an optional typed order
   from `/ceo`, forwarded to the Chief of Staff once Naïve is wired (stand-in: log only).
+- `POST /api/trust` `{action_type, state: "PAUSED"|"AUTO"}` (admin) → the CEO's standing
+  order as gateway state ("stop posting" = `social_post` PAUSED); writes `trust.changed`
+  and `touch.operating`. `perform()` refuses PAUSED types until resumed.
+- `POST /api/candidates/{candidate_id}/decision` `{decision: "hire"|"decline"}` (admin) →
+  `hr.hired` / `hr.declined` with actor `ceo` and a `touch.operating`.
 - `POST /api/voice/session` → `{client_secret, model, expires_at}`: an ephemeral OpenAI
   Realtime session minted with the gateway's `OPENAI_API_KEY` (the key never reaches the
   browser). `503 voice_unavailable` when no key is set; the mic page then falls back to
@@ -157,7 +163,7 @@ For Replay mode and catch-up. Ordered by `id`.
   Saturday: the Chief of Staff's `firm_brief`). The `/ceo` console calls it on login and
   stores `last_event_id` locally.
 - CEO email updates (design D24): the gateway sends to `CEO_EMAIL` through MailPort when
-  an approval is requested or a case is BLOCKED, and a digest every `CEO_DIGEST_HOURS`
+  an approval is requested, a case is BLOCKED or flagged, or a candidate is shortlisted, and a digest every `CEO_DIGEST_HOURS`
   (default 3). Each send writes `ceo.notified`. Stand-in: the console outbox.
 - `POST /api/dev/inject-email` `{from, subject, body}` → local MailPort only; produces
   `email.received` exactly as a real inbound mail would. Refused unless `ADAPTER_MAIL=local`.
@@ -165,7 +171,10 @@ For Replay mode and catch-up. Ordered by `id`.
 
 ## 6. MCP tools for Naïve agents
 
-Served at **`POST /mcp`** (MCP streamable HTTP), `Authorization: Bearer <that agent's tool token>`.
+Served at **`POST /mcp/<actor>`** (one MCP endpoint per agent seat: `/mcp/cos`, `/mcp/intake`,
+`/mcp/tax`, `/mcp/qa`, `/mcp/acct`, `/mcp/mkt`, `/mcp/hr`; MCP streamable HTTP),
+`Authorization: Bearer <that agent's tool token>`. The token must belong to the seat in the
+path, else `401`. Separate URLs mean Naïve can never hand one agent's credential to another.
 The gateway maps the token to the actor, writes that actor on every event, and **refuses
 any tool outside the actor's column below** (`refused`, code `tool_not_allowed`). An
 optional `X-UTax-Actor` header is accepted only when it matches the token's actor.
@@ -193,9 +202,11 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `send_memo` | acct | `{case_id}` | refuses unless `QA_PASSED`; memo from template + engine output only; `memo.sent` |
 | `book_call` | intake | `{case_id, start}` | `start` must be one of the case's `offered_slots`, else `refused`; trust type `calendar_invite`; `call.booked` |
 | `phone_check` | qa | `{case_id}` | DevicePort; `phone.checked` (never blocks the case) |
-| `post_social` | mkt | `{channel, text, image_url}` | content guard first: refused when the text holds a case id, a `Team #N` name, an email address or phone number, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; `post.published` |
+| `post_social` | mkt | `{channel, text, image_url}` | content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; `post.published` |
 | `draft_dm` | mkt | `{recipient_label, text}` | `dm.drafted` (the human sends it) |
-| `hr_record` | hr | `{stage: "applicant"\|"screened"\|"shortlisted"\|"declined", candidate_id, name_masked, note}` | `hr.<stage>` |
+| `get_candidate` | hr | `{candidate_id}` | the masked candidate: stated credentials, questionnaire answers, stage (no contact details) |
+| `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
+| `flag_case` | qa | `{case_id, kind: "possible_injection"\|"unrealistic_inputs"}` | `case.flagged`; goes into the next CEO update email |
 | `firm_brief` | cos | `{}` | counts, blocked cards, touches; `brief.generated` |
 
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
@@ -215,7 +226,8 @@ price-table estimate in code (`estimated: true`).
 ## 6b. Waking the crew (gateway → Naïve)
 
 Nothing in Naïve wakes an agent when work arrives, so the gateway starts a **Chief of
-Staff session** through its Naïve REST client (`POST /v1/sessions`, agent `chief-of-staff`)
+Staff session** through its Naïve REST client (`POST /v1/sessions`, agent `chief-of-staff`,
+identity `utax-cos`)
 with exactly one of these opening messages (the CoS prompt parses them):
 
 | Trigger | Message |
@@ -228,7 +240,7 @@ with exactly one of these opening messages (the CoS prompt parses them):
 
 Each wake writes nothing extra; the session's own tool calls produce the events.
 Stand-in tonight (no Naïve until Saturday, design D26): the **local driver** receives the
-same messages and plays the agents' tool calls through `/mcp` with their tokens.
+same messages and plays the agents' tool calls through `/mcp/<actor>` with their tokens.
 
 ## 6c. Two inboxes
 
@@ -267,6 +279,11 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.4 (2026-11-06, agents review pass 3): per-seat MCP URLs `/mcp/<actor>`; HR `get_candidate`,
+  HR never declines (CEO decides via `/api/candidates/{id}/decision`); QA `flag_case` and
+  `case.flagged`; post guard also blocks @handles and foreign URLs; CEO emails include flags
+  and shortlists; `POST /api/trust` for standing orders; wake sessions use identity `utax-cos`.
 
 - v1.3.2 (2026-11-06, frontend review): ids increase but may have gaps; `qa.failed` names a
   failing check; the BLOCKED card comes only from `case.blocked`.
