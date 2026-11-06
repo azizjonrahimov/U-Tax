@@ -183,3 +183,17 @@ Add to task 9 (contract v1.7.1, from the frontend's slice 3 review):
    theater-token readers with subject/body = "[hidden: flagged by QA]" (stream, /api/events,
    /api/state). Admin sees the originals.
 9. tax_saved per case from the tax.computed preceding its latest memo.sent.
+
+## Task 10: wire HubSpot + Monid (2026-11-07; the agents lane's READY 7260a1b, merged as 86af197)
+1. registry: ADAPTER_CRM=hubspot → HubSpotCRM(HUBSPOT_TOKEN); ADAPTER_TOOLBUY=monid →
+   MonidToolBuy(MONID_API_KEY). .env.example: HUBSPOT_TOKEN, HUBSPOT_PIPELINE, HUBSPOT_STAGE_MAP,
+   MONID_API_KEY, MONID_TOOLS, MONID_DAILY_CAP_USD.
+2. Register both contract_factory functions in tests/contract/test_ports.py.
+3. drain_outbox: honour RateLimited.retry_after and stop the batch on the first one; move the
+   drain to the tick (not inline after every write); send each case's stage jobs in order.
+4. Monid: rebuild the purchase, unsure and spend memory from cost/tool.bought events at boot;
+   call buy() outside the gateway lock.
+5. Add the owner's Saturday setup rows to the swap table: HubSpot private app (scopes
+   crm.objects.contacts.write, crm.objects.deals.write) plus a unique `utax_key` text property
+   on Contacts and Deals; Monid key, dashboard run cap, MONID_TOOLS with max_usd.
+6. (From the e2e READY) the first CEO digest waits CEO_DIGEST_HOURS after boot.
