@@ -33,6 +33,7 @@ export type Action =
   | "circle" // QA check failed on target
   | "status" // a status chip changes to `text`
   | "block" // red BLOCKED card (flag NEXT_PUBLIC_SHOW_BLOCKED)
+  | "flag" // amber "flagged" chip on a case card (case.flagged, contract v1.4)
   | "count" // a rail counter ticks
   | "say" // spoken words (voice command, brief)
   | "dial" // phone call starts
@@ -154,6 +155,7 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   ["case.status", "rail"],
   ["case.blocked", "rail"],
   ["case.not_eligible", "rail"],
+  ["case.flagged", "rail"],
   ["crm.sync_requested", "rail"],
   ["crm.synced", "rail"],
   ["hr.applicant", "rail"],
@@ -161,6 +163,7 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   ["hr.shortlisted", "rail"],
   ["hr.hired", "rail"],
   ["hr.declined", "rail"],
+  ["hr.questionnaire_sent", "rail"],
   ["voice.command", "rail"],
   ["ceo.notified", "rail"],
   ["approval.requested", "rail"],
@@ -541,6 +544,12 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       push({ target: "rail.cases", agent: null, action: "block", text: str(p, "reason"), meta: { needs: str(p, "needs") } });
       break;
     }
+    case "case.flagged": {
+      if (ev.case_id === null) throw new PayloadError("case_id: required");
+      const kind = str(p, "kind"); // possible_injection | unrealistic_inputs (display only)
+      push({ target: "rail.cases", agent, action: "flag", text: prettyStatus(kind), meta: { kind } });
+      break;
+    }
     case "case.not_eligible": {
       push({ target: "rail.cases", agent: null, action: "status", text: "not eligible", meta: { reason: str(p, "reason") } });
       break;
@@ -555,10 +564,11 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     case "hr.screened":
     case "hr.shortlisted":
     case "hr.hired":
-    case "hr.declined": {
+    case "hr.declined":
+    case "hr.questionnaire_sent": {
       const stage = suffix(ev.type);
       const name = str(p, "name_masked");
-      push({ target: "rail.hiring", agent, action: "count", text: `${name} · ${stage}`, meta: { stage, note: str(p, "note"), candidate_id: str(p, "candidate_id") } });
+      push({ target: "rail.hiring", agent, action: "count", text: `${name} · ${stage.replace(/_/g, " ")}`, meta: { stage, note: str(p, "note"), candidate_id: str(p, "candidate_id") } });
       break;
     }
     case "voice.command": {

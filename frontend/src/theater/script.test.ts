@@ -224,6 +224,11 @@ describe("buildScript on the happy-path fixture", () => {
     expect(stepsOf(steps, "crm.synced")[0].text).toBe("CRM deal · call booked");
   });
 
+  it("v1.4.1 hr.questionnaire_sent is a system update on the Hiring card", () => {
+    const { steps } = buildScript([ev(1, "hr.questionnaire_sent", { candidate_id: "cand_2", name_masked: "Candidate B", note: "auto-reply" }, { actor: "system", case_id: null })], quiet);
+    expect(steps).toMatchObject([{ target: "rail.hiring", agent: null, action: "count", text: "Candidate B · questionnaire sent", meta: { stage: "questionnaire_sent" } }]);
+  });
+
   it("hr.* counts on the rail with the stage", () => {
     expect(stepsOf(steps, "hr.shortlisted")[0]).toMatchObject({ target: "rail.hiring", agent: "hr", text: "Candidate A · shortlisted", meta: { stage: "shortlisted" } });
   });
@@ -441,6 +446,15 @@ describe("mapping details", () => {
     expect(texts).toEqual(["Apify actor · $1.50", "$0.0000001", "not eligible", "Memo failed to render on phone"]);
     expect(steps.find((s) => s.eventId === 3)?.meta?.cost_usd).toBe("0.0000001");
     expect(steps.at(-1)).toMatchObject({ action: "circle", meta: { screenshot_url: "local://s.png" } });
+  });
+
+  it("v1.4 case.flagged puts an amber chip on the case card (QA cursor); a case is required", () => {
+    const { steps, skipped } = buildScript(
+      [ev(1, "case.flagged", { kind: "possible_injection" }, { actor: "qa" }), ev(2, "case.flagged", { kind: "unrealistic_inputs" }, { actor: "qa", case_id: null })],
+      quiet,
+    );
+    expect(steps).toMatchObject([{ pane: "rail", target: "rail.cases", agent: "qa", action: "flag", text: "possible injection", meta: { kind: "possible_injection" } }]);
+    expect(skipped).toMatchObject([{ eventId: 2, reason: "bad_payload" }]);
   });
 
   it("call.booked before any email falls back to the case id", () => {
