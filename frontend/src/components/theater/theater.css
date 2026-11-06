@@ -170,6 +170,8 @@
 .theater.stage { --dim: #c4c3d6; --faint: #9d9cb6; }
 .theater.stage .pb { font-size: calc(18px * var(--k)); }
 .theater.stage table { font-size: calc(18px * var(--k)); }
+/* Stage type is bigger: tighter rows keep all ten sheet lines (down to "Estimated total") in the pane at 1080p. */
+.theater.stage td { padding: 2px 4px; line-height: 1.25; }
 .theater.stage .compose .txt { font-size: calc(17px * var(--k)); }
 .theater.stage .ph { font-size: calc(13px * var(--k)); }
 .theater.stage .ph b { font-size: calc(17px * var(--k)); }
