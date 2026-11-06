@@ -56,3 +56,20 @@ Don't buy a number and skip the voice spike. The CEO's orders reach the Chief of
 `firm_brief` the theater plays as audio. The HR screen is an email questionnaire, never a
 live phone screen, still disclosed as AI-run, and the human makes the final call. Task 3
 becomes: `naive up --dry-run` once the key exists, plus written Connect steps for the owner.
+
+## Update 2026-11-06 (design D23-D26)
+- No Naïve account until Saturday at the event (D26). Task 3 (`naive up --dry-run`, Connect
+  steps) moves to Saturday. Make tasks 1-2 complete and ready to apply with one command then.
+- The CEO never speaks. Customers talk to the firm's AI agent on `/talk`; its system
+  prompt (the voice Intake agent: warm, brief, asks for the facts, reads numbers back,
+  never gives tax advice, says it's an AI) belongs in `naive/prompts/voice-intake.md`, and
+  the backend uses it for the OpenAI Realtime session.
+- The Chief of Staff keeps the CEO informed by email (approval needed, BLOCKED, a digest
+  every 3 hours) and by the login brief (`firm_brief`). Write those templates in
+  `naive/templates/` (ceo-update-email.md, ceo-digest-email.md, login-brief.md).
+
+## Contract v1.3 (2026-11-06): your review's 8 asks, decided
+All taken as you recommended, except #3, which is stronger: **one tool token per agent**
+(`UTAX_TOOL_TOKEN_<ACTOR>`, each in its own vault entry), and the gateway derives the actor
+from the token. Keep `X-UTax-Actor` only as an optional matching header. `book_cost` is
+removed from §6. Wake messages are exactly as in §6b, plus `New applicant cand_N`.
