@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCents, formatInt, formatUsd } from "./format";
+import { formatCents, formatInt, formatUsd, normalizeDecimal } from "./format";
 
 describe("formatCents", () => {
   it.each([
@@ -43,12 +43,30 @@ describe("formatUsd", () => {
     ["0.4100", "$0.41"],
     ["1234", "$1,234.00"],
     ["0", "$0.00"],
+    ["-0.00", "$0.00"],
+    ["1E-7", "$0.0000001"],
+    ["3e-05", "$0.00003"],
+    ["1.5E3", "$1,500.00"],
+    ["2.50E+1", "$25.00"],
   ])("%s → %s", (decimal, shown) => {
     expect(formatUsd(decimal)).toBe(shown);
   });
 
   it("refuses non-decimal strings", () => {
-    expect(() => formatUsd("1e3")).toThrow(RangeError);
+    expect(() => formatUsd("1e")).toThrow(RangeError);
+    expect(() => formatUsd("abc")).toThrow(RangeError);
     expect(() => formatUsd("$5")).toThrow(RangeError);
+  });
+});
+
+describe("normalizeDecimal", () => {
+  it.each([
+    [" 1E-7 ", "0.0000001"],
+    ["2.50", "2.5"],
+    ["-0.00", "0"],
+    ["0011.380", "11.38"],
+    ["-3", "-3"],
+  ])("%s → %s", (decimal, canonical) => {
+    expect(normalizeDecimal(decimal)).toBe(canonical);
   });
 });

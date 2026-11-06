@@ -1,51 +1,27 @@
 // Event log → cursor script. Pure and deterministic: no clock, no randomness.
 //
 // Premise 7 (docs/designs/u-tax.md): every animation comes from a real logged
-// event. Each step carries the id of the event that caused it; unknown event
-// types produce no steps and are reported in `skipped` (and logged).
+// event. Each step carries the id of the event that caused it. An event whose
+// type is unknown, or whose envelope or payload does not match contracts/api.md
+// §2–3, produces no steps and is reported in `skipped` (and logged): we never
+// animate a value that was not in the log.
 //
-// Prefix property: the script for events[0..n] is a prefix of the script for
-// events[0..m] when n < m, so live mode can append steps as events arrive.
+// Two entry points:
+// - buildScript(events): the whole log at once (fixture, replay). Sorts by id.
+// - appendEvents(cursor, events): live mode. Applies events strictly in id
+//   order; ids at or below the cursor's lastId (SSE replays after a reconnect)
+//   are dropped. For in-order input the two produce identical steps (prefix
+//   property), and step keys never change once emitted.
 
-import type {
-  Actor,
-  Agent,
-  ApprovalRequested,
-  BriefGenerated,
-  CallBooked,
-  CaseBlocked,
-  CaseNotEligible,
-  CaseStatus,
-  CeoNotified,
-  ClientAsked,
-  CostBooked,
-  CrmSync,
-  DmPayload,
-  EmailReceived,
-  FactName,
-  FactsExtracted,
-  FactsMissing,
-  HrPayload,
-  LawSearched,
-  MemoSent,
-  PhoneChecked,
-  PostPublished,
-  QaResult,
-  ScreenCall,
-  TaxComputed,
-  ToolBought,
-  TouchPayload,
-  TrustChanged,
-  UTaxEvent,
-  VoiceCommand,
-} from "./events";
-import { formatCents, formatInt, formatUsd } from "./format";
+import { ACTORS, EVENT_STATUSES, type Agent, type FactName, type UTaxEvent } from "./events";
+import { formatCents, formatInt, formatUsd, normalizeDecimal, splitDecimal } from "./format";
 
 export type Pane = "mail" | "sheet" | "search" | "calendar" | "social" | "phone" | "rail";
 
 export type Action =
   | "focus" // camera moves to the pane (no cursor)
-  | "open" // open a message / document
+  | "switch" // a case-scoped pane (mail, sheet) switches to another case
+  | "open" // open a message
   | "highlight" // mark a span of text
   | "drag" // carry a value from `from` to `target`
   | "fill" // write a value into a cell
@@ -56,7 +32,7 @@ export type Action =
   | "tick" // QA check passed on target
   | "circle" // QA check failed on target
   | "status" // a status chip changes to `text`
-  | "block" // red BLOCKED card
+  | "block" // red BLOCKED card (flag NEXT_PUBLIC_SHOW_BLOCKED)
   | "count" // a rail counter ticks
   | "say" // spoken words (voice command, brief)
   | "dial" // phone call starts
@@ -65,7 +41,11 @@ export type Action =
 export type Meta = Record<string, string | number | boolean | null>;
 
 export interface CursorStep {
-  /** Stable key: `<eventId>:<index within event>`. */
+  /**
+   * Stable key. Content steps: `<eventId>:<n>`; camera steps:
+   * `<eventId>:focus:<pane>` / `<eventId>:switch:<pane>`, so content keys never
+   * depend on where the camera was before.
+   */
   key: string;
   eventId: number;
   ts: string;
@@ -73,7 +53,7 @@ export interface CursorStep {
   pane: Pane;
   /** Stable element key, e.g. "sheet.cell.total" or "mail.quote.authorized_shares". */
   target: string;
-  /** Cursor owner; null = no cursor (system updates, camera moves). */
+  /** Cursor owner; null = no cursor (system updates, camera moves, customer speech). */
   agent: Agent | null;
   action: Action;
   text?: string;
@@ -82,19 +62,32 @@ export interface CursorStep {
   meta?: Meta;
 }
 
-export type SkipReason = "unknown_type" | "status_skipped" | "bad_payload";
+/** "gap": ids that never arrived before a higher id did (eventId = first missing id). */
+export type SkipReason = "unknown_type" | "status_skipped" | "bad_event" | "bad_payload" | "gap";
 
 export interface SkippedEvent {
   eventId: number;
   type: string;
   reason: SkipReason;
+  detail?: string;
 }
+
+/** Case-scoped panes show one case at a time. */
+type CasePane = "mail" | "sheet";
 
 export interface ScriptState {
   /** Pane the camera is on (rail steps don't move the camera). */
   camera: Pane | null;
-  /** case_id → masked name, learned from email.received. */
-  caseNames: Record<string, string>;
+  /** case_id → masked name, learned from email.received (or seeded from /api/state). */
+  caseNames: Readonly<Record<string, string>>;
+  /** Which case each case-scoped pane is showing. */
+  onScreen: Readonly<Partial<Record<CasePane, string>>>;
+}
+
+export interface ScriptCursor {
+  state: ScriptState;
+  /** Highest event id applied so far (0 = none). */
+  lastId: number;
 }
 
 export interface Script {
@@ -107,10 +100,23 @@ export interface ScriptOptions {
   log?: (skipped: SkippedEvent) => void;
 }
 
-export const initialState = (): ScriptState => ({ camera: null, caseNames: {} });
+const defaultLog = (s: SkippedEvent) =>
+  console.warn(`[theater] skipped event ${s.eventId} (${s.type}): ${s.reason}${s.detail ? ` (${s.detail})` : ""}`);
+
+/**
+ * A fresh cursor. Live mode seeds `caseNames` from `/api/state` cases so a
+ * stream resumed mid-night still shows masked names, and `lastId` from
+ * `last_event_id` when it does not want to replay history.
+ */
+export function startScript(seed: { caseNames?: Record<string, string>; lastId?: number } = {}): ScriptCursor {
+  const caseNames: Record<string, string> = Object.create(null);
+  for (const [id, name] of Object.entries(seed.caseNames ?? {})) caseNames[id] = name;
+  const lastId = seed.lastId !== undefined && Number.isSafeInteger(seed.lastId) && seed.lastId >= 0 ? seed.lastId : 0;
+  return { state: { camera: null, caseNames, onScreen: {} }, lastId };
+}
 
 /** Sheet rows for extracted facts, in display order. */
-export const FACT_ROWS: FactName[] = [
+export const FACT_ROWS: readonly FactName[] = [
   "incorporated_delaware",
   "authorized_shares",
   "issued_shares",
@@ -121,286 +127,421 @@ export const FACT_ROWS: FactName[] = [
   "years_with_receipts",
 ];
 
-const yesNo = (b: boolean) => (b ? "Yes" : "No");
+/** Main pane for each known type: used for camera moves and "fail" steps. */
+const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
+  ["email.received", "mail"],
+  ["client.asked", "mail"],
+  ["memo.sent", "mail"],
+  ["facts.extracted", "sheet"],
+  ["facts.missing", "sheet"],
+  ["tax.computed", "sheet"],
+  ["qa.passed", "sheet"],
+  ["qa.failed", "sheet"],
+  ["law.searched", "search"],
+  ["call.booked", "calendar"],
+  ["post.published", "social"],
+  ["dm.drafted", "social"],
+  ["dm.sent_by_human", "social"],
+  ["phone.checked", "phone"],
+  ["screen.call", "phone"],
+  ["case.status", "rail"],
+  ["case.blocked", "rail"],
+  ["case.not_eligible", "rail"],
+  ["crm.sync_requested", "rail"],
+  ["crm.synced", "rail"],
+  ["hr.applicant", "rail"],
+  ["hr.screened", "rail"],
+  ["hr.shortlisted", "rail"],
+  ["hr.hired", "rail"],
+  ["hr.declined", "rail"],
+  ["voice.command", "rail"],
+  ["ceo.notified", "rail"],
+  ["approval.requested", "rail"],
+  ["touch.training", "rail"],
+  ["touch.operating", "rail"],
+  ["touch.engineering", "rail"],
+  ["trust.changed", "rail"],
+  ["cost.booked", "rail"],
+  ["tool.bought", "rail"],
+  ["brief.generated", "rail"],
+]);
 
-function factValue(facts: FactsExtracted["facts"], fact: FactName): string | undefined {
-  switch (fact) {
-    case "incorporated_delaware":
-      return facts.incorporated_delaware === undefined ? undefined : yesNo(facts.incorporated_delaware);
-    case "foreign_owner_25":
-      return facts.foreign_owner_25 === undefined ? undefined : yesNo(facts.foreign_owner_25);
-    case "authorized_shares":
-      return facts.authorized_shares === undefined ? undefined : formatInt(facts.authorized_shares);
-    case "issued_shares":
-      return facts.issued_shares === undefined ? undefined : formatInt(facts.issued_shares);
-    case "gross_assets":
-      return facts.gross_assets_cents === undefined ? undefined : formatCents(facts.gross_assets_cents);
-    case "gross_receipts":
-      return facts.gross_receipts_cents === undefined ? undefined : formatCents(facts.gross_receipts_cents);
-    case "years_with_receipts":
-      return facts.years_with_receipts === undefined ? undefined : formatInt(facts.years_with_receipts);
-    case "stated_par":
-      return facts.stated_par === undefined ? undefined : `$${facts.stated_par}`;
+export const KNOWN_TYPES: readonly string[] = [...PANE_OF.keys()];
+
+// ---------------------------------------------------------------------------
+// Payload checks. Each throws PayloadError, which becomes a bad_payload skip.
+
+class PayloadError extends Error {}
+
+type Obj = Record<string, unknown>;
+const has = (o: Obj, k: string) => Object.hasOwn(o, k) && o[k] !== undefined;
+
+function obj(v: unknown, what: string): Obj {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) throw new PayloadError(`${what}: not an object`);
+  return v as Obj;
+}
+function str(o: Obj, k: string): string {
+  const v = has(o, k) ? o[k] : undefined;
+  if (typeof v !== "string") throw new PayloadError(`${k}: expected string`);
+  return v;
+}
+function strOrNull(o: Obj, k: string): string | null {
+  const v = has(o, k) ? o[k] : null;
+  if (v !== null && typeof v !== "string") throw new PayloadError(`${k}: expected string or null`);
+  return v;
+}
+function int(o: Obj, k: string): number {
+  const v = has(o, k) ? o[k] : undefined;
+  if (typeof v !== "number" || !Number.isSafeInteger(v)) throw new PayloadError(`${k}: expected integer`);
+  return v;
+}
+/** Strict: only true/false. A string "false" from an agent is malformed, never truthy. */
+function bool(o: Obj, k: string): boolean {
+  const v = has(o, k) ? o[k] : undefined;
+  if (v !== true && v !== false) throw new PayloadError(`${k}: expected boolean`);
+  return v;
+}
+function oneOf<T extends string>(o: Obj, k: string, allowed: readonly T[]): T {
+  const v = str(o, k);
+  if (!(allowed as readonly string[]).includes(v)) throw new PayloadError(`${k}: unexpected "${v}"`);
+  return v as T;
+}
+function arr(o: Obj, k: string): unknown[] {
+  const v = has(o, k) ? o[k] : undefined;
+  if (!Array.isArray(v)) throw new PayloadError(`${k}: expected array`);
+  return v;
+}
+function factList(o: Obj, k: string): FactName[] {
+  return arr(o, k).map((f) => {
+    if (typeof f !== "string" || !(FACT_ROWS as readonly string[]).includes(f)) throw new PayloadError(`${k}: unknown fact`);
+    return f as FactName;
+  });
+}
+function decimal(o: Obj, k: string): string {
+  const v = str(o, k);
+  try {
+    splitDecimal(v);
+  } catch {
+    throw new PayloadError(`${k}: expected decimal string`);
+  }
+  return v;
+}
+
+const LOCAL_URL = /^local:\/\/[A-Za-z0-9_\-/.]+$/;
+
+/**
+ * URLs from agents are untrusted: only https: (no credentials) and the stand-in
+ * local:// asset scheme reach the renderer. A rejected URL is reported in meta.
+ */
+function safeUrl(v: string | null): { url: string | null; rejected: boolean } {
+  if (v === null) return { url: null, rejected: false };
+  try {
+    const u = new URL(v);
+    if (u.protocol === "https:" && !u.username && !u.password) return { url: u.href, rejected: false };
+    if (LOCAL_URL.test(v) && !v.includes("..")) return { url: v, rejected: false };
+  } catch {
+    // not a URL
+  }
+  return { url: null, rejected: true };
+}
+
+/** Result cards shown per search; the rest collapse into one "+N more" chip. */
+const MAX_RESULTS = 5;
+
+const yesNo = (b: boolean) => (b ? "Yes" : "No");
+const prettyStatus = (s: string) => s.toLowerCase().replace(/_/g, " ");
+/** "hr.shortlisted" → "shortlisted"; "touch.training" → "training". */
+const suffix = (type: string) => type.slice(type.indexOf(".") + 1);
+
+/** Formatted sheet value for each fact present in the payload. */
+function factValues(facts: Obj): Partial<Record<FactName, string>> {
+  const out: Partial<Record<FactName, string>> = {};
+  if (has(facts, "incorporated_delaware")) out.incorporated_delaware = yesNo(bool(facts, "incorporated_delaware"));
+  if (has(facts, "foreign_owner_25")) out.foreign_owner_25 = yesNo(bool(facts, "foreign_owner_25"));
+  if (has(facts, "authorized_shares")) out.authorized_shares = formatInt(int(facts, "authorized_shares"));
+  if (has(facts, "issued_shares")) out.issued_shares = formatInt(int(facts, "issued_shares"));
+  if (has(facts, "gross_assets_cents")) out.gross_assets = formatCents(int(facts, "gross_assets_cents"));
+  // Optional R&D facts (contract v1.1): null means "not given", same as absent.
+  if (has(facts, "gross_receipts_cents") && facts.gross_receipts_cents !== null) out.gross_receipts = formatCents(int(facts, "gross_receipts_cents"));
+  if (has(facts, "years_with_receipts") && facts.years_with_receipts !== null) out.years_with_receipts = formatInt(int(facts, "years_with_receipts"));
+  if (has(facts, "stated_par")) {
+    const [sign, whole, frac] = splitDecimal(decimal(facts, "stated_par"));
+    if (sign) throw new PayloadError("stated_par: negative");
+    out.stated_par = `$${whole}${frac ? `.${frac}` : ""}`;
+  }
+  return out;
+}
+
+/** The amount for cost.booked / tool.bought lives in the envelope (contract §3); canonical fixed-point. */
+function envelopeCost(ev: UTaxEvent): string {
+  if (ev.cost_usd === null || ev.cost_usd === undefined) throw new PayloadError("cost_usd: required");
+  try {
+    return normalizeDecimal(ev.cost_usd);
+  } catch {
+    throw new PayloadError("cost_usd: expected decimal string");
   }
 }
 
-/** QA check field → sheet cell key. Unknown fields keep their own name. */
-const QA_CELL: Record<string, string> = {
-  total: "total",
-  authorized_method: "authorized_method",
-  assumed_par_method: "assumed_par_method",
-  annual_report_fee: "annual_report_fee",
-};
+// ---------------------------------------------------------------------------
 
-const prettyStatus = (s: string) => s.toLowerCase().replace(/_/g, " ");
+function checkEnvelope(ev: unknown): string | null {
+  if (typeof ev !== "object" || ev === null) return "not an object";
+  const e = ev as Obj;
+  if (typeof e.id !== "number" || !Number.isSafeInteger(e.id) || e.id < 1) return "id";
+  if (typeof e.type !== "string") return "type";
+  if (typeof e.ts !== "string") return "ts";
+  if (!(ACTORS as readonly unknown[]).includes(e.actor)) return "actor";
+  if (!(EVENT_STATUSES as readonly unknown[]).includes(e.status)) return "status";
+  if (e.case_id !== null && typeof e.case_id !== "string") return "case_id";
+  if (e.cost_usd !== null && e.cost_usd !== undefined && typeof e.cost_usd !== "string") return "cost_usd";
+  return null;
+}
 
-/** Main pane for each known type: used for camera moves and "fail" steps. */
-const PANE_OF: Record<string, Pane> = {
-  "email.received": "mail",
-  "client.asked": "mail",
-  "memo.sent": "mail",
-  "facts.extracted": "sheet",
-  "facts.missing": "sheet",
-  "tax.computed": "sheet",
-  "qa.passed": "sheet",
-  "qa.failed": "sheet",
-  "law.searched": "search",
-  "call.booked": "calendar",
-  "post.published": "social",
-  "dm.drafted": "social",
-  "dm.sent_by_human": "social",
-  "phone.checked": "phone",
-  "screen.call": "phone",
-  "case.status": "rail",
-  "case.blocked": "rail",
-  "case.not_eligible": "rail",
-  "crm.sync_requested": "rail",
-  "crm.synced": "rail",
-  "hr.applicant": "rail",
-  "hr.screened": "rail",
-  "hr.shortlisted": "rail",
-  "hr.hired": "rail",
-  "hr.declined": "rail",
-  "voice.command": "rail",
-  "ceo.notified": "rail",
-  "approval.requested": "rail",
-  "touch.training": "rail",
-  "touch.operating": "rail",
-  "touch.engineering": "rail",
-  "trust.changed": "rail",
-  "cost.booked": "rail",
-  "tool.bought": "rail",
-  "brief.generated": "rail",
-};
-
-export const KNOWN_TYPES: readonly string[] = Object.keys(PANE_OF);
-
-const cursorOf = (actor: Actor): Agent | null => (actor === "system" ? null : actor);
-
-type StepInput = Omit<CursorStep, "key" | "eventId" | "ts" | "caseId" | "pane"> & {
-  pane?: Pane;
-};
+type StepInput = Omit<CursorStep, "key" | "eventId" | "ts" | "caseId" | "pane"> & { pane?: Pane };
 
 /**
  * Map one event to its steps. Returns the next state; never mutates `state`.
- * Throws only on a malformed payload (buildScript turns that into a skip).
+ * Malformed events come back as `skipped` with no steps.
  */
 export function stepsForEvent(
   state: ScriptState,
   ev: UTaxEvent,
 ): { state: ScriptState; steps: CursorStep[]; skipped?: SkippedEvent } {
-  const pane = PANE_OF[ev.type];
-  if (!pane) {
-    return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "unknown_type" } };
+  const bad = checkEnvelope(ev);
+  if (bad) {
+    const id = typeof (ev as Partial<UTaxEvent>)?.id === "number" ? (ev as UTaxEvent).id : NaN;
+    const type = typeof (ev as Partial<UTaxEvent>)?.type === "string" ? (ev as UTaxEvent).type : "?";
+    return { state, steps: [], skipped: { eventId: id, type, reason: "bad_event", detail: bad } };
+  }
+  const pane = PANE_OF.get(ev.type);
+  if (!pane) return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "unknown_type" } };
+  if ((pane === "mail" || pane === "sheet") && ev.case_id === null) {
+    // Without a case we can't know whose email or sheet this belongs on.
+    return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "bad_event", detail: "case_id required" } };
   }
   if (ev.status === "skipped") {
     return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "status_skipped" } };
   }
+  try {
+    return mapEvent(state, ev, pane);
+  } catch (e) {
+    if (!(e instanceof PayloadError || e instanceof RangeError)) throw e;
+    return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "bad_payload", detail: e.message } };
+  }
+}
 
-  const next: ScriptState = { camera: state.camera, caseNames: { ...state.caseNames } };
+function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: ScriptState; steps: CursorStep[] } {
+  let camera = state.camera;
+  let caseNames = state.caseNames; // copy-on-write: only email.received changes it
+  let onScreen = state.onScreen;
   const out: CursorStep[] = [];
-  const agent = cursorOf(ev.actor);
+  let n = 0;
+  const caseName = () => (ev.case_id !== null && Object.hasOwn(caseNames, ev.case_id) ? caseNames[ev.case_id] : ev.case_id ?? "client");
+  const base = (p: Pane) => ({ eventId: ev.id, ts: ev.ts, caseId: ev.case_id, pane: p });
+
   const push = (s: StepInput) => {
     const p = s.pane ?? pane;
-    if (p !== "rail" && next.camera !== p) {
-      next.camera = p;
-      out.push({
-        key: `${ev.id}:${out.length}`,
-        eventId: ev.id,
-        ts: ev.ts,
-        caseId: ev.case_id,
-        pane: p,
-        target: p,
-        agent: null,
-        action: "focus",
-      });
+    if (p !== "rail" && camera !== p) {
+      camera = p;
+      out.push({ ...base(p), key: `${ev.id}:focus:${p}`, target: p, agent: null, action: "focus" });
     }
-    out.push({ ...s, pane: p, key: `${ev.id}:${out.length}`, eventId: ev.id, ts: ev.ts, caseId: ev.case_id });
+    if ((p === "mail" || p === "sheet") && ev.case_id !== null && onScreen[p] !== ev.case_id) {
+      onScreen = { ...onScreen, [p]: ev.case_id };
+      // Opening a new email shows its case by itself; anything else switches explicitly.
+      if (s.action !== "open") {
+        out.push({ ...base(p), key: `${ev.id}:switch:${p}`, target: p, agent: null, action: "switch", text: caseName(), meta: { case_id: ev.case_id } });
+      }
+    }
+    out.push({ ...s, ...base(p), key: `${ev.id}:${n++}` });
   };
-  const caseName = () =>
-    (ev.case_id && next.caseNames[ev.case_id]) || ev.case_id || "client";
+  const done = () => ({ state: { camera, caseNames, onScreen }, steps: out });
+
+  // The cursor shown for this event; a customer's own words get no agent cursor.
+  const agent: Agent | null = ev.actor === "system" ? null : ev.actor;
 
   if (ev.status === "failed") {
     push({ target: pane, agent, action: "fail", text: ev.type });
-    return { state: next, steps: out };
+    return done();
   }
 
-  const p = ev.payload as unknown;
+  const p = obj(ev.payload, "payload");
   switch (ev.type) {
     case "email.received": {
-      const e = p as EmailReceived;
-      if (ev.case_id) next.caseNames[ev.case_id] = e.masked_name;
-      push({ pane: "rail", target: "rail.cases", agent: null, action: "appear", text: e.masked_name });
-      push({
-        target: "mail.message",
-        agent,
-        action: "open",
-        text: e.body,
-        meta: { from: e.from_masked, subject: e.subject, masked_name: e.masked_name },
-      });
+      const masked = str(p, "masked_name");
+      const from = str(p, "from_masked");
+      const subject = str(p, "subject");
+      const body = str(p, "body");
+      if (ev.case_id !== null) {
+        const next: Record<string, string> = Object.create(null);
+        Object.assign(next, caseNames, { [ev.case_id]: masked });
+        caseNames = next;
+      }
+      push({ pane: "rail", target: "rail.cases", agent: null, action: "appear", text: masked });
+      push({ target: "mail.message", agent, action: "open", text: body, meta: { from, subject, masked_name: masked } });
       break;
     }
     case "facts.extracted": {
-      const f = p as FactsExtracted;
-      const quoted = FACT_ROWS.filter((fact) => f.quotes[fact] !== undefined);
-      for (const fact of quoted) {
-        push({ pane: "mail", target: `mail.quote.${fact}`, agent, action: "highlight", text: f.quotes[fact] });
-      }
-      for (const fact of quoted) {
-        const value = factValue(f.facts, fact);
+      const values = factValues(obj(p.facts, "facts"));
+      const quotes = obj(p.quotes, "quotes");
+      const assumed = factList(p, "assumed");
+      const quoted = FACT_ROWS.filter((f) => has(quotes, f));
+      for (const f of quoted) push({ pane: "mail", target: `mail.quote.${f}`, agent, action: "highlight", text: str(quotes, f) });
+      for (const f of FACT_ROWS) {
+        const value = values[f];
         if (value === undefined) continue;
-        push({ pane: "sheet", target: `sheet.cell.${fact}`, from: `mail.quote.${fact}`, agent, action: "drag", text: value });
-      }
-      for (const fact of FACT_ROWS.filter((x) => f.assumed.includes(x))) {
-        const value = factValue(f.facts, fact);
-        if (value === undefined) continue;
-        push({ pane: "sheet", target: `sheet.cell.${fact}`, agent, action: "fill", text: value, meta: { assumed: true } });
+        const isAssumed = assumed.includes(f);
+        if (quoted.includes(f)) {
+          push({ pane: "sheet", target: `sheet.cell.${f}`, from: `mail.quote.${f}`, agent, action: "drag", text: value, ...(isAssumed ? { meta: { assumed: true } } : {}) });
+        } else {
+          push({ pane: "sheet", target: `sheet.cell.${f}`, agent, action: "fill", text: value, meta: { assumed: isAssumed } });
+        }
       }
       break;
     }
     case "facts.missing": {
-      const m = p as FactsMissing;
-      for (const fact of FACT_ROWS.filter((x) => m.missing.includes(x))) {
-        push({ target: `sheet.cell.${fact}`, agent, action: "fill", text: "?", meta: { missing: true } });
+      const missing = factList(p, "missing");
+      int(p, "asks_so_far");
+      for (const f of FACT_ROWS.filter((x) => missing.includes(x))) {
+        push({ target: `sheet.cell.${f}`, agent, action: "fill", text: "?", meta: { missing: true } });
       }
       break;
     }
-    case "client.asked":
-    case "memo.sent": {
-      const isMemo = ev.type === "memo.sent";
-      const to = isMemo ? (p as MemoSent).to_masked : null;
-      const subject = isMemo ? (p as MemoSent).subject : "Re: your franchise tax";
-      const body = (p as MemoSent | ClientAsked).body;
-      push({ target: "mail.compose", agent, action: "appear", text: to ? `To: ${to} · Subject: ${subject}` : `Reply · ${subject}` });
+    case "client.asked": {
+      const missing = factList(p, "missing");
+      const body = str(p, "body");
+      push({ target: "mail.compose", agent, action: "appear", text: `Reply · asking for ${missing.length} facts` });
       push({ target: "mail.memo", agent, action: "type", text: body });
       push({ target: "mail.send", agent, action: "click" });
-      const sentText = isMemo
-        ? `✓ Sent · ${(p as MemoSent).seconds_since_last_fact} s after last fact`
-        : `✓ Sent · asked for ${(p as ClientAsked).missing.length} facts`;
-      push({ target: "mail.sent", agent: null, action: "appear", text: sentText });
+      push({ target: "mail.sent", agent: null, action: "appear", text: `✓ Sent · asked for ${missing.length} facts` });
+      break;
+    }
+    case "memo.sent": {
+      const to = str(p, "to_masked");
+      const subject = str(p, "subject");
+      const body = str(p, "body");
+      const secs = int(p, "seconds_since_last_fact");
+      push({ target: "mail.compose", agent, action: "appear", text: `To: ${to} · Subject: ${subject}` });
+      push({ target: "mail.memo", agent, action: "type", text: body });
+      push({ target: "mail.send", agent, action: "click" });
+      push({ target: "mail.sent", agent: null, action: "appear", text: `✓ Sent · ${secs} s after last fact`, meta: { message_id: str(p, "message_id") } });
       break;
     }
     case "law.searched": {
-      const l = p as LawSearched;
-      push({ target: "search.query", agent, action: "type", text: l.query });
-      l.results.forEach((r, i) =>
-        push({ target: `search.result.${i}`, agent: null, action: "appear", text: `${r.cite} · ${r.snippet}` }),
-      );
+      const query = str(p, "query");
+      const results = arr(p, "results").map((r) => {
+        const o = obj(r, "result");
+        return `${str(o, "cite")} · ${str(o, "snippet")}`;
+      });
+      push({ target: "search.query", agent, action: "type", text: query });
+      results.slice(0, MAX_RESULTS).forEach((text, i) => push({ target: `search.result.${i}`, agent: null, action: "appear", text }));
+      if (results.length > MAX_RESULTS) {
+        push({ target: "search.more", agent: null, action: "appear", text: `+${results.length - MAX_RESULTS} more results` });
+      }
       break;
     }
     case "tax.computed": {
-      const t = p as TaxComputed;
-      push({ target: "sheet.cell.authorized_method", agent, action: "fill", text: formatCents(t.authorized_method_cents) });
-      push({ target: "sheet.cell.assumed_par_method", agent, action: "fill", text: formatCents(t.assumed_par_method_cents) });
-      const [win, lose] =
-        t.chosen === "assumed_par"
-          ? ["assumed_par_method", "authorized_method"]
-          : ["authorized_method", "assumed_par_method"];
+      const authorized = formatCents(int(p, "authorized_method_cents"));
+      const assumedPar = formatCents(int(p, "assumed_par_method_cents"));
+      const chosen = oneOf(p, "chosen", ["assumed_par", "authorized"] as const);
+      const fee = formatCents(int(p, "annual_report_fee_cents"));
+      const total = formatCents(int(p, "total_cents"));
+      const due = str(p, "due_date");
+      const f5472 = bool(p, "form5472_flag");
+      const rnd = bool(p, "rnd_flag");
+      push({ target: "sheet.cell.authorized_method", agent, action: "fill", text: authorized });
+      push({ target: "sheet.cell.assumed_par_method", agent, action: "fill", text: assumedPar });
+      const [win, lose] = chosen === "assumed_par" ? ["assumed_par_method", "authorized_method"] : ["authorized_method", "assumed_par_method"];
       push({ target: `sheet.cell.${win}`, agent: null, action: "mark", text: "win" });
       push({ target: `sheet.cell.${lose}`, agent: null, action: "mark", text: "lose" });
-      push({ target: "sheet.cell.annual_report_fee", agent, action: "fill", text: formatCents(t.annual_report_fee_cents) });
-      push({ target: "sheet.cell.total", agent, action: "fill", text: formatCents(t.total_cents), meta: { due_date: t.due_date } });
+      push({ target: "sheet.cell.annual_report_fee", agent, action: "fill", text: fee });
+      push({ target: "sheet.cell.total", agent, action: "fill", text: total, meta: { due_date: due } });
       push({ target: "sheet.cell.total", agent: null, action: "mark", text: "win" });
-      if (t.form5472_flag) push({ target: "sheet.flag.form5472", agent, action: "appear", text: "Form 5472 may be required" });
-      if (t.rnd_flag) push({ target: "sheet.flag.rnd", agent, action: "appear", text: "May qualify for R&D payroll credit" });
+      if (f5472) push({ target: "sheet.flag.form5472", agent, action: "appear", text: "Form 5472 may be required" });
+      if (rnd) push({ target: "sheet.flag.rnd", agent, action: "appear", text: "May qualify for R&D payroll credit" });
       break;
     }
     case "qa.passed":
     case "qa.failed": {
-      const q = p as QaResult;
-      for (const c of q.checks) {
-        const cell = QA_CELL[c.field] ?? c.field;
-        push({ target: `sheet.cell.${cell}`, agent, action: c.ok ? "tick" : "circle", text: c.note });
+      const checks = arr(p, "checks").map((c) => {
+        const o = obj(c, "check");
+        return { field: str(o, "field"), ok: bool(o, "ok"), note: str(o, "note") };
+      });
+      const allOk = checks.every((c) => c.ok);
+      if (ev.type === "qa.passed" ? !allOk : allOk) throw new PayloadError("checks contradict the verdict");
+      for (const c of checks) {
+        push({ target: `sheet.cell.${c.field}`, agent, action: c.ok ? "tick" : "circle", text: c.note });
       }
-      const passed = ev.type === "qa.passed";
-      push({ target: "sheet.qa", agent: null, action: "appear", text: passed ? "✓ QA" : "✗ QA" });
+      // The BLOCKED card comes only from case.blocked: a failed QA can also send
+      // the case back to intake (re-ask), and the card must match the log.
+      push({ target: "sheet.qa", agent: null, action: "appear", text: ev.type === "qa.passed" ? "✓ QA" : "✗ QA" });
       break;
     }
     case "call.booked": {
-      const c = p as CallBooked;
-      push({
-        target: "calendar.block",
-        agent,
-        action: "drag",
-        text: `${caseName()} · ${c.minutes}-min review`,
-        meta: { start: c.start, minutes: c.minutes, invitee: c.invitee_masked },
-      });
+      const start = str(p, "start");
+      const minutes = int(p, "minutes");
+      const invitee = str(p, "invitee_masked");
+      push({ target: "calendar.block", agent, action: "drag", text: `${caseName()} · ${minutes}-min review`, meta: { start, minutes, invitee } });
       break;
     }
     case "post.published": {
-      const s = p as PostPublished;
-      if (s.image_url) push({ target: "social.image", agent, action: "drag", meta: { image_url: s.image_url } });
-      push({ target: "social.caption", agent, action: "type", text: s.text, meta: { channel: s.channel } });
+      const channel = str(p, "channel");
+      const text = str(p, "text");
+      const url = safeUrl(strOrNull(p, "url"));
+      const image = safeUrl(strOrNull(p, "image_url"));
+      if (image.url) push({ target: "social.image", agent, action: "drag", meta: { image_url: image.url } });
+      push({ target: "social.caption", agent, action: "type", text, meta: { channel, image_rejected: image.rejected } });
       push({ target: "social.post", agent, action: "click" });
-      push({ target: "social.posted", agent: null, action: "appear", text: `Posted to ${s.channel}`, meta: { url: s.url } });
+      push({ target: "social.posted", agent: null, action: "appear", text: `Posted to ${channel}`, meta: { url: url.url, url_rejected: url.rejected } });
       break;
     }
     case "dm.drafted": {
-      const d = p as DmPayload;
-      push({ target: "social.dm", agent, action: "type", text: d.text, meta: { recipient: d.recipient_label } });
+      push({ target: "social.dm", agent, action: "type", text: str(p, "text"), meta: { recipient: str(p, "recipient_label") } });
       break;
     }
     case "dm.sent_by_human": {
-      const d = p as DmPayload;
-      push({ target: "social.dm_send", agent, action: "click", meta: { recipient: d.recipient_label } });
+      const recipient = str(p, "recipient_label");
+      str(p, "text");
+      push({ target: "social.dm_send", agent, action: "click", meta: { recipient } });
       break;
     }
     case "screen.call": {
-      const s = p as ScreenCall;
-      push({ target: "phone.dial", agent, action: "dial", text: s.candidate_id, meta: { seconds: s.seconds } });
-      push({ target: "phone.transcript", agent, action: "type", text: s.transcript_excerpt });
+      const candidate = str(p, "candidate_id");
+      const excerpt = str(p, "transcript_excerpt");
+      const seconds = int(p, "seconds");
+      push({ target: "phone.dial", agent, action: "dial", text: candidate, meta: { seconds } });
+      push({ target: "phone.transcript", agent, action: "type", text: excerpt });
       break;
     }
     case "phone.checked": {
-      const c = p as PhoneChecked;
+      const ok = bool(p, "rendered_ok");
+      const shot = safeUrl(strOrNull(p, "screenshot_url"));
       push({
         target: "phone.check",
         agent,
-        action: c.rendered_ok ? "tick" : "circle",
-        text: c.rendered_ok ? "Memo renders on phone" : "Memo failed to render on phone",
-        meta: { screenshot_url: c.screenshot_url },
+        action: ok ? "tick" : "circle",
+        text: ok ? "Memo renders on phone" : "Memo failed to render on phone",
+        meta: { screenshot_url: shot.url, screenshot_rejected: shot.rejected },
       });
       break;
     }
     case "case.status": {
-      const s = p as CaseStatus;
-      push({ target: "rail.cases", agent: null, action: "status", text: prettyStatus(s.to), meta: { from: s.from, to: s.to } });
+      const from = str(p, "from");
+      const to = str(p, "to");
+      push({ target: "rail.cases", agent: null, action: "status", text: prettyStatus(to), meta: { from, to } });
       break;
     }
     case "case.blocked": {
-      const b = p as CaseBlocked;
-      push({ target: "rail.cases", agent: null, action: "block", text: b.reason, meta: { needs: b.needs } });
+      push({ target: "rail.cases", agent: null, action: "block", text: str(p, "reason"), meta: { needs: str(p, "needs") } });
       break;
     }
     case "case.not_eligible": {
-      const n = p as CaseNotEligible;
-      push({ target: "rail.cases", agent: null, action: "status", text: "not eligible", meta: { reason: n.reason } });
+      push({ target: "rail.cases", agent: null, action: "status", text: "not eligible", meta: { reason: str(p, "reason") } });
       break;
     }
     case "crm.sync_requested":
     case "crm.synced": {
-      const c = p as CrmSync;
-      push({ target: "rail.crm", agent: null, action: "appear", text: `CRM ${c.object} · ${prettyStatus(c.stage)}` });
+      const object = str(p, "object");
+      push({ target: "rail.crm", agent: null, action: "appear", text: `CRM ${object} · ${prettyStatus(str(p, "stage"))}` });
       break;
     }
     case "hr.applicant":
@@ -408,102 +549,126 @@ export function stepsForEvent(
     case "hr.shortlisted":
     case "hr.hired":
     case "hr.declined": {
-      const h = p as HrPayload;
-      const stage = ev.type.slice(3);
-      push({ target: "rail.hiring", agent, action: "count", text: `${h.name_masked} · ${stage}`, meta: { stage, note: h.note } });
+      const stage = suffix(ev.type);
+      const name = str(p, "name_masked");
+      push({ target: "rail.hiring", agent, action: "count", text: `${name} · ${stage}`, meta: { stage, note: str(p, "note"), candidate_id: str(p, "candidate_id") } });
       break;
     }
     case "voice.command": {
-      const v = p as VoiceCommand;
-      push({
-        target: "rail.voice",
-        agent,
-        action: "say",
-        text: v.text,
-        meta: { channel: v.channel, speaker: v.speaker ?? (ev.actor === "ceo" ? "ceo" : "customer"), case_id: v.case_id ?? null },
-      });
+      const text = str(p, "text");
+      const channel = str(p, "channel"); // display only: vocabulary drift must not drop the event
+      const speaker = has(p, "speaker") ? oneOf(p, "speaker", ["customer", "ceo"] as const) : ev.actor === "ceo" ? "ceo" : "customer";
+      const caseId = strOrNull(p, "case_id");
+      // A customer's words are inbound speech, not an agent action: no cursor.
+      push({ target: "rail.voice", agent: speaker === "ceo" ? agent : null, action: "say", text, meta: { channel, speaker, case_id: caseId } });
       break;
     }
     case "ceo.notified": {
-      const n = p as CeoNotified;
-      push({ target: "rail.notify", agent, action: "appear", text: n.subject, meta: { channel: n.channel, reason: n.reason, summary: n.summary } });
+      const channel = str(p, "channel");
+      const reason = str(p, "reason");
+      push({ target: "rail.notify", agent, action: "appear", text: str(p, "subject"), meta: { channel, reason, summary: str(p, "summary") } });
       break;
     }
     case "approval.requested": {
-      const a = p as ApprovalRequested;
-      push({ target: "rail.touches", agent: null, action: "appear", text: a.summary, meta: { approval_id: a.approval_id, action_type: a.action_type } });
+      push({ target: "rail.touches", agent: null, action: "appear", text: str(p, "summary"), meta: { approval_id: str(p, "approval_id"), action_type: str(p, "action_type") } });
       break;
     }
     case "touch.training":
     case "touch.operating":
     case "touch.engineering": {
-      const t = p as TouchPayload;
-      const kind = ev.type.slice(6);
-      push({ target: "rail.touches", agent, action: "count", text: t.note, meta: { kind, approval_id: t.approval_id } });
+      push({ target: "rail.touches", agent, action: "count", text: str(p, "note"), meta: { kind: suffix(ev.type), approval_id: strOrNull(p, "approval_id") } });
       break;
     }
     case "trust.changed": {
-      const t = p as TrustChanged;
-      push({ target: "rail.trust", agent: null, action: "status", text: `${t.action_type} → ${t.to}`, meta: { action_type: t.action_type, from: t.from, to: t.to, reason: t.reason } });
+      const actionType = str(p, "action_type");
+      const from = str(p, "from");
+      const to = str(p, "to");
+      push({ target: "rail.trust", agent: null, action: "status", text: `${actionType} → ${to}`, meta: { action_type: actionType, from, to, reason: str(p, "reason") } });
       break;
     }
     case "cost.booked": {
-      const c = p as CostBooked;
+      const cost = envelopeCost(ev);
       push({
         target: "rail.money",
         agent: null,
         action: "count",
-        text: ev.cost_usd ? formatUsd(ev.cost_usd) : undefined,
-        meta: { provider: c.provider, model: c.model, estimated: c.estimated, cost_usd: ev.cost_usd },
+        text: formatUsd(cost),
+        meta: { provider: str(p, "provider"), model: str(p, "model"), estimated: bool(p, "estimated"), cost_usd: cost },
       });
       break;
     }
     case "tool.bought": {
-      const t = p as ToolBought;
+      const cost = envelopeCost(ev);
+      const tool = str(p, "tool");
       push({
         target: "rail.money",
         agent,
         action: "count",
-        text: `${t.tool}${ev.cost_usd ? ` · ${formatUsd(ev.cost_usd)}` : ""}`,
-        meta: { provider: t.provider, cost_usd: ev.cost_usd },
+        text: `${tool} · ${formatUsd(cost)}`,
+        meta: { provider: str(p, "provider"), cost_usd: cost },
       });
       break;
     }
     case "brief.generated": {
-      const b = p as BriefGenerated;
-      push({ target: "rail.brief", agent, action: "say", text: b.text, meta: { brief_event_id: ev.id } });
+      const text = str(p, "text");
+      obj(p.counts, "counts");
+      push({ target: "rail.brief", agent, action: "say", text, meta: { brief_event_id: ev.id } });
       break;
     }
   }
-  return { state: next, steps: out };
+  return done();
 }
 
 /**
- * Build the full cursor script for an event list. Events are ordered by id and
- * de-duplicated (an SSE reconnect can replay an id we already have).
+ * Live mode: apply new events to a cursor. The batch is sorted; ids at or
+ * below `cursor.lastId` are dropped silently (already applied, e.g. an SSE
+ * replay after reconnect). The caller must deliver events in id order across
+ * batches (the SSE stream does); a late lower id is dropped, never inserted,
+ * so already-emitted steps never change.
  */
-export function buildScript(events: readonly UTaxEvent[], opts: ScriptOptions = {}): Script {
-  const log = opts.log ?? ((s: SkippedEvent) => console.warn(`[theater] skipped event ${s.eventId} (${s.type}): ${s.reason}`));
-  const ordered = [...events].sort((a, b) => a.id - b.id);
-  let state = initialState();
+export function appendEvents(
+  cursor: ScriptCursor,
+  events: readonly UTaxEvent[],
+  opts: ScriptOptions = {},
+): { cursor: ScriptCursor; steps: CursorStep[]; skipped: SkippedEvent[] } {
+  const log = opts.log ?? defaultLog;
+  const applied = (e: UTaxEvent, last: number) => Number.isSafeInteger(e?.id) && e.id >= 1 && e.id <= last;
+  // Invalid ids are kept so validation reports them as bad_event.
+  const fresh = events.filter((e) => !applied(e, cursor.lastId));
+  const ordered = [...fresh].sort((a, b) => (Number.isFinite(a?.id) ? a.id : 0) - (Number.isFinite(b?.id) ? b.id : 0));
+  let { state, lastId } = cursor;
   const steps: CursorStep[] = [];
   const skipped: SkippedEvent[] = [];
-  let lastId = -Infinity;
+  let prev: UTaxEvent | undefined;
+  const skip = (s: SkippedEvent) => {
+    skipped.push(s);
+    log(s);
+  };
   for (const ev of ordered) {
-    if (ev.id === lastId) continue;
-    lastId = ev.id;
-    let res: ReturnType<typeof stepsForEvent>;
-    try {
-      res = stepsForEvent(state, ev);
-    } catch {
-      res = { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "bad_payload" } };
+    if (applied(ev, lastId)) {
+      // Same id twice in one batch: an exact repeat is a replay; different content is a bad log.
+      if (prev && prev.id === ev.id && JSON.stringify(prev) !== JSON.stringify(ev)) {
+        skip({ eventId: ev.id, type: typeof ev.type === "string" ? ev.type : "?", reason: "bad_event", detail: "duplicate id with different content" });
+      }
+      continue;
     }
+    prev = ev;
+    if (Number.isSafeInteger(ev?.id) && ev.id > lastId + 1) {
+      // Ids are dense (contract §2). Missing ones can't be inserted later without
+      // changing emitted keys, so report the gap; a late arrival is then dropped.
+      skip({ eventId: lastId + 1, type: "?", reason: "gap", detail: `ids ${lastId + 1}..${ev.id - 1} never arrived` });
+    }
+    const res = stepsForEvent(state, ev);
     state = res.state;
-    steps.push(...res.steps);
-    if (res.skipped) {
-      skipped.push(res.skipped);
-      log(res.skipped);
-    }
+    for (const s of res.steps) steps.push(s);
+    if (res.skipped) skip(res.skipped);
+    if (Number.isSafeInteger(ev?.id) && ev.id >= 1) lastId = Math.max(lastId, ev.id);
   }
+  return { cursor: { state, lastId }, steps, skipped };
+}
+
+/** The whole log at once (fixture, replay). Sorted by id; exact duplicates collapse, conflicting ones are reported. */
+export function buildScript(events: readonly UTaxEvent[], opts: ScriptOptions = {}): Script {
+  const { steps, skipped } = appendEvents(startScript(), events, opts);
   return { steps, skipped };
 }
