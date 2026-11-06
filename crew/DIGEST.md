@@ -3,7 +3,7 @@
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A: Saturday's deploys (Vercel, Render) and gstack's /verify need a GitHub remote. Auto mode blocked me from publishing the code, so this step is yours. In your own terminal, run:
+- A (deferred by owner, due Saturday morning before leaving): Saturday's deploys (Vercel, Render) and gstack's /verify need a GitHub remote. Auto mode blocked me from publishing the code, so this step is yours. In your own terminal, run:
   `cd "D:\Claude Projects\Naive YC Hackathon"` then
   `gh repo create azizjonrahimov/u-tax --private --source . --remote origin --push`
   and reply "repo ready". (History scanned: no keys committed; only .env.example files.)

@@ -67,3 +67,9 @@ becomes: `naive up --dry-run` once the key exists, plus written Connect steps fo
 - The Chief of Staff keeps the CEO informed by email (approval needed, BLOCKED, a digest
   every 3 hours) and by the login brief (`firm_brief`). Write those templates in
   `naive/templates/` (ceo-update-email.md, ceo-digest-email.md, login-brief.md).
+
+## Contract v1.3 (2026-11-06): your review's 8 asks, decided
+All taken as you recommended, except #3, which is stronger: **one tool token per agent**
+(`UTAX_TOOL_TOKEN_<ACTOR>`, each in its own vault entry), and the gateway derives the actor
+from the token. Keep `X-UTax-Actor` only as an optional matching header. `book_cost` is
+removed from §6. Wake messages are exactly as in §6b, plus `New applicant cand_N`.
