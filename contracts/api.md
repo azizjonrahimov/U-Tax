@@ -83,6 +83,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `post.published` | mkt | `{channel, text, url, image_url}` |
 | `dm.drafted` / `dm.sent_by_human` | mkt / ceo | `{recipient_label, text}` |
 | `hr.applicant` / `hr.screened` / `hr.shortlisted` / `hr.hired` / `hr.declined` | hr (hired: ceo) | `{candidate_id, name_masked, note}` |
+| `hr.questionnaire_sent` | system | `{candidate_id, name_masked, note}` (the §6c auto-reply; counts against the `email` cap) |
 | `screen.call` | hr | `{candidate_id, transcript_excerpt, seconds}` |
 | `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id}` (actor `intake` and `case_id` set for customer conversations) |
 | `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"digest"\|"login"}` |
@@ -125,7 +126,9 @@ Projections rebuilt from events (never stored by hand):
   "queue": {"waiting": 0, "blocked": 0}
 }
 ```
-`tax_saved_cents` = Σ over sent cases of (`authorized_method_cents` − `total_cents`).
+`tax_saved_cents` = Σ over sent cases of max(0, `authorized_method_cents` − (`total_cents` −
+`annual_report_fee_cents`)): franchise tax saved only. The fee is paid under either method,
+so it is never counted as a saving, and the sum never goes negative.
 
 ### `GET /api/events?after_id=0&limit=500&token=` → `200 {"data": [Event...], "next_after_id": 57, "has_more": false}`
 For Replay mode and catch-up. Ordered by `id`.
@@ -279,6 +282,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.4.1 (2026-11-06, backend task 5): `tax_saved_cents` excludes the annual fee and never goes
+  negative; `hr.questionnaire_sent`; fixture post text says `$85,165` (the guard refuses `$85k`).
 
 - v1.4 (2026-11-06, agents review pass 3): per-seat MCP URLs `/mcp/<actor>`; HR `get_candidate`,
   HR never declines (CEO decides via `/api/candidates/{id}/decision`); QA `flag_case` and

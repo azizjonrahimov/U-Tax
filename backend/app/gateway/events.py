@@ -1,0 +1,163 @@
+"""Event envelope and the type catalog (contracts/api.md v1, sections 2 and 3).
+
+Events are append-only and the only truth. Two fields never leave the gateway:
+- `idempotency_key`: unique; a second append with the same key is a no-op.
+- `private`: data the gateway needs but the theater must never see (the client's real
+  email address for replies, the problems behind a re-ask). Payloads are masked.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
+from typing import Any
+
+ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system"}
+PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "hubspot", "mobilerun",
+             "apify", "monid", "google", "stripe", None}
+STATUSES = {"ok", "failed", "skipped"}
+
+_HR = ("candidate_id", "name_masked", "note")
+_TOUCH = ("note", "approval_id")
+_CRM = ("object", "stage")
+_DM = ("recipient_label", "text")
+_QA = ("checks",)
+
+# type -> exact payload keys
+PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
+    "email.received": ("masked_name", "from_masked", "subject", "body"),
+    "facts.extracted": ("facts", "quotes", "assumed"),
+    "facts.missing": ("missing", "asks_so_far"),
+    "client.asked": ("missing", "body"),
+    "case.not_eligible": ("reason",),
+    "case.status": ("from", "to"),
+    "case.blocked": ("reason", "needs"),
+    "law.searched": ("query", "results"),
+    "tax.computed": ("authorized_method_cents", "assumed_par_method_cents", "chosen",
+                     "annual_report_fee_cents", "fee_source", "total_cents", "due_date",
+                     "form5472_flag", "rnd_flag", "engine_version"),
+    "qa.passed": _QA,
+    "qa.failed": _QA,
+    "memo.sent": ("to_masked", "subject", "body", "message_id", "seconds_since_last_fact"),
+    "call.booked": ("start", "minutes", "invitee_masked"),
+    "phone.checked": ("screenshot_url", "rendered_ok"),
+    "crm.sync_requested": _CRM,
+    "crm.synced": _CRM,
+    "post.published": ("channel", "text", "url", "image_url"),
+    "dm.drafted": _DM,
+    "dm.sent_by_human": _DM,
+    "hr.applicant": _HR,
+    "hr.screened": _HR,
+    "hr.shortlisted": _HR,
+    "hr.hired": _HR,
+    "hr.declined": _HR,
+    "screen.call": ("candidate_id", "transcript_excerpt", "seconds"),
+    "voice.command": ("text", "channel", "speaker", "case_id"),
+    "ceo.notified": ("channel", "subject", "summary", "reason"),
+    "approval.requested": ("approval_id", "action_type", "summary"),
+    "touch.training": _TOUCH,
+    "touch.operating": _TOUCH,
+    "touch.engineering": _TOUCH,
+    "trust.changed": ("action_type", "from", "to", "reason"),
+    "cost.booked": ("provider", "model", "estimated"),
+    "tool.bought": ("tool", "provider"),
+    "brief.generated": ("text", "counts"),
+}
+
+FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",
+             "gross_assets_cents", "foreign_owner_25")
+OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only
+
+
+def iso_ts(when: datetime) -> str:
+    """2026-11-07T21:14:03.120Z"""
+    utc = when.astimezone(timezone.utc)
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.") + f"{utc.microsecond // 1000:03d}Z"
+
+
+def parse_ts(text: str) -> datetime:
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+def validate(type_: str, actor: str, provider: str | None, status: str, payload: dict) -> None:
+    if type_ not in PAYLOAD_KEYS:
+        raise ValueError(f"unknown event type {type_!r}")
+    if actor not in ACTORS:
+        raise ValueError(f"unknown actor {actor!r}")
+    if provider not in PROVIDERS:
+        raise ValueError(f"unknown provider {provider!r}")
+    if status not in STATUSES:
+        raise ValueError(f"unknown status {status!r}")
+    expected = set(PAYLOAD_KEYS[type_])
+    if set(payload) != expected:
+        raise ValueError(
+            f"{type_} payload keys {sorted(payload)} != contract {sorted(expected)}"
+        )
+
+
+@dataclass(frozen=True)
+class NewEvent:
+    type: str
+    actor: str
+    payload: dict[str, Any]
+    case_id: str | None = None
+    provider: str | None = None
+    status: str = "ok"
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: str | None = None
+    idempotency_key: str | None = None
+    private: dict[str, Any] | None = None
+    ts: str | None = None  # set by the gateway clock when None
+
+    def __post_init__(self) -> None:
+        validate(self.type, self.actor, self.provider, self.status, self.payload)
+
+
+@dataclass(frozen=True)
+class Event:
+    id: int
+    ts: str
+    type: str
+    actor: str
+    case_id: str | None
+    provider: str | None
+    status: str
+    payload: dict[str, Any]
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    cost_usd: str | None = None
+    idempotency_key: str | None = None
+    private: dict[str, Any] | None = field(default=None, compare=False)
+
+    @classmethod
+    def from_new(cls, new: NewEvent, *, id: int, ts: str) -> "Event":
+        return cls(id=id, ts=new.ts or ts, type=new.type, actor=new.actor, case_id=new.case_id,
+                   provider=new.provider, status=new.status, payload=new.payload,
+                   tokens_in=new.tokens_in, tokens_out=new.tokens_out, cost_usd=new.cost_usd,
+                   idempotency_key=new.idempotency_key, private=new.private)
+
+    def public(self) -> dict[str, Any]:
+        """The contract envelope: what the theater and the API may see."""
+        return {"id": self.id, "ts": self.ts, "type": self.type, "actor": self.actor,
+                "case_id": self.case_id, "provider": self.provider, "status": self.status,
+                "payload": self.payload, "tokens_in": self.tokens_in,
+                "tokens_out": self.tokens_out, "cost_usd": self.cost_usd}
+
+    def record(self) -> dict[str, Any]:
+        """Everything, for the store."""
+        out = self.public()
+        out["idempotency_key"] = self.idempotency_key
+        out["private"] = self.private
+        return out
+
+    @classmethod
+    def from_record(cls, rec: dict[str, Any]) -> "Event":
+        return cls(id=int(rec["id"]), ts=rec["ts"], type=rec["type"], actor=rec["actor"],
+                   case_id=rec.get("case_id"), provider=rec.get("provider"),
+                   status=rec["status"], payload=rec["payload"], tokens_in=rec.get("tokens_in"),
+                   tokens_out=rec.get("tokens_out"), cost_usd=rec.get("cost_usd"),
+                   idempotency_key=rec.get("idempotency_key"), private=rec.get("private"))
+
+    def with_id(self, id: int) -> "Event":
+        return replace(self, id=id)
