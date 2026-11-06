@@ -26,3 +26,25 @@ Spend cap: none; no paid APIs without the owner's word
 
 After READY, tell the controller you are free. The product idea is not decided yet;
 the controller will send a product brief. Until then, do not invent features.
+
+## Task 3: Naïve REST client (plumbing, plan exempt)
+
+Added 2026-11-06 by the controller. Read `research/naive-sdk.md` first (§2 auth, §3, §6.2, §6.4, §7).
+The Naïve SDK is TypeScript-only, so the backend talks to the REST API directly.
+
+1. `backend/app/naive/client.py`: an async `httpx` client for `https://api.vetta.sh/v1`.
+   - Auth from env `NAIVE_API_KEY` (`Authorization: Bearer ...`), header `Vetta-Version: 2026-09-30`,
+     base URL overridable by env `NAIVE_API_BASE` (our name; the docs define no env var for it).
+   - Methods for documented routes only: agents create/get/list/update, sessions create/send/events,
+     SSE stream (`after_seq` resume, order by `seq`), tool confirmations, answers, `GET /v1/digest`,
+     `/v1/credits/spend`, deployments create/list, board cards list if documented.
+   - `Idempotency-Key` on POSTs; Naïve errors raised as a typed exception carrying `error.code`
+     (branch on code, never message); 429 honours `Retry-After`.
+   - Money stays integer micro-USD end to end.
+2. `backend/tests/test_naive_client.py` with `httpx.MockTransport` (no live calls, no key needed),
+   covering auth headers, an error code, SSE parsing and pagination shape.
+3. `backend/.env.example` gets `NAIVE_API_KEY=` and `NAIVE_API_BASE=https://api.vetta.sh`.
+4. No new HTTP routes: those wait for contract v1. `pytest`, commit, READY.
+
+Anything in the docs that is ambiguous (the doc inconsistencies in §7): follow the SDK reference,
+leave a `# UNVERIFIED:` comment, and list it in your READY's `Unverified:` line.
