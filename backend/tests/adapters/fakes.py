@@ -145,3 +145,77 @@ class FakeNaive:
                 self.by_key[key] = post_id
             return httpx.Response(201, json={"id": post_id, "status": "queued"})
         return httpx.Response(404, json={"error": {"type": "not_found"}})
+
+
+class FakeApify:
+    """POST /v2/actors/{actor}/run-sync-get-dataset-items: the cheerio page actor answers the
+    fee page HTML, the Google search actor answers organicResults on delaware.gov."""
+
+    FEE_HTML = ("<html><body><h2>Annual Report Filing Fee</h2>"
+                "<p>Annual Report filing fee $50.00</p></body></html>")
+
+    def __init__(self, faults: FaultPlan | None = None, token: str = "apify_test") -> None:
+        self.faults = faults
+        self.token = token
+        self.requests: list[httpx.Request] = []
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handle)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.headers.get("authorization") != f"Bearer {self.token}":
+            return httpx.Response(401, json={"error": {"type": "token-not-valid"}})
+        failed = fault_response(self.faults)
+        if failed is not None:
+            return failed
+        path = request.url.path
+        if path.endswith("/actors/apify~cheerio-scraper/run-sync-get-dataset-items"):
+            url = json.loads(request.content)["startUrls"][0]["url"]
+            return httpx.Response(201, json=[{"url": url, "html": self.FEE_HTML}])
+        if path.endswith("/actors/apify~google-search-scraper/run-sync-get-dataset-items"):
+            return httpx.Response(201, json=[{"organicResults": [
+                {"title": "Franchise Tax", "url": "https://corp.delaware.gov/frtax/",
+                 "description": "The assumed par value capital method uses gross assets."}]}])
+        return httpx.Response(404, json={"error": {"type": "record-not-found"}})
+
+
+class FakeMobilerun:
+    """Mobilerun Cloud: GET /devices, POST /tasks, GET /tasks/{id}/status (completes at once,
+    having found the memo exactly once), GET /tasks/{id}/screenshots, POST .../cancel."""
+
+    TASK = "11111111-2222-3333-4444-555555555555"
+    OUTPUT = {"found_email": True, "matches": 1, "opened_email": True,
+              "text_readable": True, "disclaimer_visible": True}
+
+    def __init__(self, faults: FaultPlan | None = None, api_key: str = "mr_test") -> None:
+        self.faults = faults
+        self.api_key = api_key
+        self.tasks: list[dict[str, Any]] = []
+        self.requests: list[httpx.Request] = []
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handle)
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.headers.get("authorization") != f"Bearer {self.api_key}":
+            return httpx.Response(401, json={"message": "unauthorized"})
+        failed = fault_response(self.faults)
+        if failed is not None:
+            return failed
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/devices"):
+            return httpx.Response(200, json={"items": [{"id": "dev-1"}]})
+        if request.method == "POST" and path.endswith("/tasks"):
+            self.tasks.append(json.loads(request.content))
+            return httpx.Response(200, json={"id": self.TASK})
+        if path.endswith(f"/tasks/{self.TASK}/status"):
+            return httpx.Response(200, json={"status": "completed", "succeeded": True,
+                                             "output": self.OUTPUT})
+        if path.endswith(f"/tasks/{self.TASK}/screenshots"):
+            return httpx.Response(200, json={"urls": ["https://shots.mobilerun.test/1.png"]})
+        if path.endswith("/cancel"):
+            return httpx.Response(200, json={})
+        return httpx.Response(404, json={"message": "not found"})
+

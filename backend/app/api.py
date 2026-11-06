@@ -85,12 +85,14 @@ def _same(given: str | None, expected: str) -> bool:
     return given is not None and hmac.compare_digest(given.encode(), expected.encode())
 
 
-def sse_frame(event: Event) -> str:
-    return f"id: {event.id}\ndata: {json.dumps(event.public(), ensure_ascii=False)}\n\n"
+def sse_frame(event: Event, view: Callable[[Event], dict] | None = None) -> str:
+    data = view(event) if view is not None else event.public()
+    return f"id: {event.id}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
 async def sse_events(gw: Gateway, after_id: int, *, is_disconnected: Callable[[], Awaitable[bool]],
-                     heartbeat: float = HEARTBEAT_SECONDS) -> AsyncIterator[str]:
+                     heartbeat: float = HEARTBEAT_SECONDS,
+                     view: Callable[[Event], dict] | None = None) -> AsyncIterator[str]:
     """Replay everything after `after_id`, then stream live, with `: ping` heartbeats.
 
     Subscribes before replaying, so nothing written in between is lost; ids already sent
@@ -113,7 +115,7 @@ async def sse_events(gw: Gateway, after_id: int, *, is_disconnected: Callable[[]
         while True:  # replay in pages: a reconnect never copies the whole log at once
             page = await asyncio.to_thread(lambda: list(gw.store.since(last, limit=500)))
             for event in page:
-                yield sse_frame(event)
+                yield sse_frame(event, view)
                 last = event.id
             if len(page) < 500:
                 break
@@ -125,7 +127,7 @@ async def sse_events(gw: Gateway, after_id: int, *, is_disconnected: Callable[[]
                 continue
             if event.id <= last:
                 continue
-            yield sse_frame(event)
+            yield sse_frame(event, view)
             last = event.id
     finally:
         unsubscribe()
@@ -149,6 +151,12 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if settings.admin_token and _same(_bearer(authorization), settings.admin_token):
             return  # the CEO console may read what the theater reads
         raise APIError(401, "unauthorized", "theater token required")
+
+    def is_admin(authorization: str | None) -> bool:
+        """v1.7.1 hiding: only a real ADMIN_TOKEN bearer sees a flagged case's mail (with no
+        ADMIN_TOKEN set, nobody does: the safe default for injection text)."""
+        settings = gw().settings
+        return bool(settings.admin_token) and _same(_bearer(authorization), settings.admin_token)
 
     def require_admin(authorization: str | None) -> None:
         settings = gw().settings
@@ -180,7 +188,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         batch = list(gw().store.since(after_id, limit=limit + 1))
         has_more = len(batch) > limit
         batch = batch[:limit]
-        return {"data": [e.public() for e in batch],
+        admin = is_admin(authorization)
+        return {"data": [gw().public_event(e, admin=admin) for e in batch],
                 "next_after_id": batch[-1].id if batch else after_id, "has_more": has_more}
 
     @router.get("/api/events/stream")
@@ -191,8 +200,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         start = after_id
         if last_event_id and last_event_id.strip().isdigit():
             start = max(start, int(last_event_id.strip()))
+        admin = is_admin(authorization)
         body = sse_events(gw(), start, is_disconnected=request.is_disconnected,
-                          heartbeat=request.app.state.sse_heartbeat)
+                          heartbeat=request.app.state.sse_heartbeat,
+                          view=lambda e: gw().public_event(e, admin=admin))
         return StreamingResponse(body, media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 

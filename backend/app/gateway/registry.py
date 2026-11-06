@@ -98,6 +98,25 @@ def _sponsor(name: str, choice: str, settings: Settings):
             inbox=_need(settings.inbox_clients, "MAIL_INBOX_CLIENTS", switch),
             data_dir=settings.data_dir, base_url=_https(settings.agentmail_base_url, switch),
             location=settings.call_location)
+    if name == "device" and choice == "mobilerun":  # task 9 (agents lane's adapter)
+        from app.gateway.adapters.mobilerun import MobilerunDevice
+
+        switch = "ADAPTER_DEVICE=mobilerun"
+        if settings.adapters.get("mail") != "agentmail":
+            raise AdapterNotReady(f"{switch} needs ADAPTER_MAIL=agentmail (the phone opens real "
+                                  "mail)")
+        _need(settings.mail_qa_bcc, "MAIL_QA_BCC", switch)  # the phone's mailbox
+        return MobilerunDevice(_need(settings.mobilerun_api_key, "MOBILERUN_API_KEY", switch),
+                               device_id=settings.mobilerun_device_id or None,
+                               mail_app=settings.mobilerun_mail_app or None,
+                               # mandatory: only memos from our own sender count
+                               sender=_need(settings.mobilerun_memo_sender,
+                                            "MOBILERUN_MEMO_SENDER", switch),
+                               model=settings.mobilerun_model or None)
+    if name == "scrape" and choice == "apify":  # task 9 (agents lane's adapter)
+        from app.gateway.adapters.apify import ApifyScrape
+
+        return ApifyScrape(_need(settings.apify_token, "APIFY_TOKEN", "ADAPTER_SCRAPE=apify"))
     if name == "social" and choice == "naive":
         from app.gateway.adapters.naive_social import NaiveSocial
 

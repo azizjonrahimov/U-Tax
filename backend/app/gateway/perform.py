@@ -56,7 +56,9 @@ from app.gateway.ports import (
     PortError,
     Ports,
     Post,
+    Rejected,
     Slot,
+    Unavailable,
 )
 from app.gateway.ports.store import EventStorePort, EventWriteError
 from app.gateway.pricing import estimate_usd, parse_usd, usd_string
@@ -64,6 +66,8 @@ from app.gateway.projections import TRANSITIONS, TRUST_TYPES, Case, State, rebui
 from app.gateway.projections import money_text
 from app.gateway.settings import Settings
 from app.gateway.templates import (
+    MEMO_REF,
+    with_reference,
     FACT_LABELS,
     MEMO_SUBJECT,
     NOT_ELIGIBLE_REASONS,
@@ -79,6 +83,10 @@ from app.gateway.templates import (
 log = logging.getLogger("utax.perform")
 
 FEE_CACHE_SECONDS = 6 * 3600
+FEE_REFRESH_SECONDS = 5 * 3600  # v1.7 §6f: refreshed before the 6 h TTL, outside the lock
+PHONE_ATTEMPTS = 3  # v1.7: per memo version; only an ok result ends them
+PHONE_RUN_TIMEOUT = 10 * 60  # a cloud-phone task still running after this is cancelled
+LAW_SEARCHES_PER_HOUR = 20  # v1.7, firm-wide
 AGENTS = ("cos", "intake", "tax", "qa", "acct", "mkt", "hr")
 # Contract §6 "Agent" column: the token's actor may call only these (get_case: any).
 TOOL_ACTORS: dict[str, tuple[str, ...]] = {
@@ -269,6 +277,13 @@ class Gateway:
         self._lock = threading.RLock()
         self._listeners: list[Callable[[Event], None]] = []
         self._fee_cache: tuple[float, FeeQuote] | None = None
+        # v1.7 §6f: slow sponsor I/O never runs under self._lock
+        self._phone_jobs: dict[str, dict[str, Any]] = {}
+        self._jobs_lock = threading.Lock()
+        self._fee_refresh_lock = threading.Lock()
+        self._epoch: str | None = None
+        self._law_inflight = 0  # law searches reserved but not yet recorded (cap, §6f)
+        self._fee_tried_at = 0.0
         self.state: State = rebuild(store.since(0))
         self.templates = Templates(settings.templates_dir, settings.memo_template_path)
         self._handlers: dict[str, Callable[[dict], dict]] = {
@@ -308,6 +323,8 @@ class Gateway:
         }
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
+        # reads that touch a slow port run before the lock is taken (contract §6f)
+        self._slow_reads: dict[str, Callable[[dict], dict]] = {"law_search": self._law_fetch}
         self._outbox_tries: dict[str, tuple[int, float]] = {}
         self._outbox_inflight: set[str] = set()
         self._digest_backoff_until = 0.0
@@ -400,6 +417,30 @@ class Gateway:
         self._deliver_wakes(owed)
         return owed
 
+    HIDDEN = "[hidden: flagged by QA]"
+
+    def flagged_injection(self, case_id: str | None) -> bool:
+        case = self.state.cases.get(case_id) if case_id else None
+        return case is not None and "possible_injection" in case.flags
+
+    def public_event(self, event: Event, *, admin: bool = False) -> dict[str, Any]:
+        """An event as theater readers see it (v1.7.1): once QA flags a case as a possible
+        injection, every event of that case, earlier ones too, has its subject and body
+        replaced. The admin token still sees the originals."""
+        out = event.public()
+        if admin or not self.flagged_injection(event.case_id):
+            return out
+        payload = dict(out["payload"])
+        for key in ("subject", "body"):
+            if key in payload:
+                payload[key] = self.HIDDEN
+        # the same rule for every other field that carries the client's words
+        if event.type == "voice.command" and "text" in payload:
+            payload["text"] = self.HIDDEN
+        if isinstance(payload.get("quotes"), dict):
+            payload["quotes"] = {k: self.HIDDEN for k in payload["quotes"]}
+        return {**out, "payload": payload}
+
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The
         per-candidate list is admin-only (v1.6.1); the theater gets counts."""
@@ -421,9 +462,28 @@ class Gateway:
                                                 "message": f"{actor} may not call {name}"})
         args = dict(args or {})
         args.pop("_actor", None)  # never caller-supplied
+        args.pop("_prefetch", None)
         if actor is not None:
             args["_actor"] = actor
-        result, wakes = self._perform_locked(name, handler, args)
+        slow = self._slow_reads.get(name)
+        if slow is not None:
+            try:
+                args["_prefetch"] = slow(args)  # outside the lock
+            except Exception:  # noqa: BLE001 - a broken adapter must not kill the server
+                log.exception("%s failed unexpectedly before the lock", name)
+                return ToolResult("error", error={"code": "internal_error",
+                                                  "message": f"{name} failed unexpectedly"})
+        try:
+            result, wakes = self._perform_locked(name, handler, args)
+        finally:
+            if args.get("_law_reserved"):
+                with self._lock:
+                    self._law_inflight -= 1
+        if name == "phone_check" and result.status == "done" and result.data.get("pending"):
+            try:
+                self.advance_phone_jobs()  # outside the lock: a local device is done now
+            except Exception:  # noqa: BLE001 - the tick tries again
+                log.exception("phone job failed to advance")
         # Outside the lock: a slow Naïve call or CRM mirror never blocks the next write.
         self._deliver_wakes(wakes)
         if result.status == "done" and name not in self.READ_ONLY:
@@ -661,25 +721,78 @@ class Gateway:
         raise ToolError(last.code if last else "port_error", f"{what} failed: {last}")
 
     def _fee(self) -> FeeQuote:
+        """The annual report fee, under the lock: the warmed cache or the saved snapshot,
+        never a fetch (v1.7 §6f: refresh_fee() fetches, outside the lock)."""
         cached = self._fee_cache
         if cached and time.monotonic() - cached[0] < FEE_CACHE_SECONDS:
             return cached[1]
-        quote = None
+        cents = self._snapshot_fee_cents()
+        if cents is None:
+            raise Refused("fee_unknown", "annual report fee unknown: no page and no snapshot")
+        return FeeQuote(cents, "snapshot")
+
+    def _snapshot_fee_cents(self) -> int | None:
+        path = self.settings.fixtures_dir / "snapshots" / "delaware-fees.html"
+        return parse_fee_cents(path.read_text(encoding="utf-8")) if path.exists() else None
+
+    def refresh_fee(self, *, force: bool = False) -> None:
+        """Fetch the Delaware fee page outside the lock (at boot, then from the tick before
+        the 6 h TTL). A live fee that differs from the snapshot is not used: the snapshot
+        stays and the CEO is told once per differing value."""
+        if not self._fee_refresh_lock.acquire(blocking=False):
+            return  # another refresh is running
         try:
-            page = self.ports.scrape.fetch_page(DELAWARE_FEE_URL)
-            cents = parse_fee_cents(page.html)
-            if cents is not None:
-                quote = FeeQuote(cents, page.source)
-        except PortError as err:
-            log.warning("fee page fetch failed (%s); using the saved snapshot", err)
-        if quote is None:
-            path = self.settings.fixtures_dir / "snapshots" / "delaware-fees.html"
-            cents = parse_fee_cents(path.read_text(encoding="utf-8")) if path.exists() else None
-            if cents is None:
-                raise Refused("fee_unknown", "annual report fee unknown: no page and no snapshot")
-            quote = FeeQuote(cents, "snapshot")
-        self._fee_cache = (time.monotonic(), quote)
-        return quote
+            cached = self._fee_cache
+            if cached and not force and time.monotonic() - cached[0] < FEE_REFRESH_SECONDS:
+                return
+            if not force and time.monotonic() - self._fee_tried_at < 600:
+                return  # a failed refresh retries every 10 minutes, not every tick
+            self._fee_tried_at = time.monotonic()
+            snapshot = self._snapshot_fee_cents()
+            live, source, ran = None, "snapshot", False
+            try:
+                page = self.ports.scrape.fetch_page(DELAWARE_FEE_URL)
+                live, source, ran = parse_fee_cents(page.html), page.source, True
+            except (Unavailable, Rejected) as err:  # the run may have started: it is paid
+                ran = True
+                log.warning("fee page fetch failed (%s); the snapshot stays", err.code)
+            except PortError as err:  # not configured, rate limited: nothing ran
+                log.warning("fee page fetch failed (%s); the snapshot stays", err.code)
+            if ran:
+                self._book_run(self.ports.scrape.provider, "page", None)
+            if live is not None and (snapshot is None or live == snapshot):
+                quote = FeeQuote(live, source)
+            elif snapshot is not None:
+                quote = FeeQuote(snapshot, "snapshot")
+                if live is not None:  # v1.7: never quote an unchecked fee change
+                    with self._lock:
+                        self._notify_ceo(
+                            "flagged", "Fee page differs from snapshot",
+                            f"fee page differs from snapshot: the Delaware page shows "
+                            f"{format_usd(live)}, the saved snapshot {format_usd(snapshot)}. "
+                            "Memos use the snapshot until a human checks.",
+                            key=f"ceo:fee:{live}:{snapshot}")
+            else:
+                return  # nothing usable: _fee() refuses until a page or snapshot exists
+            self._fee_cache = (time.monotonic(), quote)
+        finally:
+            self._fee_refresh_lock.release()
+
+    def _book_run(self, provider: str, kind: str, case_id: str | None,
+                  key: str | None = None) -> None:
+        """v1.7 §6a: one estimate per sponsor run (outside the lock). Local runs cost nothing."""
+        from app.gateway.pricing import APIFY_RUN_USD, MOBILERUN_RUN_USD
+
+        price = {"apify": APIFY_RUN_USD, "mobilerun": MOBILERUN_RUN_USD}.get(provider)
+        if price is None:
+            return
+        args = {"provider": provider, "model": f"{provider}-{kind}", "cost_usd": str(price),
+                "estimated": True, "case_id": case_id}
+        if key:
+            args["idempotency_key"] = key
+        result = self.perform("book_spend", args)
+        if result.status != "done":
+            log.warning("spend estimate for a %s run not booked: %s", provider, result.error)
 
     # ------------------------------------------------------------ inbound
 
@@ -1411,22 +1524,60 @@ class Gateway:
 
     # ------------------------------------------------------------ tax tools
 
-    def _law_search(self, args: dict) -> dict:
-        case = self._case(args)
-        query = _str(args, "query", max_len=300)
+    def _law_searches_last_hour(self) -> int:
+        hour_ago = self._now() - timedelta(hours=1)
+        return sum(1 for ts in self.state.law_log if parse_ts(ts) > hour_ago)
+
+    def _law_fetch(self, args: dict) -> dict:
+        """law_search's slow half, before the lock (v1.7 §6f): clean the query, check the
+        hourly cap, run the search. The handler re-checks under the lock and records it."""
+        from app.gateway.adapters.apify import clean_query
+
+        raw = args.get("query")
+        case_id = args.get("case_id")
+        # the handler's own checks first: nothing paid runs for a call it would refuse
+        if not isinstance(raw, str) or not raw.strip() or len(raw.strip()) > 300 \
+                or not isinstance(case_id, str):
+            return {"query": "", "skipped": True}
+        query = clean_query(raw)[:300]
+        with self._lock:
+            known = case_id.strip() in self.state.cases
+            capped = self._law_searches_last_hour() + self._law_inflight >= LAW_SEARCHES_PER_HOUR
+            if query and known and not capped:
+                self._law_inflight += 1  # reserved: released after the handler ran
+                args["_law_reserved"] = True
+        if not query or not known or capped:
+            return {"query": query, "skipped": True, "capped": capped}
         try:
             hits = self.ports.scrape.search(query)
-            results = [{"cite": h.cite, "snippet": h.snippet} for h in hits]
-            status = "ok"
+            out = {"query": query, "status": "ok",
+                   "results": [{"cite": h.cite, "snippet": h.snippet} for h in hits]}
         except PortError as err:
-            log.warning("law search failed: %s", err)
-            results, status = [], "failed"
+            log.warning("law search failed: %s", err.code)
+            out = {"query": query, "status": "failed", "results": []}
+        self._book_run(self.ports.scrape.provider, "search", str(args.get("case_id")))
+        return out
+
+    def _law_search(self, args: dict) -> dict:
+        case = self._case(args)
+        _str(args, "query", max_len=300)
+        fetched = args.get("_prefetch") or {}
+        query = fetched.get("query") or ""
+        if not query:
+            raise Refused("bad_input", "the query has no searchable words left after cleaning "
+                                       "(no emails, amounts or ID numbers)")
+        if fetched.get("skipped"):
+            if fetched.get("capped"):
+                raise Refused("law_cap",
+                              f"law_search is limited to {LAW_SEARCHES_PER_HOUR} an hour")
+            raise Refused("bad_input", "law_search needs a known case_id and a query")
+        status, results = fetched.get("status", "failed"), fetched.get("results", [])
         self._emit([NewEvent(type="law.searched", actor="tax", case_id=case.case_id,
                              provider=self.ports.scrape.provider, status=status,
                              payload={"query": query, "results": results})])
         if status != "ok":
             raise ToolError("search_failed", "law search is unavailable right now")
-        return {"results": results}
+        return {"results": results, "query": query}
 
     def _engine_result(self, facts: dict, fee: FeeQuote) -> dict:
         result = compute_franchise_tax(
@@ -1568,7 +1719,20 @@ class Gateway:
         label = re.sub(r"\s+", " ", label)[:40].strip()
         return label.title() if label else "there"
 
-    def _memo_body(self, case: Case, *, outgoing: bool = False) -> str:
+    def _memo_ref(self, key: str) -> str:
+        """v1.7: `UTX-` + 12 capitals/digits, unique per memo version and per event log
+        (the log's first event is in the hash: a reset never repeats an old reference, so a
+        rehearsal memo in the QA mailbox can't be mistaken for a real one)."""
+        if self._epoch is None:
+            first = next(iter(self.store.since(0, limit=1)), None)
+            self._epoch = f"{first.id}:{first.ts}" if first is not None else ""
+        return "UTX-" + hashlib.sha256(f"{self._epoch}|{key}".encode()).hexdigest()[:12].upper()
+
+    def _memo_body(self, case: Case, *, outgoing: bool = False, memo_ref: str) -> str:
+        """The memo text. `memo_ref` is minted once per memo version (_memo_ref of the memo
+        key) and reused for both renders, retries and memo.sent; no render without it."""
+        if not MEMO_REF.fullmatch(memo_ref or ""):
+            raise Refused("template_invalid", "memo_ref must be UTX- plus 8-16 capitals/digits")
         facts = case.facts or {}
         rnd_known = facts.get("gross_receipts_cents") is not None \
             and facts.get("years_with_receipts") is not None
@@ -1577,7 +1741,8 @@ class Gateway:
                 masked_name=case.masked_name, result=case.result,
                 form5472=bool(case.result.get("form5472_flag")),
                 rnd=bool(case.result.get("rnd_flag")), rnd_known=rnd_known,
-                greeting_name=self._greeting(case) if outgoing else case.masked_name))
+                greeting_name=self._greeting(case) if outgoing else case.masked_name,
+                memo_ref=memo_ref))
         except TemplateError as err:
             raise Refused("template_invalid", str(err)) from err
 
@@ -1601,15 +1766,18 @@ class Gateway:
                               "went to this address")
             raise Refused("memo_cap", f"{MEMOS_PER_ADDRESS_PER_DAY} memos a day per address; "
                                       "the case is BLOCKED for the CEO")
-        body = self._memo_body(case)  # the event copy (masked)
-        outgoing = self._memo_body(case, outgoing=True)  # the mail the client receives
+        memo_ref = self._memo_ref(key)
+        body = with_reference(self._memo_body(case, memo_ref=memo_ref), memo_ref)  # masked
+        outgoing = with_reference(self._memo_body(case, outgoing=True, memo_ref=memo_ref),
+                                  memo_ref)  # the mail the client receives
         summary = (f"{self._first('email')}memo email: {case.masked_name}, "
                    f"{format_usd(case.result['authorized_method_cents'])} → "
                    f"{format_usd(case.result['total_cents'])}")
         self._gate("email", key, _cap(summary), case.case_id, public=case.priority)
         try:
             sent = self._with_retry("memo email", lambda: self.ports.mail.send(
-                OutMail(to=case.reply_to, subject=MEMO_SUBJECT, body=outgoing), key))
+                OutMail(to=case.reply_to, subject=MEMO_SUBJECT, body=outgoing,
+                        bcc=self.settings.mail_qa_bcc or None), key))
         except ToolError as err:
             self._block(case, f"memo email failed: {err.code}")
             raise
@@ -1621,7 +1789,7 @@ class Gateway:
                      provider=self.ports.mail.provider,
                      payload={"to_masked": mask_email(case.reply_to), "subject": MEMO_SUBJECT,
                               "body": body, "message_id": sent.message_id,
-                              "seconds_since_last_fact": seconds},
+                              "seconds_since_last_fact": seconds, "memo_ref": memo_ref},
                      idempotency_key=key, private={"public": case.priority}),
             self._status(case, "SENT"),
             NewEvent(type="crm.sync_requested", actor="system", case_id=case.case_id,
@@ -1630,31 +1798,117 @@ class Gateway:
                      private={"sync_key": f"{case.case_id}:memo_sent:v{case.facts_version}r{case.reopens}"}),
         ])
         return {"message_id": sent.message_id, "seconds_since_last_fact": seconds,
-                "next": "book_call"}
+                "memo_ref": memo_ref, "next": "book_call"}
 
     def _phone_check(self, args: dict) -> dict:
+        """v1.7: starts a phone run for the latest memo and returns {pending: true}; the
+        run itself happens outside the lock (advance_phone_jobs, also from the tick), which
+        writes phone.checked. Only an ok result ends the attempts; at most 3 per memo."""
         case = self._case(args)
         if case.memo_message_id is None:
             raise Refused("no_memo", "send_memo first")
-        key = f"phone:{case.case_id}:v{case.memo_version}"
-        done = self._done_from(key)
-        if done is not None:
-            return {**done.payload, "duplicate": True}
-        memo = next((e for e in self.store.since(0)
-                     if e.type == "memo.sent" and e.case_id == case.case_id
-                     and e.payload["message_id"] == case.memo_message_id), None)
-        body = memo.payload["body"] if memo else ""
+        ref = case.memo_ref
+        if not ref:
+            raise Refused("no_memo_ref", "this memo has no reference line; send a new memo "
+                                         "to phone-check it")
+        attempts = case.phone_attempts.get(ref, [])
+        if "ok" in attempts:
+            return {**(case.phone or {}), "pending": False, "duplicate": True}
+        job_id = f"{case.case_id}:{ref}"
+        with self._jobs_lock:
+            running = self._phone_jobs.get(job_id)
+            if running is not None:
+                return {"pending": True, "attempt": running["attempt"]}
+            if len(attempts) >= PHONE_ATTEMPTS:
+                return {"pending": False, "status": "skipped",
+                        "status_note": f"{PHONE_ATTEMPTS} phone attempts used for this memo"}
+            memo = next((e for e in reversed(list(self.store.since(0)))
+                         if e.type == "memo.sent" and e.case_id == case.case_id
+                         and e.payload["message_id"] == case.memo_message_id), None)
+            attempt = len(attempts) + 1
+            self._phone_jobs[job_id] = {
+                "case_id": case.case_id, "memo_ref": ref, "attempt": attempt,
+                "key": f"phone:{case.case_id}:{ref}:a{attempt}",
+                "mail_id": case.memo_message_id, "body": memo.payload["body"] if memo else "",
+                "task_id": None, "started": None, "busy": False}
+        return {"pending": True, "attempt": attempt}
+
+    def advance_phone_jobs(self) -> None:
+        """Move every pending phone run one step, outside the gateway lock (§6f). A
+        two-phase device (Mobilerun) is started, then polled on later calls; a one-call
+        device (local) finishes at once. Only phone.checked is written under the lock."""
+        with self._jobs_lock:
+            jobs = [job for job in self._phone_jobs.values() if not job["busy"]]
+            for job in jobs:
+                job["busy"] = True
+        for job in jobs:
+            try:
+                self._advance_phone(job)
+                job["crashes"] = 0
+            except Exception as err:  # noqa: BLE001 - an adapter bug must not stall the rest
+                job["crashes"] = job.get("crashes", 0) + 1
+                log.exception("phone job %s failed unexpectedly", job["key"])
+                if job["crashes"] >= 3:  # retire it: the attempt counts as skipped
+                    try:
+                        self._record_phone(job, None, Unavailable(f"crashed: {type(err).__name__}"))
+                    except Exception:  # noqa: BLE001
+                        log.exception("phone job %s could not be retired", job["key"])
+            finally:
+                job["busy"] = False
+
+    def _advance_phone(self, job: dict[str, Any]) -> None:
+        port = self.ports.device
+        two_phase = callable(getattr(port, "start", None)) and \
+            callable(getattr(port, "finish", None))
+        check, error = None, None
         try:
-            check = self.ports.device.open_and_capture(case.memo_message_id, body)
-            payload = {"screenshot_url": check.screenshot_url, "rendered_ok": check.rendered_ok}
+            if not two_phase:
+                check = port.open_and_capture(job["mail_id"], job["body"])
+            elif job["task_id"] is None:
+                job["task_id"] = port.start(job["mail_id"], job["body"], key=job["key"],
+                                            reference=job["memo_ref"])
+                job["started"] = time.monotonic()
+                self._book_run(port.provider, "task", job["case_id"], key=f"run:{job['key']}")
+                return  # polled from the tick
+            else:
+                check = port.finish(job["task_id"])
+                if check is None:
+                    if time.monotonic() - job["started"] < PHONE_RUN_TIMEOUT:
+                        return
+                    if callable(getattr(port, "cancel", None)):
+                        port.cancel(job["task_id"])
+                    raise Unavailable("the phone run took too long")
+        except PortError as err:
+            error = err
+        self._record_phone(job, check, error)
+
+    def _record_phone(self, job: dict[str, Any], check: Any, error: PortError | None) -> None:
+        if check is not None:
             status = "ok"
-        except PortError as err:  # never blocks the case
-            log.warning("phone check skipped: %s", err)
-            payload, status = {"screenshot_url": None, "rendered_ok": False}, "skipped"
-        self._emit([NewEvent(type="phone.checked", actor="qa", case_id=case.case_id,
-                             provider=self.ports.device.provider, status=status,
-                             payload=payload, idempotency_key=key)])
-        return {**payload, "status": status}
+            note = ("memo opened on a cloud phone" if check.rendered_ok
+                    else "memo found on the phone, but unreadable or without its disclaimer")
+        else:
+            status = "skipped"
+            note = f"phone check skipped ({error.code if error else 'unknown'})"
+        if error is not None:
+            log.warning("phone check %s skipped: %s", job["key"], error.code)
+        event = NewEvent(type="phone.checked", actor="qa", case_id=job["case_id"],
+                         provider=self.ports.device.provider, status=status,
+                         payload={"rendered_ok": bool(check and check.rendered_ok),
+                                  "status_note": note},
+                         idempotency_key=job["key"],
+                         private={"screenshot_url": check.screenshot_url if check else None,
+                                  "memo_ref": job["memo_ref"], "attempt": job["attempt"],
+                                  "task_id": job["task_id"]})
+        try:
+            with self._lock:
+                self.store.ensure_writable()
+                self._emit([event])
+        except EventWriteError as err:  # keep the job: the next tick records it
+            log.error("phone.checked not logged yet: %s", err)
+            return
+        with self._jobs_lock:
+            self._phone_jobs.pop(f"{job['case_id']}:{job['memo_ref']}", None)
 
     def _book_call(self, args: dict) -> dict:
         case = self._case(args)
@@ -1968,7 +2222,7 @@ class Gateway:
                 cost = parse_usd(raw_cost) if raw_cost not in (None, "") else None
         except (TypeError, ValueError, InvalidOperation) as err:
             raise Refused("bad_input", f"bad cost: {err}") from err
-        estimated = cost is None
+        estimated = cost is None or args.get("estimated") is True  # v1.7 per-run estimates
         if cost is None:
             cost = estimate_usd(model, tokens_in, tokens_out)
         case_id = _str(args, "case_id", required=False, max_len=64)

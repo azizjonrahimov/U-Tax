@@ -140,13 +140,14 @@ class AgentMailMail:
             raise NotConfigured("MAIL_INBOX_CLIENTS is not set (the sending inbox)")
         subject = _one_line(mail.subject, SUBJECT_MAX)
         # the same gateway key with a different mail (a reset event log) is a new send
-        send_key = f"{key}|{_http.fingerprint(inbox, mail.to, subject, mail.body)}"
+        send_key = f"{key}|{_http.fingerprint(inbox, mail.to, subject, mail.body, mail.bcc)}"
         known = self._index.get(send_key)
         if known:
             return SentMail(message_id=known)
         response = _http.call(self.provider, lambda: self._client.post(
             f"/v0/inboxes/{quote(inbox, safe='@')}/messages/send",
-            json={"to": [mail.to], "subject": subject, "text": mail.body},
+            json={"to": [mail.to], "subject": subject, "text": mail.body,
+                  **({"bcc": [mail.bcc]} if mail.bcc else {})},
             headers={"Idempotency-Key": _http.safe_key(send_key)}))
         message_id = (response.json() or {}).get("message_id")
         if not message_id:

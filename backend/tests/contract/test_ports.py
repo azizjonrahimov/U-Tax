@@ -135,23 +135,39 @@ def test_crm_upsert_is_idempotent_and_maps_errors(name, tmp_path):
 
 # ---------------------------------------------------------------- device
 
-DEVICE = {"local": lambda tmp, faults: local.LocalDevice(tmp, faults)}
+def _mobilerun(tmp: Path, faults: FaultPlan):
+    from app.gateway.adapters.mobilerun import MobilerunDevice
+    from tests.adapters.fakes import FakeMobilerun
+
+    return MobilerunDevice("mr_test", transport=FakeMobilerun(faults).transport(),
+                           sleep=lambda s: None)
+
+
+DEVICE = {"local": lambda tmp, faults: local.LocalDevice(tmp, faults), "mobilerun": _mobilerun}
+MEMO = "Hi Team #7,\nEducational estimate\n\nReference: UTX-7F3K9Q2M"  # v1.7 last line
 
 
 @pytest.mark.parametrize("name", _ids(DEVICE))
 def test_device_capture(name, tmp_path):
     faults = FaultPlan()
     port = DEVICE[name](tmp_path, faults)
-    check = port.open_and_capture("local-msg-1", "Hi Team #7,\nEducational estimate")
+    check = port.open_and_capture("local-msg-1", MEMO)
     assert isinstance(check.screenshot_url, str) and isinstance(check.rendered_ok, bool)
     faults.add(Unavailable())
     with pytest.raises(Unavailable):
-        port.open_and_capture("local-msg-1", "x")
+        port.open_and_capture("local-msg-1", MEMO)
 
 
 # ---------------------------------------------------------------- scrape
 
-SCRAPE = {"local": lambda tmp, faults: local.LocalScrape(FIXTURES, faults)}
+def _apify(tmp: Path, faults: FaultPlan):
+    from app.gateway.adapters.apify import ApifyScrape
+    from tests.adapters.fakes import FakeApify
+
+    return ApifyScrape("apify_test", transport=FakeApify(faults).transport())
+
+
+SCRAPE = {"local": lambda tmp, faults: local.LocalScrape(FIXTURES, faults), "apify": _apify}
 
 
 @pytest.mark.parametrize("name", _ids(SCRAPE))
