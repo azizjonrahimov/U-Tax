@@ -51,6 +51,15 @@ export function normalizeDecimal(decimal: string): string {
   return `${sign}${whole}${frac ? `.${frac}` : ""}`;
 }
 
+/** ISO time → local wall clock "9:30" (or "13:14:06" with seconds); "" for an invalid time. */
+export function formatClock(iso: string | undefined, seconds = false): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getHours()}:${two(d.getMinutes())}${seconds ? `:${two(d.getSeconds())}` : ""}`;
+}
+
 /** Decimal USD string → display: "0.0034" → "$0.0034", "11.38" → "$11.38", "1E-7" → "$0.0000001". */
 export function formatUsd(decimal: string): string {
   const [sign, whole, frac] = splitDecimal(decimal);

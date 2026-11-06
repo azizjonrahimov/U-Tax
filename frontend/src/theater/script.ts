@@ -33,6 +33,7 @@ export type Action =
   | "circle" // QA check failed on target
   | "status" // a status chip changes to `text`
   | "block" // red BLOCKED card (flag NEXT_PUBLIC_SHOW_BLOCKED)
+  | "flag" // amber "flagged" chip on a case card (case.flagged, contract v1.4)
   | "count" // a rail counter ticks
   | "say" // spoken words (voice command, brief)
   | "dial" // phone call starts
@@ -62,8 +63,13 @@ export interface CursorStep {
   meta?: Meta;
 }
 
-/** "gap": ids that never arrived before a higher id did (eventId = first missing id). */
-export type SkipReason = "unknown_type" | "status_skipped" | "bad_event" | "bad_payload" | "gap";
+export type SkipReason = "unknown_type" | "status_skipped" | "bad_event" | "bad_payload";
+
+/** Ids that were jumped over. Info only: contract §2 (v1.3.2) allows gaps (e.g. Postgres rollbacks). */
+export interface IdGap {
+  from: number;
+  to: number;
+}
 
 export interface SkippedEvent {
   eventId: number;
@@ -82,6 +88,8 @@ export interface ScriptState {
   caseNames: Readonly<Record<string, string>>;
   /** Which case each case-scoped pane is showing. */
   onScreen: Readonly<Partial<Record<CasePane, string>>>;
+  /** approval_id → action_type, so a touch can be labelled without its free-text note. */
+  approvalTypes: Readonly<Record<string, string>>;
 }
 
 export interface ScriptCursor {
@@ -93,11 +101,15 @@ export interface ScriptCursor {
 export interface Script {
   steps: CursorStep[];
   skipped: SkippedEvent[];
+  /** Events the script applied, once each in id order (rail numbers project from these only). */
+  accepted: UTaxEvent[];
 }
 
 export interface ScriptOptions {
   /** Called once per skipped event. Default: console.warn. */
   log?: (skipped: SkippedEvent) => void;
+  /** Called once per id gap (info only). Default: console.info. */
+  onGap?: (gap: IdGap) => void;
 }
 
 const defaultLog = (s: SkippedEvent) =>
@@ -112,7 +124,7 @@ export function startScript(seed: { caseNames?: Record<string, string>; lastId?:
   const caseNames: Record<string, string> = Object.create(null);
   for (const [id, name] of Object.entries(seed.caseNames ?? {})) caseNames[id] = name;
   const lastId = seed.lastId !== undefined && Number.isSafeInteger(seed.lastId) && seed.lastId >= 0 ? seed.lastId : 0;
-  return { state: { camera: null, caseNames, onScreen: {} }, lastId };
+  return { state: { camera: null, caseNames, onScreen: {}, approvalTypes: Object.create(null) }, lastId };
 }
 
 /** Sheet rows for extracted facts, in display order. */
@@ -147,6 +159,7 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   ["case.status", "rail"],
   ["case.blocked", "rail"],
   ["case.not_eligible", "rail"],
+  ["case.flagged", "rail"],
   ["crm.sync_requested", "rail"],
   ["crm.synced", "rail"],
   ["hr.applicant", "rail"],
@@ -154,6 +167,8 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   ["hr.shortlisted", "rail"],
   ["hr.hired", "rail"],
   ["hr.declined", "rail"],
+  ["hr.questionnaire_sent", "rail"],
+  ["hr.decision_mailed", "rail"],
   ["voice.command", "rail"],
   ["ceo.notified", "rail"],
   ["approval.requested", "rail"],
@@ -167,6 +182,24 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
 ]);
 
 export const KNOWN_TYPES: readonly string[] = [...PANE_OF.keys()];
+
+/** Label for a case with no masked name on the log yet (e.g. a /talk fast-path case). */
+export const NEW_CLIENT = "New client";
+/** Public /talk text is unmoderated: the theater shows at most this many characters of a customer turn. */
+export const MAX_CUSTOMER_TEXT = 240;
+
+/** Clip to at most `max` characters (code points, so an emoji is never split), ending in "…". */
+export const clip = (text: string, max: number) => {
+  const chars = Array.from(text);
+  return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : text;
+};
+
+/** Email text is public input too: keep a single message to a readable length on the projector. */
+export const MAX_EMAIL_BODY = 1200;
+export const MAX_EMAIL_SUBJECT = 160;
+
+/** "social_post" → "social post". */
+const words = (s: string) => s.replace(/_/g, " ");
 
 // ---------------------------------------------------------------------------
 // Payload checks. Each throws PayloadError, which becomes a bad_payload skip.
@@ -193,6 +226,12 @@ function strOrNull(o: Obj, k: string): string | null {
 function int(o: Obj, k: string): number {
   const v = has(o, k) ? o[k] : undefined;
   if (typeof v !== "number" || !Number.isSafeInteger(v)) throw new PayloadError(`${k}: expected integer`);
+  return v;
+}
+/** Money and counts are never negative on the wire. */
+function nonNeg(o: Obj, k: string): number {
+  const v = int(o, k);
+  if (v < 0) throw new PayloadError(`${k}: negative`);
   return v;
 }
 /** Strict: only true/false. A string "false" from an agent is malformed, never truthy. */
@@ -334,9 +373,11 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
   let camera = state.camera;
   let caseNames = state.caseNames; // copy-on-write: only email.received changes it
   let onScreen = state.onScreen;
+  let approvalTypes = state.approvalTypes; // copy-on-write: only approval.requested changes it
   const out: CursorStep[] = [];
   let n = 0;
-  const caseName = () => (ev.case_id !== null && Object.hasOwn(caseNames, ev.case_id) ? caseNames[ev.case_id] : ev.case_id ?? "client");
+  // Never show a raw case id as a name: a /talk case has no masked name yet.
+  const caseName = () => (ev.case_id !== null && Object.hasOwn(caseNames, ev.case_id) ? caseNames[ev.case_id] : NEW_CLIENT);
   const base = (p: Pane) => ({ eventId: ev.id, ts: ev.ts, caseId: ev.case_id, pane: p });
 
   const push = (s: StepInput) => {
@@ -354,7 +395,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     }
     out.push({ ...s, ...base(p), key: `${ev.id}:${n++}` });
   };
-  const done = () => ({ state: { camera, caseNames, onScreen }, steps: out });
+  const done = () => ({ state: { camera, caseNames, onScreen, approvalTypes }, steps: out });
 
   // The cursor shown for this event; a customer's own words get no agent cursor.
   const agent: Agent | null = ev.actor === "system" ? null : ev.actor;
@@ -369,8 +410,8 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     case "email.received": {
       const masked = str(p, "masked_name");
       const from = str(p, "from_masked");
-      const subject = str(p, "subject");
-      const body = str(p, "body");
+      const subject = clip(str(p, "subject"), MAX_EMAIL_SUBJECT);
+      const body = clip(str(p, "body"), MAX_EMAIL_BODY);
       if (ev.case_id !== null) {
         const next: Record<string, string> = Object.create(null);
         Object.assign(next, caseNames, { [ev.case_id]: masked });
@@ -440,11 +481,11 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       break;
     }
     case "tax.computed": {
-      const authorized = formatCents(int(p, "authorized_method_cents"));
-      const assumedPar = formatCents(int(p, "assumed_par_method_cents"));
+      const authorized = formatCents(nonNeg(p, "authorized_method_cents"));
+      const assumedPar = formatCents(nonNeg(p, "assumed_par_method_cents"));
       const chosen = oneOf(p, "chosen", ["assumed_par", "authorized"] as const);
-      const fee = formatCents(int(p, "annual_report_fee_cents"));
-      const total = formatCents(int(p, "total_cents"));
+      const fee = formatCents(nonNeg(p, "annual_report_fee_cents"));
+      const total = formatCents(nonNeg(p, "total_cents"));
       const due = str(p, "due_date");
       const f5472 = bool(p, "form5472_flag");
       const rnd = bool(p, "rnd_flag");
@@ -505,11 +546,12 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       break;
     }
     case "screen.call": {
-      const candidate = str(p, "candidate_id");
-      const excerpt = str(p, "transcript_excerpt");
-      const seconds = int(p, "seconds");
-      push({ target: "phone.dial", agent, action: "dial", text: candidate, meta: { seconds } });
-      push({ target: "phone.transcript", agent, action: "type", text: excerpt });
+      // A candidate's own words and id stay off the projector (hiring is counts only):
+      // the phone pane shows that a screen happened and how long it took.
+      str(p, "candidate_id");
+      str(p, "transcript_excerpt");
+      const seconds = nonNeg(p, "seconds");
+      push({ target: "phone.dial", agent, action: "dial", text: `${Math.max(1, Math.round(seconds / 60))}-min screen`, meta: { seconds } });
       break;
     }
     case "phone.checked": {
@@ -534,6 +576,12 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       push({ target: "rail.cases", agent: null, action: "block", text: str(p, "reason"), meta: { needs: str(p, "needs") } });
       break;
     }
+    case "case.flagged": {
+      if (ev.case_id === null) throw new PayloadError("case_id: required");
+      const kind = str(p, "kind"); // possible_injection | unrealistic_inputs (display only)
+      push({ target: "rail.cases", agent, action: "flag", text: prettyStatus(kind), meta: { kind } });
+      break;
+    }
     case "case.not_eligible": {
       push({ target: "rail.cases", agent: null, action: "status", text: "not eligible", meta: { reason: str(p, "reason") } });
       break;
@@ -548,10 +596,14 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     case "hr.screened":
     case "hr.shortlisted":
     case "hr.hired":
-    case "hr.declined": {
+    case "hr.declined":
+    case "hr.questionnaire_sent":
+    case "hr.decision_mailed": {
+      // Never put a candidate's name (or the free-text note) on the projector:
+      // hiring shows as counts only (controller rule, contract v1.6).
       const stage = suffix(ev.type);
-      const name = str(p, "name_masked");
-      push({ target: "rail.hiring", agent, action: "count", text: `${name} · ${stage}`, meta: { stage, note: str(p, "note"), candidate_id: str(p, "candidate_id") } });
+      str(p, "name_masked");
+      push({ target: "rail.hiring", agent, action: "count", text: stage.replace(/_/g, " "), meta: { stage, candidate_id: str(p, "candidate_id") } });
       break;
     }
     case "voice.command": {
@@ -559,8 +611,10 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       const channel = str(p, "channel"); // display only: vocabulary drift must not drop the event
       const speaker = has(p, "speaker") ? oneOf(p, "speaker", ["customer", "ceo"] as const) : ev.actor === "ceo" ? "ceo" : "customer";
       const caseId = strOrNull(p, "case_id");
-      // A customer's words are inbound speech, not an agent action: no cursor.
-      push({ target: "rail.voice", agent: speaker === "ceo" ? agent : null, action: "say", text, meta: { channel, speaker, case_id: caseId } });
+      // A customer's words are inbound speech, not an agent action: no cursor,
+      // and unmoderated public text is clipped before any renderer sees it.
+      const shown = speaker === "customer" ? clip(text, MAX_CUSTOMER_TEXT) : text;
+      push({ target: "rail.voice", agent: speaker === "ceo" ? agent : null, action: "say", text: shown, meta: { channel, speaker, case_id: caseId } });
       break;
     }
     case "ceo.notified": {
@@ -570,13 +624,26 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       break;
     }
     case "approval.requested": {
-      push({ target: "rail.touches", agent: null, action: "appear", text: str(p, "summary"), meta: { approval_id: str(p, "approval_id"), action_type: str(p, "action_type") } });
+      // The free-text summary can name a candidate ("declined mail: Candidate B"):
+      // the projector shows only the action type.
+      const approvalId = str(p, "approval_id");
+      const actionType = str(p, "action_type");
+      str(p, "summary");
+      const nextTypes: Record<string, string> = Object.create(null);
+      Object.assign(nextTypes, approvalTypes, { [approvalId]: actionType });
+      approvalTypes = nextTypes;
+      push({ target: "rail.touches", agent: null, action: "appear", text: `${words(actionType)} approval`, meta: { approval_id: approvalId, action_type: actionType } });
       break;
     }
     case "touch.training":
     case "touch.operating":
     case "touch.engineering": {
-      push({ target: "rail.touches", agent, action: "count", text: str(p, "note"), meta: { kind: suffix(ev.type), approval_id: strOrNull(p, "approval_id") } });
+      // Notes are free text ("decline Candidate B"): never shown. Label by kind and the approval's action type.
+      str(p, "note");
+      const kind = suffix(ev.type);
+      const approvalId = strOrNull(p, "approval_id");
+      const actionType = approvalId !== null && Object.hasOwn(approvalTypes, approvalId) ? approvalTypes[approvalId] : null;
+      push({ target: "rail.touches", agent, action: "count", text: actionType ? `${kind} · ${words(actionType)}` : kind, meta: { kind, approval_id: approvalId, action_type: actionType } });
       break;
     }
     case "trust.changed": {
@@ -630,8 +697,10 @@ export function appendEvents(
   cursor: ScriptCursor,
   events: readonly UTaxEvent[],
   opts: ScriptOptions = {},
-): { cursor: ScriptCursor; steps: CursorStep[]; skipped: SkippedEvent[] } {
+): { cursor: ScriptCursor; steps: CursorStep[]; skipped: SkippedEvent[]; gaps: IdGap[]; accepted: UTaxEvent[] } {
   const log = opts.log ?? defaultLog;
+  const onGap = opts.onGap ?? ((g: IdGap) => console.info(`[theater] ids ${g.from}..${g.to} not in the log (gap)`));
+  const gaps: IdGap[] = [];
   const applied = (e: UTaxEvent, last: number) => Number.isSafeInteger(e?.id) && e.id >= 1 && e.id <= last;
   // Invalid ids are kept so validation reports them as bad_event.
   const fresh = events.filter((e) => !applied(e, cursor.lastId));
@@ -639,6 +708,7 @@ export function appendEvents(
   let { state, lastId } = cursor;
   const steps: CursorStep[] = [];
   const skipped: SkippedEvent[] = [];
+  const accepted: UTaxEvent[] = [];
   let prev: UTaxEvent | undefined;
   const skip = (s: SkippedEvent) => {
     skipped.push(s);
@@ -653,22 +723,24 @@ export function appendEvents(
       continue;
     }
     prev = ev;
-    if (Number.isSafeInteger(ev?.id) && ev.id > lastId + 1) {
-      // Ids are dense (contract §2). Missing ones can't be inserted later without
-      // changing emitted keys, so report the gap; a late arrival is then dropped.
-      skip({ eventId: lastId + 1, type: "?", reason: "gap", detail: `ids ${lastId + 1}..${ev.id - 1} never arrived` });
+    if (Number.isSafeInteger(ev?.id) && ev.id > lastId + 1 && lastId > 0) {
+      // Ids may skip (contract §2). The event still applies; note the gap as info.
+      const gap = { from: lastId + 1, to: ev.id - 1 };
+      gaps.push(gap);
+      onGap(gap);
     }
     const res = stepsForEvent(state, ev);
     state = res.state;
     for (const s of res.steps) steps.push(s);
     if (res.skipped) skip(res.skipped);
+    if (!res.skipped || (res.skipped.reason !== "bad_event" && res.skipped.reason !== "bad_payload")) accepted.push(ev);
     if (Number.isSafeInteger(ev?.id) && ev.id >= 1) lastId = Math.max(lastId, ev.id);
   }
-  return { cursor: { state, lastId }, steps, skipped };
+  return { cursor: { state, lastId }, steps, skipped, gaps, accepted };
 }
 
 /** The whole log at once (fixture, replay). Sorted by id; exact duplicates collapse, conflicting ones are reported. */
 export function buildScript(events: readonly UTaxEvent[], opts: ScriptOptions = {}): Script {
-  const { steps, skipped } = appendEvents(startScript(), events, opts);
-  return { steps, skipped };
+  const { steps, skipped, accepted } = appendEvents(startScript(), events, opts);
+  return { steps, skipped, accepted };
 }
