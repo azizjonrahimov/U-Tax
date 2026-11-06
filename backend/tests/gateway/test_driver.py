@@ -76,10 +76,15 @@ def test_ssn_fixture_is_redacted_everywhere(h, crew):
     assert "123-45-6789" not in raw and "12-3456789" not in raw
 
 
-def test_applicant_is_screened_and_shortlisted(h, crew):
+def test_applicant_is_screened_once_the_answers_arrive(h, crew):
     mail = h.ports.mail.parse_inbound(
         (REPO_ROOT / "fixtures" / "hiring" / "01-applicant-ea.eml").read_bytes())
     h.ok("receive_email", mail=mail, inbox="hiring")
+    approve_all(h, crew)  # the CEO OKs the first email: the questionnaire goes out
+    assert crew.wait_idle()
+    assert h.gw.state.candidates["cand_1"]["stage"] == "applicant"  # no answers yet
+    h.ok("inject_email", **{"from": "ann@example.com", "subject": "Re: gig", "inbox": "hiring",
+                            "body": "1. EA, IRS. 2. Six years of startup tax. 3. Sunday. 4. $150"})
     assert crew.wait_idle()
     assert h.gw.state.candidates["cand_1"]["stage"] == "shortlisted"
 

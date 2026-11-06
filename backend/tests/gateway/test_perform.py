@@ -252,7 +252,7 @@ def test_ask_client_max_two_then_blocked(h):
     h.approve_pending(first)
     h.ok("ask_client", case_id=case_id, missing=[])
     body = h.events("client.asked")[0].payload["body"]
-    assert "No SSNs or EINs please." in body
+    assert "Please don't send SSNs, EINs" in body
     assert h.ok("ask_client", case_id=case_id)["already_asked"] is True  # no reply yet
     h.new_case(body="still not sure", sender="hello@team12.ai")
     h.ok("ask_client", case_id=case_id)

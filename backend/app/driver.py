@@ -140,6 +140,8 @@ class LocalCrew:
             self._call("cos", "firm_brief", {})
             return
         if message.startswith("New applicant "):
+            return  # v1.5: nothing to screen until the questionnaire answers arrive
+        if message.startswith("Applicant answered "):
             cand = _CAND.search(message)
             if cand:
                 self._screen(cand.group(1))

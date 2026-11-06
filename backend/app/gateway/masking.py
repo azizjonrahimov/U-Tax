@@ -103,6 +103,17 @@ _COMPANY_PHRASE = re.compile(
 _PHONE = re.compile(r"(?<![\w$])(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}(?!\d)")
 
 
+_SPOKEN_EMAIL = re.compile(
+    r"(?i)\b[a-z0-9][\w.+-]*\s+(?:at|@)\s+[a-z0-9-]+(?:\s*(?:dot|\.)\s*[a-z]{2,})+\b"
+    r"|\b[a-z0-9][\w.+-]*\s+at\s+(?:gmail|googlemail|yahoo|outlook|hotmail|icloud|"
+    r"proton(?:mail)?|aol|live|me)\b")
+
+
+def mask_spoken_emails(text: str) -> str:
+    """/talk transcripts: "jane at example dot com", "jane at gmail" -> hidden (v1.5)."""
+    return _SPOKEN_EMAIL.sub("[email hidden]", text)
+
+
 def has_email(text: str) -> bool:
     return bool(_EMAIL.search(text))
 

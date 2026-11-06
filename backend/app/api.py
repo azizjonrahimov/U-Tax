@@ -155,6 +155,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if settings.admin_token and not _same(_bearer(authorization), settings.admin_token):
             raise APIError(401, "unauthorized", "admin token required")
 
+    def _talk_limit(limiter: RateLimiter) -> None:
+        # PUBLIC_MODE=event: the finale crowd shares one venue IP, so 60/min per IP
+        limiter.limit = 60 if gw().settings.public_mode == "event" else 20
+
     def act(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return result_or_raise(gw().perform(name, args))
 
@@ -200,8 +204,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if body.get("speaker") == "ceo":
             require_admin(authorization)  # a typed order is the CEO's
         else:
+            _talk_limit(public_limiter)
             public_limiter.check(_client_ip(request))  # the public /talk page
-        return act("voice", _pick(body, "text", "channel", "speaker", "reply_email"))
+        return act("voice", _pick(body, "text", "channel", "speaker", "reply_email", "turns",
+                                  "request_id"))
 
     @router.post("/api/trust")
     def trust(body: dict = Body(...), authorization: str | None = Header(None)):
@@ -223,9 +229,12 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
 
     @router.post("/api/voice/session")
     def voice_session(request: Request):
+        _talk_limit(public_limiter)
         public_limiter.check(_client_ip(request))
+        prompt_path = gw().settings.voice_prompt_path
+        instructions = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
         try:
-            session = gw().ports.voice.create_session()
+            session = gw().ports.voice.create_session(instructions)
         except NotConfigured as exc:
             raise APIError(503, "voice_unavailable", "no voice key; use typed chat") from exc
         except PortError as exc:  # provider detail stays in the server log

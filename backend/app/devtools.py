@@ -78,6 +78,11 @@ def cmd_state(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    for stream in (sys.stdout, sys.stderr):  # "→" in summaries on a cp1251/cp437 console
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
     parser = argparse.ArgumentParser(prog="python -m app.devtools")
     sub = parser.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("inject", help="post fixture .eml files to /api/dev/inject-email")

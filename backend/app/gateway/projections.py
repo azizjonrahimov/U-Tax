@@ -137,6 +137,8 @@ class State:
     cap_log: dict[str, list[str]] = field(default_factory=lambda: {t: [] for t in TRUST_TYPES})
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
     last_login_brief: dict | None = None
+    memo_log: dict[str, list[str]] = field(default_factory=dict)  # reply address -> ts
+    flag_notice_log: list[str] = field(default_factory=list)
     public_notice_log: list[str] = field(default_factory=list)
     crm_failed: set[str] = field(default_factory=set)
     posts: int = 0
@@ -170,7 +172,12 @@ class State:
                 "spent_usd": _money(self.spent_usd()),
                 "spent_by_provider": {p: _money(v) for p, v in sorted(self.spent_by_provider.items())},
             },
-            "hiring": dict(self.hiring),
+            # v1.5: every screened candidate is listed for the CEO (no silent rejection)
+            "hiring": {**self.hiring, "candidates": [
+                {"candidate_id": c["candidate_id"], "name_masked": c["name_masked"],
+                 "stage": c.get("stage"), "credentials": c.get("credentials")}
+                for c in sorted(self.candidates.values(), key=lambda c: c["candidate_id"])
+                if c.get("stage") in ("screened", "shortlisted", "hired", "declined")]},
             "queue": {
                 "waiting": sum(1 for c in cases if c.status in OPEN_STATUSES and c.status != "BLOCKED"),
                 "blocked": sum(1 for c in cases if c.status == "BLOCKED"),
@@ -297,6 +304,8 @@ class State:
 
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)
+        if case is not None and e.status == "ok" and case.reply_to:
+            self.memo_log.setdefault(case.reply_to.lower(), []).append(e.ts)
         if case is not None and e.status == "ok":
             case.memo_message_id = e.payload["message_id"]
             case.memo_version = case.facts_version
@@ -374,6 +383,8 @@ class State:
             cand["reply_to"] = private.get("reply_to")
         if stage == "applicant" and private.get("text"):
             cand.setdefault("texts", []).append(private["text"])  # contact-free answers
+            if cand.get("questionnaire_sent"):
+                cand["answers"] = cand.get("answers", 0) + 1
         if stage == "applicant" and e.payload["note"] and "credentials" not in cand:
             cand["credentials"] = e.payload["note"]
         # stages only move forward: a questionnaire reply never demotes a shortlisted person
@@ -410,6 +421,8 @@ class State:
         self._last_brief = e
 
     def _on_ceo_notified(self, e: Event) -> None:
+        if e.payload["reason"] == "flagged":
+            self.flag_notice_log.append(e.ts)
         if e.payload["reason"] == "login" and getattr(self, "_last_brief", None) is not None:
             b = self._last_brief
             self.last_login_brief = {"brief_id": b.id, "notice_id": e.id, "ts": e.ts,
