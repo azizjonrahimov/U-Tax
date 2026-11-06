@@ -159,3 +159,21 @@ Your order:
 3. Wire the agents lane's four adapters as their READYs land.
 4. `ADAPTER_LLM=openrouter` last, only if anything still calls LLMPort.
 Skip Stripe: the owner's Stripe account is blocked until January 2027.
+
+## Task 9: contract v1.7 (2026-11-07, from the agents lane's task 4 review). Items 1-2 are CRITICAL.
+1. §6f: no sponsor I/O under the gateway lock. phone_check returns `{pending: true}`, and the tick
+   calls finish() and writes phone.checked. Apify fetches run outside the lock. Warm the fee
+   cache at boot and refresh it before the TTL. Live fee ≠ snapshot fee → use the snapshot and
+   notify the CEO.
+2. phone.checked public payload = `{rendered_ok, status_note}`; the screenshot URL goes only in private.
+3. Only `ok` short-circuits a phone retry; skipped attempts get per-attempt keys, max 3 per
+   memo version.
+4. law.searched stores the cleaned query; law_search at most 20/hour.
+5. Book per-run spend estimates for Apify and Mobilerun.
+6. `{{memo_ref}}` (UTX- plus 8-16 caps/digits, per memo version), the memo's last line, `memo_ref`
+   on memo.sent, passed to the Mobilerun reference.
+Also wire mobilerun.py and apify.py (merged on main as a251fe6) into registry, FACTORIES and
+.env.example per the agents lane's READY: ADAPTER_DEVICE=mobilerun (MOBILERUN_API_KEY,
+MOBILERUN_DEVICE_ID, MOBILERUN_MAIL_APP, MOBILERUN_MEMO_SENDER, MOBILERUN_MODEL) and
+ADAPTER_SCRAPE=apify (APIFY_TOKEN). The cloud phone needs a QA mailbox that gets a BCC of
+every memo: add `MAIL_QA_BCC`.
