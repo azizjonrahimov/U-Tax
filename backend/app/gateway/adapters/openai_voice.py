@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import httpx
 
@@ -27,6 +28,9 @@ from app.gateway.ports import (
 )
 
 API = "https://api.openai.com/v1"
+# v1.7.5: the secret is minted on POST {API}/realtime/sessions (the beta Realtime endpoint),
+# so the browser posts its SDP offer to the matching beta URL. Keep the two together.
+REALTIME_SDP_URL = API + "/realtime?model={model}"
 
 
 def _map_error(response: httpx.Response) -> PortError:
@@ -54,6 +58,9 @@ class OpenAIVoice:
         self.realtime_model = os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime")
         self.tts_model = os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
         self.tts_voice = os.environ.get("OPENAI_TTS_VOICE", "alloy")
+        # v1.7.5: without input transcription Realtime never sends the customer's words as
+        # text, so /talk voice could never open a case
+        self.transcribe_model = os.environ.get("OPENAI_TRANSCRIBE_MODEL", "whisper-1")
         self._http = httpx.Client(base_url=API, timeout=timeout, transport=transport,
                                   headers={"Authorization": f"Bearer {api_key}"})
 
@@ -66,7 +73,8 @@ class OpenAIVoice:
         # Contract §6d: instructions and (no) tools are fixed here, server-side, so the
         # browser's short-lived secret is only good for this intake conversation.
         body = {"model": self.realtime_model, "instructions": instructions, "tools": [],
-                "max_response_output_tokens": self.MAX_OUTPUT_TOKENS}
+                "max_response_output_tokens": self.MAX_OUTPUT_TOKENS,
+                "input_audio_transcription": {"model": self.transcribe_model}}
         try:
             response = self._http.post("/realtime/sessions", json=body)
         except httpx.TransportError as exc:
@@ -81,8 +89,9 @@ class OpenAIVoice:
         expires = secret.get("expires_at") if isinstance(secret, dict) else None
         expires_at = iso_ts(datetime.fromtimestamp(expires, tz=timezone.utc)) \
             if isinstance(expires, (int, float)) else str(expires or "")
-        return VoiceSession(client_secret=value, model=body.get("model", self.realtime_model),
-                            expires_at=expires_at)
+        model = str(body.get("model") or self.realtime_model)
+        return VoiceSession(client_secret=value, model=model, expires_at=expires_at,
+                            realtime_url=REALTIME_SDP_URL.format(model=quote(model, safe="")))
 
     def speak(self, text: str) -> bytes:
         try:

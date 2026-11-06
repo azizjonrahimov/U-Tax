@@ -262,7 +262,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             log.warning("voice session failed: %s", exc)
             raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat") from exc
         return {"client_secret": session.client_secret, "model": session.model,
-                "expires_at": session.expires_at}
+                "expires_at": session.expires_at, "realtime_url": session.realtime_url}
 
     @router.get("/api/brief/audio")
     def brief_audio(request: Request, event_id: int = Query(..., ge=1),
