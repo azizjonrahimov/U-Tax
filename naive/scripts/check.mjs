@@ -133,18 +133,25 @@ if (existsSync(memoPath) && /^\s*subject:/i.test(readFileSync(memoPath, "utf8"))
   fail("templates/memo.md: starts with a Subject: line; the gateway sets the subject and sends the whole file as the body");
 
 // 10. every template has a rule: its placeholders, the disclaimer where a client reads it, the
-// disclosure line where an applicant reads it, and the post guard's limits on posts.
-// contract v1.6 §7: greeting_name is the outgoing mail's greeting; masked_name is allowed but optional.
-const MEMO_PLACEHOLDERS = ["greeting_name", "authorized_method", "assumed_par_method", "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note"];
-// Placeholders that may render empty: never alone on a line (the empty line would stay as a blank gap).
-const OPTIONAL_INLINE = ["form5472_note", "rnd_note", "problems_line", "approvals_line", "blocked_line", "hiring_line"];
+// disclosure line where an applicant reads it, the post guard's limits on posts, and how it renders.
+// Memo placeholders come from contract §7 (parsed, like §6): greeting_name greets the client; the
+// masked name is for the event copy only and never appears in a client mail.
+const MEMO_PLACEHOLDERS = (() => {
+  const fallback = ["greeting_name", "masked_name", "authorized_method", "assumed_par_method", "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note"];
+  if (!existsSync(contractPath)) return fallback;
+  const s7 = readFileSync(contractPath, "utf8").split(/^## 7\./m)[1]?.split(/^## 8\./m)[0] ?? "";
+  const found = [...new Set([...s7.matchAll(/`\{\{(\w+)\}\}`/g)].map((m) => m[1]))];
+  if (found.length === 0) fail("contracts/api.md: could not read the §7 memo placeholders");
+  return found.length ? found : fallback;
+})().filter((p) => p !== "masked_name");
 // body: the gateway sends the file as the body and sets the subject itself (no "Subject:" line).
-// client: a client reads it (disclaimer line, no literal dollar amounts). applicant: the AI-screen
-// disclosure line. posts: Marketing posts its X/LinkedIn sections (the gateway's post guard).
-// spend: every money-spent figure is called "estimated".
+// client: a client reads it (greets with greeting_name, disclaimer line, no literal dollar amounts,
+// never the masked name). applicant: the AI-screen disclosure line. posts: Marketing posts its
+// X/LinkedIn sections (the gateway's post guard). spend: money spent is called "estimated".
+// optional: placeholders that may render empty; every empty/filled combination must render cleanly.
 const TEMPLATE_RULES = {
-  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS, optional: ["masked_name"] },
-  "ask-client.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list", "problems_line"] },
+  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS, optional: ["form5472_note", "rnd_note"] },
+  "ask-client.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list", "problems_line"], optional: ["problems_line"] },
   "not-eligible-not_incorporated.md": { body: true, client: true, placeholders: ["greeting_name"] },
   "not-eligible-outside_delaware.md": { body: true, client: true, placeholders: ["greeting_name"] },
   "not-eligible-not_a_corporation.md": { body: true, client: true, placeholders: ["greeting_name"] },
@@ -160,6 +167,7 @@ const TEMPLATE_RULES = {
   "login-brief.md": {
     body: true, spend: true,
     placeholders: ["greeting", "clients_new", "memos_sent", "tax_saved", "agent_spend", "approvals_line", "blocked_line", "hiring_line"],
+    optional: ["approvals_line", "blocked_line", "hiring_line"],
   },
   "sourcing-posts.md": { posts: true, placeholders: [] },
   "job-post.md": { posts: true, placeholders: [] },
@@ -203,7 +211,90 @@ if (postProblem("$85,165, or $400 plus the $50 fee, $450 in all."))
 const postSections = (text) =>
   [...text.matchAll(/^## (X[^\n]*|LinkedIn post[^\n]*)\n([\s\S]*?)(?=^## |(?![\s\S]))/gm)].map((m) => ({ title: m[1], body: m[2].trim() }));
 
+/**
+ * The gateway's renderer (lane/backend templates._fill), ported: a line that is only a placeholder
+ * whose value is empty is dropped; every other placeholder is substituted. Stricter on purpose: the
+ * gateway also collapses 3+ newlines, this port doesn't, so the template itself leaves no gaps.
+ */
+function renderTemplate(text, values) {
+  return text
+    .split("\n")
+    .filter((line) => {
+      const only = line.trim().match(/^\{\{\s*(\w+)\s*\}\}$/);
+      return !(only && !values[only[1]]);
+    })
+    .join("\n")
+    .replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => values[key] ?? "")
+    .trim();
+}
+
 const DISCLOSURE = "This screen is run by an AI agent. A human makes the final hiring decision.";
+const GREETING = /^(hi|hello|hey|dear)\b[^\n]*\{\{\s*greeting_name\s*\}\}/i;
+
+/** Every problem with one template file under its rule (pure, so it can be self-tested). */
+function templateProblems(file, text, rule) {
+  const out = [];
+  const bad = (msg) => out.push(`templates/${file}: ${msg}`);
+  if (text.includes("\r")) bad("has CR characters; keep LF");
+  const used = [...new Set([...text.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]))];
+  if (rule.placeholders) {
+    const extra = used.filter((p) => !rule.placeholders.includes(p));
+    const absent = rule.placeholders.filter((p) => !used.includes(p));
+    if (extra.length) bad(`unknown placeholders ${extra}`);
+    if (absent.length) bad(`missing placeholders ${absent}`);
+  }
+  // render every combination of empty / filled optional values: no gaps, no stray spaces
+  const optional = (rule.optional ?? []).filter((p) => used.includes(p));
+  for (let mask = 0; rule.body && mask < 1 << optional.length; mask++) {
+    const values = Object.fromEntries(used.map((p) => [p, "Value."]));
+    optional.forEach((p, i) => { if (mask & (1 << i)) values[p] = ""; });
+    const empty = optional.filter((_, i) => mask & (1 << i));
+    const rendered = renderTemplate(text, values);
+    const where = empty.length ? `with ${empty} empty` : "with every value set";
+    if (/\n[ \t]*\n[ \t]*\n/.test(rendered)) bad(`renders a double blank line ${where}`);
+    if (/[^\s] {2,}\S/.test(rendered) || /[ \t]+$/m.test(rendered) || /^[ \t]+\S/m.test(rendered.replace(/^ {2,}- .*/gm, "")))
+      bad(`renders stray spaces ${where}`);
+  }
+  if (rule.client) {
+    const first = text.split("\n").find((l) => l.trim()) ?? "";
+    if (!GREETING.test(first)) bad("the first line must greet the client with {{greeting_name}} (contract v1.6 §7)");
+    if (used.includes("masked_name")) bad("uses {{masked_name}}; a client mail never shows the masked name");
+    if (!text.includes(`${DISCLAIMER}.`)) bad(`missing the line "${DISCLAIMER}."`);
+    if (/\$\s?\d/.test(text.replace(/\{\{[^}]*\}\}/g, ""))) bad("literal dollar amount in a client template");
+  }
+  if (rule.applicant && !text.includes(DISCLOSURE)) bad("missing the AI-screen disclosure line");
+  if (rule.body && /^\s*subject:/i.test(text)) bad("starts with a Subject: line; the gateway sets the subject");
+  if (rule.noAmounts && /\$\s?\d/.test(text)) bad("literal dollar amount");
+  if (rule.spend && /(?<!estimated )\{\{\s*agent_spend\s*\}\}/.test(text.replace(/\s+/g, " ")))
+    bad('{{agent_spend}} must read "an estimated {{agent_spend}}" (spend is an estimate)');
+  if (rule.posts) {
+    const sections = postSections(text);
+    if (sections.length === 0) bad('no "## X" or "## LinkedIn post" sections found');
+    for (const { title, body } of sections) {
+      if (!body) bad(`section "${title}" is empty`);
+      const problem = postProblem(body);
+      if (problem) bad(`"${title}" ${problem}; the post guard would refuse it`);
+      if (title.startsWith("X") && [...body].length > 255) bad(`"${title}" is ${[...body].length} characters (max 255 + appended link)`);
+    }
+  }
+  return out;
+}
+
+// The template rules must be able to fail: each bad template below has to produce its problem.
+const CLIENT_RULE = { body: true, client: true, placeholders: ["greeting_name", "x"], optional: ["x"] };
+const TEMPLATE_SELF_TEST = [
+  ["Hi {{masked_name}},\n{{greeting_name}} {{x}}\nEducational estimate — not tax advice.", "first line must greet"],
+  ["Hello {{greeting_name}},\n\n{{x}}\n\nEnd.\nEducational estimate — not tax advice.", "double blank line"],
+  ["Hi {{greeting_name}},\nTotal is due. {{x}} Thanks.\nEducational estimate — not tax advice.", "stray spaces"],
+  ["Hi {{greeting_name}},\n{{x}} {{nope}}\nEducational estimate — not tax advice.", "unknown placeholders"],
+  ["Hi {{greeting_name}}, {{masked_name}}\n{{x}}\nEducational estimate — not tax advice.", "never shows the masked name"],
+  ["Subject: hi\nHi {{greeting_name}},\n{{x}}\nEducational estimate — not tax advice.", "Subject: line"],
+];
+for (const [text, why] of TEMPLATE_SELF_TEST)
+  if (!templateProblems("self-test.md", text, CLIENT_RULE).some((p) => p.includes(why))) fail(`template rule self-test: expected "${why}" for ${JSON.stringify(text)}`);
+if (templateProblems("self-test.md", "Hi {{greeting_name}},\nTotal is due.\n{{x}}\n\nEnd.\nEducational estimate — not tax advice.", CLIENT_RULE).length)
+  fail("template rule self-test: a well-formed template was refused");
+
 const templatesDir = join(ROOT, "templates");
 for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).filter((f) => f.endsWith(".md")) : []) {
   const rule = TEMPLATE_RULES[file];
@@ -211,39 +302,7 @@ for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).filter((
     fail(`templates/${file}: no rule in check.mjs TEMPLATE_RULES (add one)`);
     continue;
   }
-  const text = readFileSync(join(templatesDir, file), "utf8");
-  if (text.includes("\r")) fail(`templates/${file}: has CR characters; keep LF`);
-  if (rule.placeholders) {
-    const used = [...new Set([...text.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]))];
-    const extra = used.filter((p) => !rule.placeholders.includes(p) && !(rule.optional ?? []).includes(p));
-    const absent = rule.placeholders.filter((p) => !used.includes(p));
-    if (extra.length) fail(`templates/${file}: unknown placeholders ${extra}`);
-    if (absent.length) fail(`templates/${file}: missing placeholders ${absent}`);
-  }
-  for (const line of text.split("\n")) {
-    const only = line.trim().match(/^\{\{\s*(\w+)\s*\}\}$/);
-    if (only && OPTIONAL_INLINE.includes(only[1])) fail(`templates/${file}: {{${only[1]}}} is alone on a line; put it inline so an empty value leaves no blank gap`);
-  }
-  if (rule.client) {
-    if (/^\s*hi \{\{\s*masked_name/im.test(text)) fail(`templates/${file}: greets the client by the masked name; use {{greeting_name}} (contract v1.6 §7)`);
-    if (!text.includes(`${DISCLAIMER}.`)) fail(`templates/${file}: missing the line "${DISCLAIMER}."`);
-    if (/\$\s?\d/.test(text.replace(/\{\{[^}]*\}\}/g, ""))) fail(`templates/${file}: literal dollar amount in a client template`);
-  }
-  if (rule.applicant && !text.includes(DISCLOSURE)) fail(`templates/${file}: missing the AI-screen disclosure line`);
-  if (rule.body && /^\s*subject:/i.test(text)) fail(`templates/${file}: starts with a Subject: line; the gateway sets the subject`);
-  if (rule.noAmounts && /\$\s?\d/.test(text)) fail(`templates/${file}: literal dollar amount`);
-  if (rule.spend && /(?<!estimated )\{\{\s*agent_spend\s*\}\}/.test(text.replace(/\s+/g, " ")))
-    fail(`templates/${file}: {{agent_spend}} must read "an estimated {{agent_spend}}" (spend is an estimate)`);
-  if (rule.posts) {
-    const sections = postSections(text);
-    if (sections.length === 0) fail(`templates/${file}: no "## X" or "## LinkedIn post" sections found`);
-    for (const { title, body } of sections) {
-      if (!body) fail(`templates/${file}: section "${title}" is empty`);
-      const problem = postProblem(body);
-      if (problem) fail(`templates/${file}: "${title}" ${problem}; the post guard would refuse it`);
-      if (title.startsWith("X") && [...body].length > 255) fail(`templates/${file}: "${title}" is ${[...body].length} characters (max 255 + appended link)`);
-    }
-  }
+  for (const problem of templateProblems(file, readFileSync(join(templatesDir, file), "utf8"), rule)) fail(problem);
 }
 for (const required of Object.keys(TEMPLATE_RULES)) if (!existsSync(join(templatesDir, required))) fail(`templates/${required} is missing`);
 

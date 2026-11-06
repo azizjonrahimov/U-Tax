@@ -11,7 +11,8 @@ Waiting on you:
 Blocked:
 {{blocked_lines}}
 
-Hiring (shortlisted, and screened candidates waiting on your decision): {{hiring_line}}
+Hiring (shortlisted, and screened candidates waiting on your decision):
+{{hiring_line}}
 
 Flags from QA (possible prompt injection, unrealistic inputs):
 {{flags_lines}}
