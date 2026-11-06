@@ -97,3 +97,18 @@ event, 503 without a key). Stand-ins work with no key. See contract §5 and §8.
   PAUSED) and `POST /api/candidates/{id}/decision` (hire|decline, actor ceo).
 - The post guard also blocks @handles and any URL except `PUBLIC_TALK_URL`. CEO emails also
   fire on `case.flagged` and `hr.shortlisted`. Wake sessions pass identity `utax-cos`.
+
+## Contract v1.5 (2026-11-06, agents task 2 review). Items 1-2 are BLOCKING for autonomy.
+1. `post_social`: `kind` client|hiring; refused unless `PUBLIC_TALK_URL` is set; after the
+   guard, the gateway appends the link (talk URL, or the hiring inbox address).
+2. A new wake, `Applicant answered cand_N`, on the first questionnaire reply.
+3. Load every `naive/templates/*.md` (names and placeholders in `naive/README.md`) with
+   fallbacks; mint `/api/voice/session` with `naive/prompts/voice-intake.md` server-side.
+4. `/talk`: customer turns only; quotes match customer lines only; `reply_email` from the
+   typed field only.
+5. Throttles: flag mails at 1/hour then the digest; at most 3 memos a day per reply_email.
+6. Voice cases thread replies from their `reply_email`.
+7. Decision mails `hr-hired`/`hr-declined`; screened candidates appear in `/api/state`
+   hiring (the `/ceo` list).
+The per-seat `/mcp/<actor>` routes (v1.4) are required for Saturday's `naive up`; confirm
+they're in task 7.
