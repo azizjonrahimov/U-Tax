@@ -1,4 +1,4 @@
-# API contract (v1.5): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.6): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -205,7 +205,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | Tool | Agent | Input | Effect |
 |---|---|---|---|
 | `list_open_cases` | cos | `{}` | open cases with status, masked name, waiting reason |
-| `get_case` | any | `{case_id}` | masked case: email body, facts, quotes, status, result, and `offered_slots: [ISO...]` (the next free 15-minute slots the gateway can book) |
+| `get_case` | any | `{case_id}` | the case for agents: the email body with **only contact details and SSN/EIN redacted** (company and person names left as written, so facts like "a Delaware corporation" survive), plus facts, quotes, status, result, and `offered_slots: [ISO...]` (the next free 15-minute slots the gateway can book) |
 | `extract_facts` | intake | `{case_id, quotes: {<fact>: "<verbatim span from the email>"}, incorporated_delaware, foreign_owner_25}` | code parses each quote (`parse_amount`), checks it appears verbatim, conflicting spans → re-ask; `facts.extracted` or `facts.missing` |
 | `ask_client` | intake | `{case_id, missing: [<fact>...]}` | templated re-ask email (trust type `email`, max 2); `client.asked` |
 | `mark_not_eligible` | intake | `{case_id, reason: "not_incorporated"\|"outside_delaware"\|"not_a_corporation"}` | kind templated reply chosen by the enum (no free text reaches the client); anything else → `refused`; `case.not_eligible` |
@@ -251,6 +251,7 @@ with exactly one of these opening messages (the CoS prompt parses them):
 | `POST /api/voice` with `speaker: "ceo"` | `CEO: <text>` |
 | inbound applicant mail (hiring inbox) | `New applicant cand_N` (the CoS does nothing yet) |
 | the applicant's first questionnaire reply | `Applicant answered cand_N` (the CoS routes it to an `hr` card) |
+| a client reply with digits on a SENT or CALL_BOOKED case | `Client replied case_N` (Intake re-extracts; a changed fact makes memo v2; a reply with no digits, like "thanks!", wakes nobody) |
 
 Each wake writes nothing extra; the session's own tool calls produce the events.
 Stand-in tonight (no Naïve until Saturday, design D26): the **local driver** receives the
@@ -264,6 +265,15 @@ questionnaire template (trust type `email`), writes `hr.applicant` with the mask
 stated credentials only (no contact details reach any agent), then wakes the crew with
 `New applicant cand_N`. Questionnaire answers arrive as more mail on the same thread and are
 added to the candidate, masked the same way.
+
+## 6c-bis. Ingress rules (all inboxes)
+
+- Mail from the firm's own addresses (`CEO_EMAIL`, `MAIL_INBOX_CLIENTS`, `MAIL_INBOX_HIRING`) is
+  dropped and logged, never a case (mail-loop guard).
+- `text/html` bodies become plain text at ingress; no markup is ever stored.
+- Masking never hides a word from the tax vocabulary (delaware, corporation, corp, inc, llc,
+  shares, authorized, issued, assets, foreign, owner, par, s-corp, c-corp, yes, no). SSN and EIN
+  forms are always redacted, including `NN-NNNNNNN`.
 
 ## 6d. Templates and the voice prompt
 
@@ -292,7 +302,9 @@ cannot replace them.
 ## 7. Memo template
 
 `naive/templates/memo.md` (agents lane writes the words), rendered by the gateway with
-only these placeholders: `{{masked_name}}`, `{{authorized_method}}`, `{{assumed_par_method}}`,
+only these placeholders: `{{greeting_name}}` (the outgoing mail: the client's own company
+name if they gave one, else `there`; the `memo.sent` event copy uses the masked name),
+`{{masked_name}}`, `{{authorized_method}}`, `{{assumed_par_method}}`,
 `{{annual_report_fee}}`, `{{total}}`, `{{due_date}}`, `{{form5472_note}}`, `{{rnd_note}}`.
 Amounts arrive formatted (`$85,165`). The template must contain the line
 `Educational estimate — not tax advice.` The gateway refuses to send if it doesn't, and
@@ -317,6 +329,10 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.6 (2026-11-07, agents cross-lane QA): `get_case` body keeps names and facts (contact
+  details and SSN/EIN redacted only); `Client replied case_N` wake and memo v2; ingress rules
+  (own-address drop, HTML to text, tax-word stop list, EIN form); `{{greeting_name}}`.
 
 - v1.5 (2026-11-06, agents task 2 review): post links appended by the gateway (`kind`
   client|hiring, `PUBLIC_TALK_URL` required); `Applicant answered` wake; all templates loaded,
