@@ -789,11 +789,13 @@ export function Theater() {
             {sourceLabel}
             {skippedCount ? ` · ${skippedCount} skipped` : ""}
           </span>
-          <span className="live">
-            <span className={`dot${blinking ? "" : " idle"}`} />
+          {/* Always mounted: LIVE → RECONNECTING… → NO LOG changes are announced. */}
+          <span className="live" role="status">
+            <span className={`dot${blinking ? "" : " idle"}`} aria-hidden />
             {statusLabel[status]}
           </span>
-          <span className="mono" aria-label="time of the current event">
+          <span className="mono" title="time of the current event">
+            <span className="sr-only">Time of the current event: </span>
             {clock}
           </span>
         </div>
