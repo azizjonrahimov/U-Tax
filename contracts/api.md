@@ -230,6 +230,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
 | `flag_case` | qa | `{case_id, kind: "possible_injection"\|"unrealistic_inputs"}` | `case.flagged`; goes into the next CEO update email |
 | `firm_brief` | cos | `{}` | counts, blocked cards, touches; `brief.generated` |
+| `buy_tool` | mkt | `{tool, input, key}` | ToolBuyPort (Monid): refused unless `tool` is in `MONID_TOOLS`; the per-tool `max_usd` ceiling and `MONID_DAILY_CAP_USD` apply; the purchase runs outside the gateway lock; `tool.bought` with `cost_usd` in the envelope plus `cost.booked`; key, input fingerprint and unsure flag are private. Never input containing an email or a client's details (design: public startup lists only) |
 
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
 `gross_assets`, `foreign_owner_25`. Optional (never required to finish a case, asked once
@@ -363,6 +364,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.3 (2026-11-07, backend task 10): `buy_tool` for mkt (Monid; allowlist, per-tool ceiling, daily
+  cap, outside the lock, rebuilt from events at boot). Nothing is bought until the owner names tools.
 
 - v1.7.2 (2026-11-07, backend task 9): flagged hiding also covers voice text and fact quotes.
 

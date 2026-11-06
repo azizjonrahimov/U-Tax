@@ -1,8 +1,8 @@
 # Report: agents lane (P3: Naïve agents, prompts, voice)
 
 ## Outcome
-Tasks 1 and 2 are done and checked offline. Task 3 waits for Saturday, when the owner gets Naïve
-access (D26).
+Tasks 1, 2 and 4 are done, merged and checked offline. Task 3 waits for Saturday, when the owner
+gets Naïve access (D26).
 
 - **Task 1 (merged as 4af1e70):** `naive/` declares the firm.
   - Chief of Staff as coordinator, with a board and a roster of six.
@@ -11,7 +11,7 @@ access (D26).
   - Tools are deny-by-default: each agent gets exactly its §6 column plus the board.
   - Sunday 8 AM brief schedule, and a one-time first-run briefing.
   - The env check fails closed on a bad URL or bad tokens.
-- **Task 2 (READY on `lane/agents-t2`):** the prompts for all 7 agents, `voice-intake.md` for `/talk`, and
+- **Task 2 (merged):** the prompts for all 7 agents, `voice-intake.md` for `/talk`, and
   the templates:
   - memo, re-ask, not-eligible ×3, HR questionnaire, hired and declined
   - CEO update, digest and login brief
@@ -33,6 +33,35 @@ access (D26).
     remains is cross-lane or needs the live org (below).
   - `/verify` is ENV-blocked: gstack-checks needs `origin/main`, and this repo has no remote.
 
+- **Task 4: four sponsor adapters** in `backend/app/gateway/adapters/` (owned for this task only),
+  each built from the sponsor's official docs against its port, and tested with
+  `httpx.MockTransport` only. No live call was made, apart from one unauthenticated Apify POST
+  that was disclosed and judged harmless.
+  - **Mobilerun (DevicePort):** QA opens each sent memo on a cloud phone and screenshots it.
+    - The memo is found only by its last line, `Reference: UTX-…` (contract v1.7).
+    - It fails closed: no screenshot unless the phone saw exactly one match with the disclaimer
+      visible.
+  - **Apify (ScrapePort):**
+    - Fetches only the allowlisted Delaware law pages, and refuses a redirect to another page.
+    - Searches only `site:delaware.gov` hosts.
+    - Spend is capped per run (`maxTotalChargeUsd` 0.10), and results are cached for 6 h.
+  - **HubSpot (CRMPort):**
+    - Only the masked label (`Team #N` / `Candidate X`), our key and the deal stage are sent.
+    - It upserts by a unique `utax_key`, so a retry never creates a duplicate.
+    - Stages only move forward.
+  - **Monid (ToolBuyPort):**
+    - Only tools on the owner's list can be bought, each with a price ceiling.
+    - A daily cap reserves the ceiling of every in-flight run and every run that may have been
+      charged.
+    - The same purchase key is never paid for twice.
+    - Input that carries an email address is refused.
+  - **Tests:** 160 adapter tests. The full backend suite is green on merged main (771 passed).
+  - **/review:** Mobilerun and Apify had 2 passes. HubSpot and Monid had 5 specialists and 3
+    adversarial cycles, converged. Cycle 2 caught a cap bypass: unsure runs released their
+    reservation.
+- **memo_ref footer:** `Reference: {{memo_ref}}` is the memo's last line, and `check.mjs` enforces
+  it. Merged together with backend task 9.
+
 Unverified: the model ids (`z-ai/glm-5.3-flash`, `deepseek/deepseek-v4-flash-0731`). That Naïve
 accepts 7 vaults and the non-secret `X-UTax-Actor` header. That board-woken and `wait:true`
 sessions run with the member's own identity. That the data-exfil guard doesn't make MCP calls ask
@@ -41,7 +70,33 @@ the real org. Not one of these could be checked without a key.
 
 ## What merged
 - Task 1: `lane/agents` 090790157, merged as 4af1e70.
-- Task 2: pending (`lane/agents-t2`, see the READY message for the sha).
+- Task 2: merged as 48906cc. The v1.6 follow-up merged as b9f90da.
+- Task 4: Mobilerun and Apify merged as a251fe6. HubSpot and Monid (7260a1b) merged as 86af197.
+- memo_ref footer: aea4d4e, merged as c3f8ed6 after backend task 9.
+
+## Task 4: still unverified (no sponsor keys tonight)
+All request and response shapes come from the official API references (read 2026-11-07). The first
+live run on Saturday must check these:
+- **Mobilerun:**
+  - the task, screenshot and device routes;
+  - whether screenshots come in time order, and whether their URLs expire;
+  - that the phone agent's prompt and the default model (`mobilerun/mobile-agent-fast`) can find
+    and read the memo on a real device;
+  - every fail-closed guard trusts the phone agent's own report.
+- **Apify:**
+  - the authenticated run-sync route and response (only a 402 was seen);
+  - whether the fee page renders its table without JavaScript (if not, switch to
+    `apify/web-scraper`);
+  - the per-run cost (not reported back to the gateway yet).
+- **HubSpot:**
+  - the default pipeline's stage ids in a fresh portal;
+  - that a missing `utax_key` property answers 400 "does not exist";
+  - that `utax_key` may be both `id` and a property.
+- **Monid:**
+  - that a COMPLETED run always carries `billing`;
+  - that FAILED/STOPPED runs, and 409/422 answers, are unbilled (FAILED/STOPPED are treated as
+    "may be charged");
+  - the provider and endpoint names, and the prices, of the tools we pick.
 
 ## Open items (from /review, owned elsewhere or live-only)
 1. Backend: serve `POST /mcp/<actor>` (no branch had it at review time). Without it, `naive up`
@@ -80,8 +135,46 @@ the real org. Not one of these could be checked without a key.
    session shows its own identity, that the gateway logs the right actor, and that no MCP call
    stops for approval.
 
+## What the owner must do for the sponsor adapters (Saturday)
+Keys go only in `backend/.env`, which is gitignored and never committed. The backend lane wires the
+adapters (task 10). Each needs `ADAPTER_<PORT>=<name>` once its keys are set.
+1. **Mobilerun** (`ADAPTER_DEVICE=mobilerun`):
+   - Create an API key and put it in `MOBILERUN_API_KEY`.
+   - Start one Android cloud phone, and sign it in to the inbox that receives memos (Gmail by
+     default; `MOBILERUN_MAIL_APP` changes the app).
+   - Optional: `MOBILERUN_DEVICE_ID` pins the phone.
+   - Set `MOBILERUN_MEMO_SENDER` to the address memos are sent from. It's strongly advised: without
+     it, anyone who learns a reference could mail the inbox a look-alike.
+   - Optional: `MOBILERUN_MODEL`.
+2. **Apify** (`ADAPTER_SCRAPE=apify`):
+   - Create an API token and put it in `APIFY_TOKEN`.
+   - Check that the account can run `apify/cheerio-scraper` and `apify/google-search-scraper`, and
+     set a monthly usage limit in the console.
+3. **HubSpot** (`ADAPTER_CRM=hubspot`):
+   - In Settings → Properties, create a single-line text property `utax_key` with "unique values"
+     on Contacts and again on Deals.
+   - Create a private app with scopes `crm.objects.contacts.write` and
+     `crm.objects.deals.write`, and put its token in `HUBSPOT_TOKEN`.
+   - If the pipeline isn't the default one, set `HUBSPOT_PIPELINE`, and set `HUBSPOT_STAGE_MAP`
+     to `{"memo_sent": "<stage id>", "call_booked": "<stage id>"}`.
+4. **Monid** (`ADAPTER_TOOLBUY=monid`):
+   - Create an API key and put it in `MONID_API_KEY`.
+   - Use the $1 free credit (signup code `MONID-SIGNUP`) or top up (minimum $5), and add a run cap control in the
+     dashboard.
+   - Pick each tool with `POST /v1/discover`.
+   - Set `MONID_TOOLS` as JSON: `{"<name>": {"provider": "...", "endpoint": "...", "max_usd":
+     "0.05"}}`.
+   - Optional: `MONID_DAILY_CAP_USD` (default 1.00).
+   - Nothing is bought until `MONID_TOOLS` names a tool.
+
 ## Lesson
 Read the platform's own engine before writing its config. The blueprint package's `index.js`
 showed that `tasks[]` silently creates an extra org "CEO" agent outside our tool policy, which no
 doc page mentions. The engine's own `loadConfig` turned "UNVERIFIED until we have a key" into an
 offline check we could run all night.
+
+Second lesson, from task 4: for anything that spends money, the hard question isn't "did it fail?"
+but "might it have been charged?" Every reviewer cycle found another path where a failure after
+sending let a retry pay twice, or let the cap forget a run. The fix that held was to treat the
+key as "may be charged" by default once the request has left, and to keep its money reserved
+until a human checks.

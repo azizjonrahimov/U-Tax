@@ -9,6 +9,10 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- agents · 0m · report merged: owner's Saturday setup for Mobilerun, Apify, HubSpot, Monid; lane resting
+- agents · 15m · MERGED HubSpot + Monid adapters (771 tests on main)
+- backend · 30m · MERGED task 9 (slow ports off the lock, private phone screenshots, memo_ref) + e2e fixes; main green
+
 - frontend · 0m · MERGED slice 2: the Agent Theater screen (172 tests); plays the fixture, matches the mockup
 - backend + agents · 25m · task 8: sponsor adapters tonight (AgentMail, Naïve social/calendar; Mobilerun, Apify, HubSpot, Monid)
 - backend · 40m · MERGED LOW items + D2 (461 tests) and its report
@@ -23,6 +27,6 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | slice 3: live + replay against the gateway; then /talk, /ceo | 0m |
-| backend | `backend/`, `fixtures/`, `db/` | task 8: AgentMail, Naïve social/calendar, adapter wiring | 25m |
-| agents | `naive/` + 8 adapter files | task 4: Mobilerun, Apify, HubSpot, Monid adapters; Naïve task 3 Saturday | 25m |
+| frontend | `frontend/` | slice 3 (live + replay) review passes → READY; then /talk, /ceo | 10m |
+| backend | `backend/`, `fixtures/`, `db/` | task 10: wire HubSpot + Monid, outbox off the request path | 15m |
+| agents | `naive/` | done for tonight; resting until Naïve access Saturday (task 3) | 0m |
