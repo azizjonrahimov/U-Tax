@@ -255,7 +255,7 @@ with exactly one of these opening messages (the CoS prompt parses them):
 | `POST /api/voice` with `speaker: "ceo"` | `CEO: <text>` |
 | inbound applicant mail (hiring inbox) | `New applicant cand_N` (the CoS does nothing yet) |
 | the applicant's first questionnaire reply | `Applicant answered cand_N` (the CoS routes it to an `hr` card) |
-| a client reply with digits on a SENT or CALL_BOOKED case | `Client replied case_N` (Intake re-extracts; a changed fact makes memo v2; a reply with no digits, like "thanks!", wakes nobody) |
+| a client reply with digits on a SENT or CALL_BOOKED case | `Client replied case_N` (Intake re-extracts; a changed fact makes memo v2; a reply with no digits, like "thanks!", wakes nobody). Digits are looked for in the **new text only** (quoted lines and signatures stripped, after redaction). At most 3 such wakes per case per day and 2 memo revisions per case; beyond that the case is BLOCKED and flagged for the CEO. Revision memos use their own send bucket, separate from the firm-wide email cap. After a revision is sent, a case that had a call booked returns to CALL_BOOKED. |
 
 Each wake writes nothing extra; the session's own tool calls produce the events.
 Stand-in tonight (no Naïve until Saturday, design D26): the **local driver** receives the
@@ -275,6 +275,11 @@ added to the candidate, masked the same way.
 - Mail from the firm's own addresses (`CEO_EMAIL`, `MAIL_INBOX_CLIENTS`, `MAIL_INBOX_HIRING`) is
   dropped and logged, never a case (mail-loop guard).
 - `text/html` bodies become plain text at ingress; no markup is ever stored.
+- Auto-replies are dropped at ingress (`Auto-Submitted` other than `no`, `X-Autoreply`,
+  `Precedence: bulk|auto_reply|list`).
+- Fact conflicts are judged **within one message**; a later message supersedes an earlier one.
+- Quotes are matched against the raw text but **masked before** they are written to
+  `facts.extracted`.
 - Masking never hides a word from the tax vocabulary (delaware, corporation, corp, inc, llc,
   shares, authorized, issued, assets, foreign, owner, par, s-corp, c-corp, yes, no). SSN and EIN
   forms are always redacted, including `NN-NNNNNNN`.
@@ -310,8 +315,9 @@ cannot replace them.
 ## 7. Memo template
 
 `naive/templates/memo.md` (agents lane writes the words), rendered by the gateway with
-only these placeholders: `{{greeting_name}}` (the outgoing mail: the client's own company
-name if they gave one, else `there`; the `memo.sent` event copy uses the masked name),
+only these placeholders: `{{greeting_name}}` (the outgoing mail only: derived from the **sender's email domain label**,
+letters/digits/spaces only, at most 40 chars, never from body text; `/talk` cases and free-mail
+domains get `there`; the `memo.sent` event copy uses the masked name),
 `{{masked_name}}`, `{{authorized_method}}`, `{{assumed_par_method}}`,
 `{{annual_report_fee}}`, `{{total}}`, `{{due_date}}`, `{{form5472_note}}`, `{{rnd_note}}`.
 Amounts arrive formatted (`$85,165`). The template must contain the line
@@ -337,6 +343,10 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.6.2 (2026-11-07, agents v1.6 review): greeting_name from the sender domain only; Client
+  replied caps, new-text-only digits, revision send bucket, CALL_BOOKED restore; auto-reply drop;
+  per-message conflicts; quotes masked before events.
 
 - v1.6.1 (2026-11-07, backend 6b): AI turns kept as non-quotable context; Realtime override
   risk accepted and documented; `hr.decision_mailed`; candidate list admin-only.
