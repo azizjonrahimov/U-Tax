@@ -56,6 +56,7 @@ from app.gateway.ports import (
     PortError,
     Ports,
     Post,
+    RateLimited,
     Rejected,
     Slot,
     Unavailable,
@@ -283,7 +284,8 @@ class Gateway:
         self._fee_refresh_lock = threading.Lock()
         self._epoch: str | None = None
         self._booted_at = self._now()  # the first CEO digest waits a full period from here
-        self._law_inflight = 0  # law searches reserved but not yet recorded (cap, §6f)
+        self._law_inflight = 0
+        self._outbox_paused_until = 0.0  # a CRM rate limit pauses the whole outbox  # law searches reserved but not yet recorded (cap, §6f)
         self._fee_tried_at = 0.0
         self.state: State = rebuild(store.since(0))
         self.templates = Templates(settings.templates_dir, settings.memo_template_path)
@@ -487,11 +489,6 @@ class Gateway:
                 log.exception("phone job failed to advance")
         # Outside the lock: a slow Naïve call or CRM mirror never blocks the next write.
         self._deliver_wakes(wakes)
-        if result.status == "done" and name not in self.READ_ONLY:
-            try:
-                self.drain_outbox()
-            except Exception:  # noqa: BLE001 - the action already landed
-                log.exception("outbox drain failed after %s", name)
         return result
 
     def _perform_locked(self, name: str, handler: Callable[[dict], dict],
@@ -2257,30 +2254,52 @@ class Gateway:
     def drain_outbox(self) -> None:
         """Mirror jobs (HubSpot): `crm.sync_requested` without `crm.synced`.
 
-        Runs outside the lock (CRM latency never blocks an agent), with per-job backoff,
-        and never blocks a client. Call it after actions and from a timer.
+        Runs from the tick only, outside the lock (CRM latency never touches a request or an
+        agent), with per-job backoff, and never blocks a client (task 10):
+        - a case's stage jobs go in order: a later stage waits while an earlier one of the
+          same case is still pending (in flight, backing off, or failed);
+        - a rate limit stops the whole batch and pauses the outbox for its Retry-After.
         """
+        now = time.monotonic()
+        if now < self._outbox_paused_until:
+            return
         with self._lock:
             jobs = []
-            now = time.monotonic()
+            held: set[str] = set()  # cases with an earlier stage still pending
             for sync_key, job in self.state.crm_pending.items():
                 case = self.state.cases.get(job["case_id"])
+                if case is None:
+                    continue
+                if case.case_id in held:
+                    continue
                 tries, last = self._outbox_tries.get(sync_key, (0, 0.0))
                 wait = self.OUTBOX_BACKOFF[min(tries, len(self.OUTBOX_BACKOFF) - 1)]
-                if case is not None and now - last >= wait and \
-                        sync_key not in self._outbox_inflight:
+                held.add(case.case_id)  # later stages of this case wait for this one
+                if now - last >= wait and sync_key not in self._outbox_inflight:
                     self._outbox_inflight.add(sync_key)  # claimed: no double mirror
                     jobs.append((sync_key, dict(job), case.case_id, case.masked_name))
-        for sync_key, job, case_id, masked_name in jobs:
+        for index, (sync_key, job, case_id, masked_name) in enumerate(jobs):
+            limited: RateLimited | None = None
             try:
                 self.ports.crm.upsert_contact(CrmContact(key=case_id, label=masked_name))
                 self.ports.crm.set_stage(f"deal:{case_id}", job["stage"])
                 ok = True
+            except RateLimited as err:
+                limited, ok = err, False
+                log.warning("crm sync %s rate limited; outbox paused", sync_key)
             except Exception as err:  # noqa: BLE001 - a mirror never fails the firm
                 log.warning("crm sync %s failed: %s", sync_key, err)
                 ok = False
             with self._lock:
                 self._outbox_inflight.discard(sync_key)
+                if limited is not None:
+                    # not this job's fault: no backoff step, no failure event; the whole
+                    # batch waits for the provider's Retry-After
+                    self._outbox_paused_until = time.monotonic() + \
+                        min(max(limited.retry_after or 30.0, 1.0), 600.0)
+                    for rest_key, *_ in jobs[index + 1:]:
+                        self._outbox_inflight.discard(rest_key)
+                    return
                 tries, _ = self._outbox_tries.get(sync_key, (0, 0.0))
                 self._outbox_tries[sync_key] = (tries + 1, time.monotonic())
                 if not ok and sync_key in self.state.crm_failed:
@@ -2294,10 +2313,11 @@ class Gateway:
                         private={"sync_key": sync_key})])
                 except EventWriteError as err:
                     log.error("outbox result not logged: %s", err)
+                    for rest_key, *_ in jobs[index + 1:]:
+                        self._outbox_inflight.discard(rest_key)
                     return
                 if ok:
                     self._outbox_tries.pop(sync_key, None)
-
 
 _CREDENTIALS = re.compile(
     r"(?i)\b(EA|CPA|CMA|CFP|JD|enrolled agent|tax attorney|attorney|bookkeeper)\b")

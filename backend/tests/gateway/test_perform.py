@@ -20,13 +20,16 @@ def test_happy_path_event_sequence(h):
     booked = h.do("book_call", case_id=case_id, start=slot)
     h.approve_pending(booked)
     h.ok("book_call", case_id=case_id, start=slot)
+    h.gw.drain_outbox()  # task 10: the CRM mirror runs from the tick, never inline
+    h.gw.drain_outbox()  # one stage per case per pass: call_booked waits for memo_sent
     assert h.types() == [
         "email.received", "case.status", "facts.extracted", "case.status", "tax.computed",
         "case.status", "qa.passed", "case.status", "approval.requested", "touch.training",
-        "trust.changed", "memo.sent", "case.status", "crm.sync_requested", "crm.synced",
+        "trust.changed", "memo.sent", "case.status", "crm.sync_requested",
         "phone.checked", "approval.requested", "touch.training", "trust.changed",
-        "call.booked", "case.status", "crm.sync_requested", "crm.synced",
+        "call.booked", "case.status", "crm.sync_requested", "crm.synced", "crm.synced",
     ]
+    assert [e.payload["stage"] for e in h.events("crm.synced")] == ["memo_sent", "call_booked"]
     state = h.gw.state.public()
     assert state["cases"] == [{"case_id": "case_1", "masked_name": "Team #1",
                                "status": "CALL_BOOKED",
@@ -340,10 +343,11 @@ def test_crm_failure_never_blocks_and_retries_later(h):
     h.gw.OUTBOX_BACKOFF = (0, 0, 0, 0)  # retry at once in the test
     h.ports.crm.faults.add(Unavailable())
     case_id = h.to_sent()
+    h.gw.drain_outbox()  # task 10: the tick drains it
     assert h.gw.state.cases[case_id].status == "SENT"
     failed = [e for e in h.events("crm.synced") if e.status == "failed"]
     assert len(failed) == 1
-    h.ok("firm_brief")  # any later action drains the outbox again
+    h.gw.drain_outbox()  # the next tick retries
     assert [e.status for e in h.events("crm.synced")] == ["failed", "ok"]
     assert h.gw.state.crm_pending == {}
 
