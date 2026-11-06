@@ -117,6 +117,15 @@ def _sponsor(name: str, choice: str, settings: Settings):
         from app.gateway.adapters.apify import ApifyScrape
 
         return ApifyScrape(_need(settings.apify_token, "APIFY_TOKEN", "ADAPTER_SCRAPE=apify"))
+    if name == "crm" and choice == "hubspot":  # task 10 (agents lane's adapter)
+        from app.gateway.adapters.hubspot import HubSpotCRM
+
+        return HubSpotCRM(_need(settings.hubspot_token, "HUBSPOT_TOKEN", "ADAPTER_CRM=hubspot"))
+    if name == "toolbuy" and choice == "monid":  # task 10 (agents lane's adapter)
+        from app.gateway.adapters.monid import MonidToolBuy
+
+        return MonidToolBuy(_need(settings.monid_api_key, "MONID_API_KEY",
+                                  "ADAPTER_TOOLBUY=monid"))
     if name == "social" and choice == "naive":
         from app.gateway.adapters.naive_social import NaiveSocial
 

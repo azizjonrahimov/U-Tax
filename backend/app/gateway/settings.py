@@ -60,6 +60,8 @@ class Settings:
     mobilerun_memo_sender: str = ""
     mobilerun_model: str = ""
     apify_token: str = ""
+    hubspot_token: str = ""  # HUBSPOT_PIPELINE / HUBSPOT_STAGE_MAP are read by the adapter
+    monid_api_key: str = ""  # MONID_TOOLS / MONID_DAILY_CAP_USD are read by the adapter
     public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"
@@ -123,6 +125,8 @@ class Settings:
             mobilerun_memo_sender=_env("MOBILERUN_MEMO_SENDER"),
             mobilerun_model=_env("MOBILERUN_MODEL"),
             apify_token=_env("APIFY_TOKEN"),
+            hubspot_token=_env("HUBSPOT_TOKEN"),
+            monid_api_key=_env("MONID_API_KEY"),
             naive_api_key=_env("NAIVE_API_KEY"),
             naive_api_base=_env("NAIVE_API_BASE") or "https://api.vetta.sh",
             naive_social_identity=_env("NAIVE_SOCIAL_IDENTITY"),

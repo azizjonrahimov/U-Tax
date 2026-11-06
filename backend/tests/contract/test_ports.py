@@ -117,7 +117,19 @@ def test_llm_reports_tokens_and_maps_errors(name, tmp_path):
 
 # ---------------------------------------------------------------- crm
 
-CRM = {"local": lambda tmp, faults: local.LocalCRM(tmp, faults)}
+def _hubspot(tmp: Path, faults: FaultPlan):
+    from tests.adapters.test_hubspot import contract_factory
+
+    return contract_factory(tmp, faults)
+
+
+def _monid(tmp: Path, faults: FaultPlan):
+    from tests.adapters.test_monid import contract_factory
+
+    return contract_factory(tmp, faults)
+
+
+CRM = {"local": lambda tmp, faults: local.LocalCRM(tmp, faults), "hubspot": _hubspot}
 
 
 @pytest.mark.parametrize("name", _ids(CRM))
@@ -190,7 +202,7 @@ def test_scrape_fee_page_and_search(name, tmp_path):
 
 # ---------------------------------------------------------------- toolbuy
 
-TOOLBUY = {"local": lambda tmp, faults: local.LocalToolBuy(faults)}
+TOOLBUY = {"local": lambda tmp, faults: local.LocalToolBuy(faults), "monid": _monid}
 
 
 @pytest.mark.parametrize("name", _ids(TOOLBUY))

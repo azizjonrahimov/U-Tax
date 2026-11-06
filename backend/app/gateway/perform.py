@@ -97,6 +97,7 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "book_call": ("intake",), "phone_check": ("qa",), "post_social": ("mkt",),
     "draft_dm": ("mkt",), "hr_record": ("hr",), "firm_brief": ("cos",),
     "get_candidate": ("hr",), "flag_case": ("qa",),  # v1.4
+    "buy_tool": ("mkt",),  # v1.7.3: Monid data calls, allowlisted and capped
 }
 POST_MAX_CHARS = 255
 X_MAX_CHARS = 280
@@ -307,6 +308,7 @@ class Gateway:
             "hr_record": self._hr_record,
             "get_candidate": self._get_candidate,
             "flag_case": self._flag_case,
+            "buy_tool": self._buy_tool,
             "firm_brief": self._firm_brief,
             # gateway / control actions (contract §5, §6a-c): never callable by an agent token
             "inject_email": self._inject_email,
@@ -327,7 +329,9 @@ class Gateway:
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
         # reads that touch a slow port run before the lock is taken (contract §6f)
-        self._slow_reads: dict[str, Callable[[dict], dict]] = {"law_search": self._law_fetch}
+        self._slow_reads: dict[str, Callable[[dict], dict]] = {"law_search": self._law_fetch,
+                                                               "buy_tool": self._buy_fetch}
+        self._restore_toolbuy()
         self._outbox_tries: dict[str, tuple[int, float]] = {}
         self._outbox_inflight: set[str] = set()
         self._digest_backoff_until = 0.0
@@ -1531,6 +1535,113 @@ class Gateway:
         return {"status": "NOT_ELIGIBLE", "message_id": sent.message_id}
 
     # ------------------------------------------------------------ tax tools
+
+    # ------------------------------------------------------------ buy_tool (v1.7.3)
+
+    _BUY_KEY = re.compile(r"[A-Za-z0-9_.:-]{1,120}")
+
+    @staticmethod
+    def _buy_fingerprint(tool: str, data: dict) -> str:
+        from app.gateway.adapters import _http
+
+        return _http.fingerprint(tool, json.dumps(data, sort_keys=True, allow_nan=False))
+
+    def _buy_fetch(self, args: dict) -> dict:
+        """buy_tool's slow half, before the lock: validate, then ToolBuyPort.buy()."""
+        tool, data, key = args.get("tool"), args.get("input"), args.get("key")
+        if not isinstance(tool, str) or not tool or len(tool) > 80:
+            return {"refused": "tool must be a tool name from MONID_TOOLS"}
+        if not isinstance(data, dict):
+            return {"refused": "input must be an object"}
+        if not isinstance(key, str) or not self._BUY_KEY.fullmatch(key):
+            return {"refused": "key must be 1-120 of A-Z a-z 0-9 _ . : -"}
+        try:
+            text = json.dumps(data, sort_keys=True, allow_nan=False)
+        except (TypeError, ValueError, RecursionError):
+            return {"refused": "input must be plain JSON"}
+        if has_email(text) or has_phone(text) or _CASE_REF.search(text):
+            return {"refused": "input must not carry an email, a phone number or a case id "
+                               "(public startup data only)"}
+        port_key = f"buy:{key}"
+        try:
+            purchase = self.ports.toolbuy.buy(tool, data, port_key)
+        except PortError as err:
+            unsure = type(err).__name__ == "Unsure"
+            ceiling = None
+            spec = getattr(self.ports.toolbuy, "tools", {}).get(tool) if unsure else None
+            if spec:
+                ceiling = str(spec.get("max_usd"))
+            return {"error": err.code, "message": str(err)[:200], "unsure": unsure,
+                    "fingerprint": self._buy_fingerprint(tool, data), "port_key": port_key,
+                    "ceiling": ceiling, "retryable": err.retryable}
+        return {"purchase": purchase, "fingerprint": self._buy_fingerprint(tool, data),
+                "port_key": port_key}
+
+    def _buy_tool(self, args: dict) -> dict:
+        tool = _str(args, "tool", max_len=80)
+        key = _str(args, "key", max_len=120)
+        fetched = args.get("_prefetch") or {}
+        if fetched.get("refused"):
+            raise Refused("bad_input", fetched["refused"])
+        provider = self.ports.toolbuy.provider
+        private = {"key": fetched.get("port_key"), "fingerprint": fetched.get("fingerprint")}
+        if "error" in fetched:
+            if fetched.get("unsure"):  # it may be charged: remembered across restarts
+                self._emit([NewEvent(type="tool.bought", actor="mkt", provider=provider,
+                                     status="failed", payload={"tool": tool, "provider": provider},
+                                     idempotency_key=f"tool:unsure:{fetched['port_key']}",
+                                     private={**private, "unsure": True,
+                                              "ceiling": fetched.get("ceiling")})])
+            raise (ToolError if fetched.get("retryable") else Refused)(
+                fetched["error"], f"buy_tool: {fetched['message']}")
+        purchase = fetched["purchase"]
+        done = self._done_from(f"tool:{fetched['port_key']}")
+        if done is None:  # the adapter replays a repeat key; the log records it once
+            events = [NewEvent(type="tool.bought", actor="mkt", provider=provider,
+                               payload={"tool": tool, "provider": provider},
+                               cost_usd=purchase.cost_usd,
+                               idempotency_key=f"tool:{fetched['port_key']}",
+                               private={**private, "bought": purchase.bought})]
+            if purchase.bought:
+                events.append(NewEvent(type="cost.booked", actor="system", provider=provider,
+                                       payload={"provider": provider, "model": f"tool:{tool}",
+                                                "estimated": False},
+                                       cost_usd=purchase.cost_usd,
+                                       idempotency_key=f"cost:tool:{fetched['port_key']}"))
+            self._emit(events)
+        return {"tool": tool, "key": key, "bought": purchase.bought,
+                "cost_usd": purchase.cost_usd, "result": purchase.result}
+
+    def _restore_toolbuy(self) -> None:
+        """Monid keeps purchases, unsure keys and today's spend in memory; replay them from
+        tool.bought at boot, so a restart never re-buys a key or forgets today's spend."""
+        port = self.ports.toolbuy
+        if not all(hasattr(port, name) for name in ("_remember", "_book", "_unsure", "_lock")):
+            return
+        from app.gateway.ports import Purchase
+
+        today = self._now().date().isoformat()
+        resolved: set[str] = set()
+        bought = [e for e in self.store.since(0) if e.type == "tool.bought"]
+        with port._lock:
+            for e in bought:
+                private = e.private or {}
+                key, fp = private.get("key"), private.get("fingerprint")
+                if not key or not fp:
+                    continue
+                if e.status == "ok":
+                    resolved.add(key)
+                    port._unsure.pop(key, None)
+                    if not private.get("bought", True):
+                        continue
+                    port._remember(key, fp, Purchase(result=None, cost_usd=e.cost_usd or "0",
+                                                     bought=True))
+                    if e.ts[:10] == today and e.cost_usd:
+                        port._spent_today()
+                        port._book(Decimal(e.cost_usd))
+                elif private.get("unsure") and key not in resolved:
+                    ceiling = Decimal(private.get("ceiling") or "0")
+                    port._unsure[key] = (fp, ceiling)
 
     def _law_searches_last_hour(self) -> int:
         hour_ago = self._now() - timedelta(hours=1)

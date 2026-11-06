@@ -121,6 +121,15 @@ TOOLS: dict[str, dict[str, Any]] = {
                       ["case_id", "kind"])},
     "firm_brief": {"description": "Counts, blocked cards and touches for the brief.",
                    "inputSchema": _obj({})},
+    "buy_tool": {"description": "Buy one allowlisted data call (Monid) for public startup data. "
+                                "Refused for any tool not in MONID_TOOLS, over its price "
+                                "ceiling or the daily cap, or for input with an email, phone "
+                                "or case id. Reuse the same key to retry: it never pays twice.",
+                 "inputSchema": _obj({"tool": {"type": "string"},
+                                      "input": {"type": "object"},
+                                      "key": {"type": "string",
+                                              "description": "your id for this purchase"}},
+                                     ["tool", "input", "key"])},
 }
 assert set(TOOLS) == set(TOOL_ACTORS), "every §6 tool needs a schema"
 

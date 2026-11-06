@@ -219,7 +219,9 @@ class State:
 
     def apply(self, e: Event) -> None:
         self.last_event_id = max(self.last_event_id, e.id)
-        if e.cost_usd is not None:
+        if e.cost_usd is not None and e.type != "tool.bought":
+            # tool.bought carries its price for the screen; the matching cost.booked is the
+            # one booking (counting both would double every purchase)
             provider = e.provider or "unknown"
             self.spent_by_provider[provider] = (self.spent_by_provider.get(provider, Decimal(0))
                                                 + Decimal(e.cost_usd))
