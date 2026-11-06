@@ -39,6 +39,9 @@ class Settings:
     ceo_digest_hours: int = 3
     inbox_clients: str = ""
     inbox_hiring: str = ""
+    public_talk_url: str = ""  # the only URL a post may carry (v1.4)
+    driver: str = ""  # "local": the in-process stand-in crew plays the agents (D26)
+    driver_pace_seconds: float = 1.2
     tool_tokens: dict[str, str] = field(default_factory=dict)  # actor -> token (v1.3)
 
     @property
@@ -75,5 +78,8 @@ class Settings:
             ceo_digest_hours=int(_env("CEO_DIGEST_HOURS") or 3),
             inbox_clients=_env("MAIL_INBOX_CLIENTS"),
             inbox_hiring=_env("MAIL_INBOX_HIRING"),
+            public_talk_url=_env("PUBLIC_TALK_URL"),
+            driver=_env("UTAX_DRIVER").lower(),
+            driver_pace_seconds=float(_env("UTAX_DRIVER_PACE") or 1.2),
             tool_tokens={a: t for a, t in tokens.items() if t},
         )

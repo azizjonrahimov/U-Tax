@@ -44,6 +44,12 @@ def build_port(name: str, settings: Settings):
     choice = settings.adapters.get(name, "local")
     if choice in ("local", "none"):
         return _local(name, settings)
+    if name == "voice" and choice == "openai":
+        if not settings.openai_api_key:  # the routes then answer 503 voice_unavailable
+            return local.NoVoice()
+        from app.gateway.adapters.openai_voice import OpenAIVoice
+
+        return OpenAIVoice(settings.openai_api_key)
     if choice in SPONSORS.get(name, ()):
         raise AdapterNotReady(f"ADAPTER_{name.upper()}={choice}: the sponsor adapter isn't "
                               "built yet (Saturday); use local")
@@ -70,4 +76,7 @@ def build_store(settings: Settings) -> EventStorePort:
 
 def build_gateway(settings: Settings | None = None) -> Gateway:
     settings = settings or Settings.from_env()
+    if settings.store == "postgres" and not (settings.admin_token and settings.theater_token):
+        # empty tokens disable auth (local dev only); a production store never runs open
+        raise AdapterNotReady("STORE=postgres needs ADMIN_TOKEN and THEATER_TOKEN set")
     return Gateway(build_store(settings), build_ports(settings), settings)

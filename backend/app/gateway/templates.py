@@ -151,5 +151,8 @@ def questionnaire_body() -> str:
 def ceo_notice_body(summary: str, reason: str) -> str:
     lead = {"approval": "An action is waiting for your OK.",
             "blocked": "A case is blocked and needs you.",
-            "digest": "Here's what the firm did since the last update."}.get(reason, "")
+            "digest": "Here's what the firm did since the last update.",
+            "flagged": "QA flagged a case for you to look at.",
+            "shortlisted": "A candidate is shortlisted; the hiring decision is yours.",
+            "paused": "Sends of one kind are paused until you resume them."}.get(reason, "")
     return f"{lead}\n{summary}\nOpen the CEO console to act on it.".strip()
