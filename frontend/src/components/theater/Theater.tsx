@@ -267,7 +267,7 @@ export function Theater() {
           <span className="source">FIXTURE · contract sample</span>
           <span className="live">
             <span className={`dot${playing ? "" : " idle"}`} />
-            {playing ? "PLAYING LOG" : script ? "END OF LOG" : "OPENING"}
+            {loadError ? "NO LOG" : playing ? "PLAYING LOG" : script ? "END OF LOG" : "OPENING"}
           </span>
           <span className="mono" aria-label="time of the current event">
             {clock}
