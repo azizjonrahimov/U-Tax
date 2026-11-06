@@ -1,0 +1,6 @@
+# The gateway reads these files; keep LF so exact-line checks (the memo disclaimer) never see a CR.
+*.md text eol=lf
+*.ts text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+.env.example text eol=lf
