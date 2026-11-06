@@ -1,0 +1,15 @@
+{
+  "name": "utax-naive",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "check": "node scripts/check.mjs",
+    "plan": "naive up --dry-run"
+  },
+  "devDependencies": {
+    "@usenaive-sdk/blueprints": "0.18.0",
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  }
+}
