@@ -107,7 +107,49 @@ def ask_body(missing: list[str], problems: list[str]) -> str:
     return f"{first} No SSNs or EINs please.\n{DISCLAIMER}"
 
 
-def not_eligible_body() -> str:
-    return ("Thanks for reaching out! U-Tax only checks Delaware franchise tax for Delaware "
-            "corporations, so we can't estimate yours yet. Come back once you're "
-            "incorporated in Delaware and we'll run it for free.\n" + DISCLAIMER)
+NOT_ELIGIBLE_REASONS = ("not_incorporated", "outside_delaware", "not_a_corporation")
+_NOT_ELIGIBLE_WHY = {
+    "not_incorporated": "it sounds like you haven't incorporated yet",
+    "outside_delaware": "your company is incorporated outside Delaware",
+    "not_a_corporation": "Delaware franchise tax for LLCs and partnerships works differently "
+                         "(a flat annual tax), so our corporation estimate doesn't apply",
+}
+_NOT_ELIGIBLE_NEXT = {
+    "not_incorporated": "Come back once you've formed a Delaware corporation",
+    "outside_delaware": "Come back if you ever re-domicile in Delaware",
+    "not_a_corporation": "Come back if you convert to a Delaware C-corp",
+}
+
+
+def not_eligible_body(reason: str) -> str:
+    """The kind reply, chosen by the reason enum: no agent text reaches the client."""
+    if reason not in NOT_ELIGIBLE_REASONS:
+        raise TemplateError(f"reason must be one of {NOT_ELIGIBLE_REASONS}")
+    return ("Thanks for reaching out! U-Tax checks Delaware franchise tax for Delaware "
+            f"corporations, and {_NOT_ELIGIBLE_WHY[reason]}, so we can't estimate yours yet. "
+            f"{_NOT_ELIGIBLE_NEXT[reason]} and we'll run it for free.\n{DISCLAIMER}")
+
+
+QUESTIONNAIRE_SUBJECT = "U-Tax: a few questions about the gig"
+
+
+def questionnaire_body() -> str:
+    """Auto-reply to applicants (contract §6c). The AI screen is disclosed up front."""
+    return (
+        "Thanks for applying to U-Tax! This is a paid 1-hour gig reviewing Delaware "
+        "franchise tax memos.\n"
+        "Heads-up: an AI agent runs this first screen, and a human makes the final call.\n"
+        "Please reply to this email with:\n"
+        "1. Your credentials (EA, CPA, or other) and where you hold them\n"
+        "2. Years of startup or small-business tax work\n"
+        "3. When you could do one hour this weekend\n"
+        "4. Your rate for the hour\n"
+        "Please don't send SSNs, EINs or ID documents."
+    )
+
+
+def ceo_notice_body(summary: str, reason: str) -> str:
+    lead = {"approval": "An action is waiting for your OK.",
+            "blocked": "A case is blocked and needs you.",
+            "digest": "Here's what the firm did since the last update."}.get(reason, "")
+    return f"{lead}\n{summary}\nOpen the CEO console to act on it.".strip()

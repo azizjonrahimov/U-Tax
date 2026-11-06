@@ -28,7 +28,6 @@ class Settings:
     events_path: Path | None = None
     database_url: str = ""
     adapters: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ADAPTERS))
-    tool_secret: str = ""
     theater_token: str = ""
     admin_token: str = ""
     theater_origin: str = ""
@@ -36,6 +35,11 @@ class Settings:
     cap_per_hour: int = 10
     spend_cap_usd: Decimal | None = None
     max_asks: int = 2
+    ceo_email: str = ""
+    ceo_digest_hours: int = 3
+    inbox_clients: str = ""
+    inbox_hiring: str = ""
+    tool_tokens: dict[str, str] = field(default_factory=dict)  # actor -> token (v1.3)
 
     @property
     def events_file(self) -> Path:
@@ -50,6 +54,8 @@ class Settings:
             if value:
                 adapters[name] = value.lower()
         spend_cap = _env("SPEND_CAP_USD")
+        tokens = {actor: _env(f"UTAX_TOOL_TOKEN_{actor.upper()}")
+                  for actor in ("cos", "intake", "tax", "qa", "acct", "mkt", "hr")}
         return cls(
             data_dir=data_dir,
             fixtures_dir=Path(_env("UTAX_FIXTURES_DIR") or REPO_ROOT / "fixtures"),
@@ -59,11 +65,15 @@ class Settings:
             events_path=Path(_env("EVENTS_PATH")) if _env("EVENTS_PATH") else None,
             database_url=_env("DATABASE_URL"),
             adapters=adapters,
-            tool_secret=_env("UTAX_TOOL_SECRET"),
             theater_token=_env("THEATER_TOKEN"),
             admin_token=_env("ADMIN_TOKEN"),
             theater_origin=_env("THEATER_ORIGIN"),
             openai_api_key=_env("OPENAI_API_KEY"),
             cap_per_hour=int(_env("CAP_PER_HOUR") or 10),
             spend_cap_usd=Decimal(spend_cap) if spend_cap else None,
+            ceo_email=_env("CEO_EMAIL"),
+            ceo_digest_hours=int(_env("CEO_DIGEST_HOURS") or 3),
+            inbox_clients=_env("MAIL_INBOX_CLIENTS"),
+            inbox_hiring=_env("MAIL_INBOX_HIRING"),
+            tool_tokens={a: t for a, t in tokens.items() if t},
         )

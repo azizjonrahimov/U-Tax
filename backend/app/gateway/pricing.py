@@ -19,8 +19,9 @@ FOUR_PLACES = Decimal("0.0001")
 
 
 def usd_string(value: Decimal) -> str:
-    """Decimal string with 4 places, the wire format for agent cost."""
-    return str(value.quantize(FOUR_PLACES, rounding=ROUND_HALF_UP))
+    """Fixed-point string with 4 places, the wire format for agent cost (contract v1.3.1).
+    `format(d, "f")`, never `str(d)`: str(Decimal("0E-4")) is "0E-4"."""
+    return format(value.quantize(FOUR_PLACES, rounding=ROUND_HALF_UP), "f")
 
 
 def parse_usd(text: str | int | Decimal) -> Decimal:

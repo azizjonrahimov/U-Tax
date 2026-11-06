@@ -66,6 +66,24 @@ def company_label(address: str) -> str | None:
     return name
 
 
+_PHONE = re.compile(r"(?<![\w$])\+?\d{1,2}?[\s.-]?\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}(?!\d)")
+
+
+def has_email(text: str) -> bool:
+    return bool(_EMAIL.search(text))
+
+
+def has_phone(text: str) -> bool:
+    return bool(_PHONE.search(text))
+
+
+def strip_contacts(text: str) -> str:
+    """Remove email addresses and phone numbers entirely (HR: no contact details reach agents)."""
+    text, _ = redact_ids(text)
+    text = _EMAIL.sub("[email removed]", text)
+    return _PHONE.sub("[phone removed]", text)
+
+
 def mask_text(text: str, *, masked_name: str, company: str | None) -> str:
     """Redact ids, mask email addresses, and replace the company word with the mask."""
     text, _ = redact_ids(text)

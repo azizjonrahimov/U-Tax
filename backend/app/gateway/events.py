@@ -53,6 +53,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "hr.declined": _HR,
     "screen.call": ("candidate_id", "transcript_excerpt", "seconds"),
     "voice.command": ("text", "channel", "speaker", "case_id"),
+    "ceo.notified": ("channel", "subject", "summary", "reason"),
     "approval.requested": ("approval_id", "action_type", "summary"),
     "touch.training": _TOUCH,
     "touch.operating": _TOUCH,

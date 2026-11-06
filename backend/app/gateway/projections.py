@@ -186,7 +186,7 @@ class State:
         self._open_case(e, text=e.payload["body"], subject=e.payload["subject"])
 
     def _on_voice_command(self, e: Event) -> None:
-        if e.payload.get("speaker") == "judge" and e.case_id:
+        if e.payload.get("speaker") == "customer" and e.case_id:
             self._open_case(e, text=e.payload["text"], subject="Voice case", priority=True)
 
     def _open_case(self, e: Event, *, text: str, subject: str, priority: bool = False) -> None:
@@ -331,6 +331,10 @@ class State:
         cid = e.payload["candidate_id"]
         cand = self.candidates.setdefault(cid, {"candidate_id": cid, "stages": set()})
         cand["name_masked"] = e.payload["name_masked"]
+        private = e.private or {}
+        if private.get("sender_key"):  # applicant mail: gateway-only contact details
+            cand["sender_key"] = private["sender_key"]
+            cand["reply_to"] = private.get("reply_to")
         cand["stage"] = stage
         if stage not in cand["stages"]:
             cand["stages"].add(stage)

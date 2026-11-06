@@ -33,7 +33,15 @@ from app.engine import (
 from app.gateway import intake
 from app.gateway.adapters.local import DELAWARE_FEE_URL
 from app.gateway.events import PROVIDERS, Event, NewEvent, iso_ts, parse_ts
-from app.gateway.masking import company_label, mask_email, mask_text, redact_ids
+from app.gateway.masking import (
+    company_label,
+    has_email,
+    has_phone,
+    mask_email,
+    mask_text,
+    redact_ids,
+    strip_contacts,
+)
 from app.gateway.ports import (
     CrmContact,
     InMail,
@@ -50,16 +58,37 @@ from app.gateway.settings import Settings
 from app.gateway.templates import (
     FACT_LABELS,
     MEMO_SUBJECT,
+    NOT_ELIGIBLE_REASONS,
+    QUESTIONNAIRE_SUBJECT,
     TemplateError,
     ask_body,
+    ceo_notice_body,
     load_memo_template,
     not_eligible_body,
+    questionnaire_body,
     render_memo,
 )
 
 log = logging.getLogger("utax.perform")
 
 FEE_CACHE_SECONDS = 6 * 3600
+AGENTS = ("cos", "intake", "tax", "qa", "acct", "mkt", "hr")
+# Contract §6 "Agent" column: the token's actor may call only these (get_case: any).
+TOOL_ACTORS: dict[str, tuple[str, ...]] = {
+    "list_open_cases": ("cos",), "get_case": AGENTS, "extract_facts": ("intake",),
+    "ask_client": ("intake",), "mark_not_eligible": ("intake",), "law_search": ("tax",),
+    "compute_tax": ("tax",), "qa_check": ("qa",), "send_memo": ("acct",),
+    "book_call": ("intake",), "phone_check": ("qa",), "post_social": ("mkt",),
+    "draft_dm": ("mkt",), "hr_record": ("hr",), "firm_brief": ("cos",),
+}
+SLOT_COUNT = 3
+SLOT_MINUTES = 15
+SLOT_LEAD = timedelta(hours=2)
+SLOT_DAY_UTC = (17, 24)  # 9:00-16:00 Pacific, in UTC hours [start, end)
+# Dollar amounts a post may name (the public headline numbers); anything else is refused.
+POST_ALLOWED_AMOUNTS = {"$85,165", "$400", "$450", "$50"}
+_POST_AMOUNT = re.compile(r"\$\s?\d[\d,]*(?:\.\d+)?\s?(?:[kKmMbB]\b|mm\b|bn\b)?")
+_CASE_REF = re.compile(r"(?i)\bcase[_ -]?\d+\b|\bteam\s*#\s*\d+\b")
 SEND_ATTEMPTS = 3  # first try + 2 retries (Error & Rescue Map)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
@@ -187,22 +216,24 @@ class Gateway:
             "post_social": self._post_social,
             "draft_dm": self._draft_dm,
             "hr_record": self._hr_record,
-            "book_cost": self._book_cost,
             "firm_brief": self._firm_brief,
-            # control actions (contract §5)
+            # gateway / control actions (contract §5, §6a-c): never callable by an agent token
             "inject_email": self._inject_email,
             "receive_email": self._receive_email,
             "voice": self._voice,
             "approve": self._approve,
             "ceo_stop": self._ceo_stop,
+            "ceo_brief": self._ceo_brief,
+            "ceo_digest": self._ceo_digest,
+            "book_spend": self._book_spend,
             "send_dm_by_human": self._send_dm_by_human,
             "hr_hire": self._hr_hire,
         }
+        self._wakers: list[Callable[[str], None]] = []
+        self._pending_wakes: list[str] = []
 
     READ_ONLY = frozenset({"list_open_cases", "get_case"})
-    TOOLS = ("list_open_cases", "get_case", "extract_facts", "ask_client", "mark_not_eligible",
-             "law_search", "compute_tax", "qa_check", "send_memo", "book_call", "phone_check",
-             "post_social", "draft_dm", "hr_record", "book_cost", "firm_brief")
+    TOOLS = tuple(TOOL_ACTORS)
 
     # ------------------------------------------------------------ plumbing
 
@@ -210,12 +241,41 @@ class Gateway:
         self._listeners.append(listener)
         return lambda: self._listeners.remove(listener) if listener in self._listeners else None
 
-    def perform(self, name: str, args: dict | None = None) -> ToolResult:
+    def on_wake(self, waker: Callable[[str], None]) -> Callable[[], None]:
+        """Contract §6b: called with each wake-up message ("New case case_7", ...)."""
+        self._wakers.append(waker)
+        return lambda: self._wakers.remove(waker) if waker in self._wakers else None
+
+    def _wake(self, message: str) -> None:
+        self._pending_wakes.append(message)
+
+    def _deliver_wakes(self) -> None:
+        wakes, self._pending_wakes = self._pending_wakes, []
+        for message in wakes:
+            log.info("WAKE %s", message)
+            for waker in list(self._wakers):
+                try:
+                    waker(message)
+                except Exception:  # noqa: BLE001 - a dead waker never blocks the firm
+                    log.exception("waker failed for %r", message)
+
+    def perform(self, name: str, args: dict | None = None, *, actor: str | None = None) -> ToolResult:
+        """Run one action. `actor` is set for agent tool calls (from the MCP token) and
+        limits them to that agent's tools; control actions are never open to an agent."""
         handler = self._handlers.get(name)
         if handler is None:
             return ToolResult("refused", error={"code": "unknown_action",
                                                 "message": f"no action named {name!r}"})
+        if actor is not None and actor not in TOOL_ACTORS.get(name, ()):
+            return ToolResult("refused", error={"code": "tool_not_allowed",
+                                                "message": f"{actor} may not call {name}"})
         args = dict(args or {})
+        try:
+            return self._perform_locked(name, handler, args)
+        finally:
+            self._deliver_wakes()  # outside the lock: a slow Naïve call never blocks writes
+
+    def _perform_locked(self, name: str, handler: Callable[[dict], dict], args: dict) -> ToolResult:
         with self._lock:
             try:
                 if name not in self.READ_ONLY:
@@ -299,7 +359,29 @@ class Gateway:
             or case.status == "BLOCKED" else None
         if status:
             events.append(status)
-        return self._emit(events)
+        out = self._emit(events)
+        self._notify_ceo("blocked", f"Blocked: {case.masked_name}", f"{case.masked_name}: {reason}",
+                         key=f"ceo:blocked:{out[0].id}")
+        return out
+
+    def _notify_ceo(self, reason: str, subject: str, summary: str, *, key: str,
+                    channel: str = "email") -> None:
+        """CEO updates (contract §5, D24): email CEO_EMAIL, then log `ceo.notified`.
+        Never fails the action that triggered it."""
+        if channel == "email":
+            if not self.settings.ceo_email:
+                return
+            try:
+                self.ports.mail.send(OutMail(to=self.settings.ceo_email, subject=f"U-Tax: {subject}",
+                                             body=ceo_notice_body(summary, reason)), key)
+            except PortError as err:
+                log.warning("CEO email failed (%s): %s", reason, err)
+                return
+        self._emit([NewEvent(type="ceo.notified", actor="cos", provider=None if channel == "login"
+                             else self.ports.mail.provider,
+                             payload={"channel": channel, "subject": subject[:120],
+                                      "summary": summary[:500], "reason": reason},
+                             idempotency_key=key)])
 
     # ------------------------------------------------------------ trust
 
@@ -340,6 +422,8 @@ class Gateway:
                                       "summary": summary},
                              idempotency_key=f"approval:{action_key}",
                              private={"action_key": action_key})])
+        self._notify_ceo("approval", f"Approve? {summary}"[:120], f"{approval_id}: {summary}",
+                         key=f"ceo:approval:{approval_id}")
         raise NeedsApproval(approval_id, summary)
 
     def _first(self, action_type: str) -> str:
@@ -388,18 +472,86 @@ class Gateway:
         sender = _str(args, "from", max_len=320)
         if not _EMAIL_RE.match(sender):
             raise Refused("bad_input", "from must be an email address")
+        inbox = _one_of(args, "inbox", ("clients", "hiring"), default="clients")
         mail = self.ports.mail.parse_inbound({
             "from": sender, "subject": _str(args, "subject", required=False, max_len=300) or "",
             "body": _str(args, "body", max_len=20000), "message_id": args.get("message_id"),
         })
-        return self._receive(mail, provider=self.ports.mail.provider)
+        return self._route_inbound(mail, inbox)
 
     def _receive_email(self, args: dict) -> dict:
         """A parsed inbound mail from a MailPort (webhook Saturday, .eml files tonight)."""
         mail = args.get("mail")
         if not isinstance(mail, InMail):
             raise Refused("bad_input", "mail must be an InMail")
-        return self._receive(mail, provider=self.ports.mail.provider)
+        return self._route_inbound(mail, _one_of(args, "inbox", ("clients", "hiring"),
+                                                 default="clients"))
+
+    def _route_inbound(self, mail: InMail, inbox: str) -> dict:
+        """Contract §6c: two inboxes. Checkups open cases; applicants go to HR."""
+        if inbox == "hiring":
+            return self._receive_applicant(mail)
+        result = self._receive(mail, provider=self.ports.mail.provider)
+        if not result.get("duplicate"):
+            self._wake(f"New case {result['case_id']}")
+        return result
+
+    # ------------------------------------------------------------ hiring inbox (§6c)
+
+    def _candidate_for(self, sender_key: str) -> tuple[str, str, bool]:
+        for cid, cand in self.state.candidates.items():
+            if cand.get("sender_key") == sender_key:
+                return cid, cand["name_masked"], False
+        n = len(self.state.candidates) + 1
+        letters = ""
+        while n:
+            n, rem = divmod(n - 1, 26)
+            letters = chr(65 + rem) + letters
+        return f"cand_{len(self.state.candidates) + 1}", f"Candidate {letters}", True
+
+    def _receive_applicant(self, mail: InMail) -> dict:
+        key = f"applicant:{mail.message_id}"
+        seen = self._done_from(key)
+        if seen is not None:
+            return {"candidate_id": seen.payload["candidate_id"], "duplicate": True}
+        sender_key = mail.sender.strip().lower()
+        candidate_id, name_masked, new = self._candidate_for(sender_key)
+        # stated credentials only: contact details and ids never reach an agent
+        note = re.sub(r"\s+", " ", strip_contacts(mail.body)).strip()[:400]
+        self._emit([NewEvent(type="hr.applicant", actor="hr", provider=self.ports.mail.provider,
+                             payload={"candidate_id": candidate_id, "name_masked": name_masked,
+                                      "note": note},
+                             idempotency_key=key,
+                             private={"reply_to": mail.sender.strip(), "sender_key": sender_key,
+                                      "message_id": mail.message_id})])
+        questionnaire = "skipped"
+        if new:
+            questionnaire = self._send_questionnaire(candidate_id)
+        self._wake(f"New applicant {candidate_id}")
+        return {"candidate_id": candidate_id, "name_masked": name_masked, "new": new,
+                "questionnaire": questionnaire}
+
+    def _send_questionnaire(self, candidate_id: str) -> str:
+        """Auto-reply (trust type email). If email is still ASK, the approval sends it later."""
+        # The contract has no event type for this auto-reply, so it writes none; the
+        # MailPort key makes a resend (e.g. after the approval) a no-op.
+        cand = self.state.candidates[candidate_id]
+        key = f"questionnaire:{candidate_id}"
+        try:
+            self._gate("email", key, _cap(f"{self._first('email')}hiring questionnaire: "
+                                          f"{cand['name_masked']}"), None)
+        except NeedsApproval:
+            return "needs_approval"
+        except Refused:
+            return "denied"
+        try:
+            self._with_retry("questionnaire email", lambda: self.ports.mail.send(
+                OutMail(to=cand["reply_to"], subject=QUESTIONNAIRE_SUBJECT,
+                        body=questionnaire_body()), key))
+        except ToolError as err:
+            log.warning("questionnaire to %s failed: %s", candidate_id, err)
+            return "failed"
+        return "sent"
 
     def _new_case_number(self) -> int:
         return max((c.number for c in self.state.cases.values()), default=0) + 1
@@ -441,8 +593,8 @@ class Gateway:
 
     def _voice(self, args: dict) -> dict:
         text = _str(args, "text", max_len=4000)
-        channel = _one_of(args, "channel", ("mic", "typed"), default="typed")
-        speaker = _one_of(args, "speaker", ("ceo", "judge"), default="ceo")
+        channel = _one_of(args, "channel", ("voice", "typed"), default="typed")
+        speaker = _one_of(args, "speaker", ("customer", "ceo"))
         text, _ = redact_ids(text)
         if speaker == "ceo":
             text = mask_text(text, masked_name="", company=None)
@@ -451,13 +603,13 @@ class Gateway:
                          payload={"text": text, "channel": channel, "speaker": "ceo",
                                   "case_id": None}),
                 NewEvent(type="touch.operating", actor="ceo",
-                         payload={"note": f'voice: "{text[:120]}"', "approval_id": None}),
+                         payload={"note": f'order: "{text[:120]}"', "approval_id": None}),
             ])
-            # Stand-in: the Chief of Staff forward (Naïve REST) is wired once a key exists.
-            return {"forwarded": False, "note": "logged; Chief of Staff forward not wired yet"}
+            self._wake(f"CEO: {text}")
+            return {"forwarded": True}
         reply = _str(args, "reply_email", max_len=320)
         if not _EMAIL_RE.match(reply or ""):
-            raise Refused("bad_input", "a judge case needs reply_email")
+            raise Refused("bad_input", "a customer case needs reply_email")
         sender_key = reply.lower()
         case_id = self.state.case_by_sender.get(sender_key)
         case = self.state.cases.get(case_id) if case_id else None
@@ -465,14 +617,15 @@ class Gateway:
         case_id = case_id or f"case_{number}"
         masked_name = case.masked_name if case else f"Team #{number}"
         events = [NewEvent(
-            type="voice.command", actor="ceo", case_id=case_id, provider="local",
+            type="voice.command", actor="intake", case_id=case_id, provider="local",
             payload={"text": mask_text(text, masked_name=masked_name, company=None),
-                     "channel": channel, "speaker": "judge", "case_id": case_id},
+                     "channel": channel, "speaker": "customer", "case_id": case_id},
             private={"reply_to": reply, "sender_key": sender_key, "masked_name": masked_name,
                      "company": None},
         )]
         events += self._reopen(case, case_id)
         self._emit(events)
+        self._wake(f"FAST PATH {case_id}")
         return {"case_id": case_id, "masked_name": masked_name, "priority": True}
 
     # ------------------------------------------------------------ approvals
@@ -490,11 +643,13 @@ class Gateway:
         current = self.state.trust[action_type]
         key = f"approve:{approval_id}"
         private = {"decision": decision, "ceo_note": note}
+        target = approval.case_id or "firm"
         if decision == "deny":
             self._emit([NewEvent(type="touch.operating", actor="ceo", case_id=approval.case_id,
                                  payload={"note": f"denied: {approval.summary}"[:160],
                                           "approval_id": approval_id},
                                  idempotency_key=key, private=private)])
+            self._wake(f"Approval {approval_id} denied for {target}")
             return {"approval_id": approval_id, "decision": "deny"}
         events: list[NewEvent] = []
         if current != "AUTO":
@@ -515,8 +670,13 @@ class Gateway:
                                             "approval_id": approval_id},
                                    idempotency_key=key, private=private))
         self._emit(events)
-        return {"approval_id": approval_id, "decision": "allow",
-                "trust": self.state.trust[action_type]}
+        result = {"approval_id": approval_id, "decision": "allow",
+                  "trust": self.state.trust[action_type]}
+        if approval.action_key.startswith("questionnaire:"):
+            # gateway-owned action: no agent retries it, so the gateway does
+            result["questionnaire"] = self._send_questionnaire(approval.action_key.split(":", 1)[1])
+        self._wake(f"Approval {approval_id} allowed for {target}")
+        return result
 
     def _ceo_stop(self, args: dict) -> dict:
         action_type = _one_of(args, "action_type", TRUST_TYPES)
@@ -558,9 +718,68 @@ class Gateway:
                            "next": self._NEXT.get(c.status)} for c in open_cases]}
 
     def _get_case(self, args: dict) -> dict:
-        return self._case(args).detail()
+        return {**self._case(args).detail(), "offered_slots": self.offered_slots()}
+
+    def offered_slots(self) -> list[str]:
+        """The next free 15-minute slots (9:00-16:00 Pacific, at least 2 h out).
+        Stable for hours, so the slots an agent saw are still offered when it books."""
+        booked = {c.call["start"] for c in self.state.cases.values() if c.call}
+        start = self._now() + SLOT_LEAD
+        start = start.replace(second=0, microsecond=0)
+        start += timedelta(minutes=(-start.minute) % SLOT_MINUTES)
+        slots: list[str] = []
+        when = start
+        for _ in range(7 * 24 * 60 // SLOT_MINUTES):  # look a week ahead at most
+            if SLOT_DAY_UTC[0] <= when.hour < SLOT_DAY_UTC[1]:
+                iso = iso_ts(when)
+                if iso not in booked:
+                    slots.append(iso)
+                    if len(slots) == SLOT_COUNT:
+                        break
+            when += timedelta(minutes=SLOT_MINUTES)
+        return slots
 
     def _firm_brief(self, args: dict) -> dict:
+        text, counts = self._brief_text()
+        self._emit([NewEvent(type="brief.generated", actor="cos", provider="local",
+                             payload={"text": text, "counts": counts})])
+        return {"text": text, "counts": counts}
+
+    def _pending_approvals(self) -> list[dict]:
+        return [{"approval_id": a.approval_id, "action_type": a.action_type, "summary": a.summary}
+                for a in self.state.approvals.values() if a.decision is None]
+
+    def _ceo_brief(self, args: dict) -> dict:
+        """GET /api/ceo/brief: the login brief (stand-in: a template over the projections)."""
+        since_id = _int(args, "since_id") or 0
+        text, counts = self._brief_text()
+        new_events = max(0, self.state.last_event_id - since_id)
+        if since_id:
+            text += f" {new_events} new event{'s' if new_events != 1 else ''} since you last looked."
+        written = self._emit([NewEvent(type="brief.generated", actor="cos", provider="local",
+                                       payload={"text": text, "counts": counts})])
+        self._notify_ceo("login", "Login brief", text, channel="login",
+                         key=f"ceo:login:{written[0].id}")
+        return {"brief_event_id": written[0].id, "text": text, "counts": counts,
+                "pending_approvals": self._pending_approvals(),
+                "last_event_id": self.state.last_event_id}
+
+    def _ceo_digest(self, args: dict) -> dict:
+        """Every CEO_DIGEST_HOURS (the task-6 scheduler calls this): brief + email."""
+        if not self.settings.ceo_email:
+            return {"sent": False, "reason": "no CEO_EMAIL"}
+        last = next((e for e in reversed(list(self.store.since(0)))
+                     if e.type == "ceo.notified" and e.payload["reason"] == "digest"), None)
+        due = timedelta(hours=self.settings.ceo_digest_hours)
+        if last is not None and self._now() - parse_ts(last.ts) < due:
+            return {"sent": False, "reason": "not due"}
+        text, counts = self._brief_text()
+        written = self._emit([NewEvent(type="brief.generated", actor="cos", provider="local",
+                                       payload={"text": text, "counts": counts})])
+        self._notify_ceo("digest", "Firm digest", text, key=f"ceo:digest:{written[0].id}")
+        return {"sent": True, "brief_event_id": written[0].id}
+
+    def _brief_text(self) -> tuple[str, dict]:
         cases = sorted(self.state.cases.values(), key=lambda c: c.number)
         phrases = {"CALL_BOOKED": "call booked", "SENT": "memo sent", "BLOCKED": "blocked",
                    "NOT_ELIGIBLE": "not eligible", "STALLED": "no reply",
@@ -580,9 +799,7 @@ class Gateway:
         counts = {"clients": len(cases),
                   "sent": sum(1 for c in cases if c.memo_message_id),
                   "blocked": sum(1 for c in cases if c.status == "BLOCKED")}
-        self._emit([NewEvent(type="brief.generated", actor="cos", provider="local",
-                             payload={"text": text, "counts": counts})])
-        return {"text": text, "counts": counts}
+        return text, counts
 
     # ------------------------------------------------------------ intake tools
 
@@ -659,7 +876,7 @@ class Gateway:
 
     def _mark_not_eligible(self, args: dict) -> dict:
         case = self._case(args)
-        reason = _str(args, "reason", max_len=300)
+        reason = _one_of(args, "reason", NOT_ELIGIBLE_REASONS)
         self._require_status(case, "NEW", "INTAKE_PENDING", "READY", "STALLED")
         if not case.reply_to:
             raise Refused("no_reply_address", f"{case.case_id} has no reply address")
@@ -669,11 +886,9 @@ class Gateway:
                    case.case_id)
         sent = self._with_retry("not-eligible email", lambda: self.ports.mail.send(
             OutMail(to=case.reply_to, subject=f"Re: {case.subject}".strip(),
-                    body=not_eligible_body()), key))
+                    body=not_eligible_body(reason)), key))
         events = [NewEvent(type="case.not_eligible", actor="intake", case_id=case.case_id,
-                           provider=self.ports.mail.provider,
-                           payload={"reason": mask_text(reason, masked_name=case.masked_name,
-                                                        company=case.company)},
+                           provider=self.ports.mail.provider, payload={"reason": reason},
                            idempotency_key=key, private={"message_id": sent.message_id})]
         events.append(self._status(case, "NOT_ELIGIBLE"))
         self._emit(events)
@@ -804,7 +1019,11 @@ class Gateway:
                                 payload={"reason": f"QA failed: {bad}", "needs": "human"}),
                        NewEvent(type="case.status", actor="system", case_id=case.case_id,
                                 payload={"from": "QA_FAILED", "to": "BLOCKED"})]
-        self._emit(events)
+        written = self._emit(events)
+        if not reask:
+            self._notify_ceo("blocked", f"Blocked: {case.masked_name}",
+                             f"{case.masked_name}: QA failed ({bad})",
+                             key=f"ceo:blocked:{written[0].id}")
         return {"passed": False, "checks": checks,
                 "next": "ask_client" if reask else "firm_brief"}
 
@@ -903,6 +1122,10 @@ class Gateway:
             return {**done.payload, "duplicate": True}
         self._require_status(case, "SENT")
         start_iso = iso_ts(when)
+        offered = self.offered_slots()
+        if start_iso not in offered:
+            raise Refused("slot_not_offered", "start must be one of the case's offered_slots",
+                          {"offered_slots": offered})
         self._gate("calendar_invite", key,
                    _cap(f"{self._first('calendar_invite')}calendar invite: "
                         f"{case.masked_name}, {start_iso}"), case.case_id)
@@ -938,6 +1161,9 @@ class Gateway:
         done = self._done_from(key)
         if done is not None:
             return {"url": done.payload["url"], "duplicate": True}
+        problem = post_problem(text)
+        if problem:
+            raise Refused("content_guard", f"post refused: {problem}")
         self._gate("social_post", key,
                    _cap(f"{self._first('social_post')}post on {channel}: {text[:80]}"),
                    None)
@@ -1001,22 +1227,28 @@ class Gateway:
                              payload={"note": f"hire {cand['name_masked']}", "approval_id": None})])
         return {"candidate_id": candidate_id, "stage": "hired"}
 
-    _AGENTS = ("cos", "intake", "tax", "qa", "acct", "mkt", "hr")
+    def _book_spend(self, args: dict) -> dict:
+        """Contract §6a: the gateway books agent spend; no agent reports money.
 
-    def _book_cost(self, args: dict) -> dict:
+        Sources: Naïve `session.usage` (`consumed_micro_usd`, integer micro-USD), a sponsor
+        response's cost (decimal string), or the code price table (`estimated: true`).
+        """
         provider = _str(args, "provider", max_len=40).lower()
         if provider not in PROVIDERS:
             raise Refused("bad_input", f"unknown provider {provider!r}")
         model = _str(args, "model", required=False, max_len=120) or "unknown"
         tokens_in, tokens_out = _int(args, "tokens_in"), _int(args, "tokens_out")
-        agent = args.get("agent") or "system"
-        if agent not in (*self._AGENTS, "system"):
-            raise Refused("bad_input", f"agent must be one of {', '.join(self._AGENTS)}")
+        micro = args.get("consumed_micro_usd")
         raw_cost = args.get("cost_usd")
         try:
-            cost = parse_usd(raw_cost) if raw_cost not in (None, "") else None
+            if micro is not None:
+                if isinstance(micro, bool) or not isinstance(micro, int) or micro < 0:
+                    raise ValueError("consumed_micro_usd must be integer micro-USD")
+                cost = Decimal(micro) / 1_000_000
+            else:
+                cost = parse_usd(raw_cost) if raw_cost not in (None, "") else None
         except (TypeError, ValueError, InvalidOperation) as err:
-            raise Refused("bad_input", "cost_usd must be a decimal string like \"0.0034\"") from err
+            raise Refused("bad_input", f"bad cost: {err}") from err
         estimated = cost is None
         if cost is None:
             cost = estimate_usd(model, tokens_in, tokens_out)
@@ -1024,7 +1256,7 @@ class Gateway:
         if case_id and case_id not in self.state.cases:
             case_id = None
         key = args.get("idempotency_key")
-        self._emit([NewEvent(type="cost.booked", actor=agent, case_id=case_id, provider=provider,
+        self._emit([NewEvent(type="cost.booked", actor="system", case_id=case_id, provider=provider,
                              payload={"provider": provider, "model": model,
                                       "estimated": estimated},
                              tokens_in=tokens_in, tokens_out=tokens_out,
@@ -1057,6 +1289,21 @@ class Gateway:
                                  payload={"object": job["object"], "stage": job["stage"]},
                                  idempotency_key=f"crmok:{sync_key}",
                                  private={"sync_key": sync_key})])
+
+
+def post_problem(text: str) -> str | None:
+    """Contract §6 post_social content guard: no client may be identifiable in a post."""
+    if _CASE_REF.search(text):
+        return "it names a case or a Team #N"
+    if has_email(text):
+        return "it contains an email address"
+    if has_phone(text):
+        return "it contains a phone number"
+    for match in _POST_AMOUNT.finditer(text):
+        amount = match.group(0).replace(" ", "").rstrip(",.")
+        if amount not in POST_ALLOWED_AMOUNTS:
+            return f"it names the amount {amount} (only $85,165, $400, $450, $50 may appear)"
+    return None
 
 
 _FEE_RE = re.compile(r"(?is)annual\s+report[^$]{0,120}?\$\s?(\d{1,4}(?:\.\d{2})?)")
