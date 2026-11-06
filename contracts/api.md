@@ -86,7 +86,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `hr.questionnaire_sent` | system | `{candidate_id, name_masked, note}` (the §6c auto-reply; counts against the `email` cap) |
 | `screen.call` | hr | `{candidate_id, transcript_excerpt, seconds}` |
 | `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id}` (actor `intake` and `case_id` set for customer conversations) |
-| `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"digest"\|"login"}` |
+| `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"flagged"\|"shortlisted"\|"paused"\|"digest"\|"login"}` |
 | `approval.requested` | system | `{approval_id, action_type, summary}` |
 | `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id}` |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
@@ -151,6 +151,13 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/trust` `{action_type, state: "PAUSED"|"AUTO"}` (admin) → the CEO's standing
   order as gateway state ("stop posting" = `social_post` PAUSED); writes `trust.changed`
   and `touch.operating`. `perform()` refuses PAUSED types until resumed.
+- `POST /api/cases/{case_id}/unblock` `{to: "INTAKE_PENDING"|"READY"|"NOT_ELIGIBLE", note}` (admin)
+  → `case.status` out of BLOCKED (or SENT/CALL_BOOKED → INTAKE_PENDING to reopen when the
+  client sends new numbers), a `touch.operating`, and a §6b wake (`New case case_N`).
+  `409 wrong_status` otherwise.
+- A cap hit (10/hr per action type or `SPEND_CAP_USD`) flips that type to PAUSED, writes
+  `trust.changed`, and mails the CEO; further calls get `refused` with code `paused` until
+  `POST /api/trust {state: "AUTO"}` (design: PAUSED → human operating touch → AUTO).
 - `POST /api/candidates/{candidate_id}/decision` `{decision: "hire"|"decline"}` (admin) →
   `hr.hired` / `hr.declined` with actor `ceo` and a `touch.operating`.
 - `POST /api/voice/session` → `{client_secret, model, expires_at}`: an ephemeral OpenAI
@@ -282,6 +289,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.4.2 (2026-11-06, backend task 6): `POST /api/cases/{id}/unblock`; cap-hit PAUSED flow;
+  `ceo.notified.reason` adds flagged, shortlisted, paused.
 
 - v1.4.1 (2026-11-06, backend task 5): `tax_saved_cents` excludes the annual fee and never goes
   negative; `hr.questionnaire_sent`; fixture post text says `$85,165` (the guard refuses `$85k`).
