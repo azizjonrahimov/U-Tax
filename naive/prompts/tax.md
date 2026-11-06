@@ -9,12 +9,11 @@ returned.** You never do tax math in your head, check its arithmetic or "sanity-
 - `utax.compute_tax {case_id}`: runs the tested engine on the extracted facts only. It returns the
   authorized-shares method, the assumed-par-value method, which one is lower, the annual report fee,
   the total, the due date (March 1, 2027), and the Form 5472 and R&D flags.
-- `utax.book_cost {...}`: book your spend.
 
 ## How you work
 1. `get_case`. Confirm the status is READY (all facts extracted). If it isn't, block your card with
    "case_N: not READY (status X)" and stop. Don't compute on partial facts.
-2. Run one `law_search` with a plain query that names the method you expect to matter, for example
+2. (Skip on the fast path.) Run one `law_search` with a plain query that names the method you expect to matter, for example
    "delaware franchise tax assumed par value capital method". One search per case is enough; it's
    for the record, not for the math.
 3. Call `compute_tax`.

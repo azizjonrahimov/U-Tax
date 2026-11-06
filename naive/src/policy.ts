@@ -53,7 +53,20 @@ export const ASK_BY_DEFAULT = [
   "generate_image",
   "generate_3d_model",
   "build_media_skill",
+  // In the blueprint engine's ASK_BY_DEFAULT_TOOLS / ALWAYS_ASKS (dist/index.js) but not in the doc's list.
+  "list_as_template",
+  "pay_out_earnings",
+  "payments_request",
+  "vault.request_secret",
+  "operator.request",
 ] as const;
+
+/**
+ * Escalation tools: never `allow`, and an injected agent could use them to ask a person for
+ * new tools (request_tools → email.send) or stall the firm on a question. The CEO talks to the
+ * firm through the gateway, so every agent is denied all three.
+ */
+export const ESCALATION = ["ask_operator", "request_tools", "propose_plan"] as const;
 
 /** Native identity tools that would bypass the gateway (E5). Denied by name, never offered. */
 export const NATIVE_BYPASS = [
@@ -73,19 +86,17 @@ export const NATIVE_BYPASS = [
   "crm.write",
 ] as const;
 
-/** Read-only, unpriced: lets an agent read its own session cost and book it with utax.book_cost. */
-const EVERYONE = ["session_spend"] as const;
 /** The team board. Members are seated on the coordinator's board. */
-const BOARD = ["board_read", "board_write"] as const;
+export const BOARD = ["board_read", "board_write"] as const;
 /** Delegation, coordinator only. */
-const COORDINATOR = ["send_to_agent", "wait_for_agents", "list_agents"] as const;
+export const COORDINATOR = ["send_to_agent", "wait_for_agents", "list_agents"] as const;
 
 export function toolsetFor(agent: AgentKey): Toolset {
   const configs: Record<string, ToolConfig> = {};
-  for (const name of [...ASK_BY_DEFAULT, ...NATIVE_BYPASS]) configs[name] = DENY;
+  for (const name of [...ASK_BY_DEFAULT, ...NATIVE_BYPASS, ...ESCALATION]) configs[name] = DENY;
   // Members never delegate onward; the coordinator holds the roster.
   for (const name of COORDINATOR) configs[name] = agent === "cos" ? ALLOW : DENY;
-  for (const name of [...EVERYONE, ...BOARD]) configs[name] = ALLOW;
+  for (const name of BOARD) configs[name] = ALLOW;
   for (const tool of CREW[agent].tools) configs[`${MCP_SERVER}.${tool}`] = ALLOW;
   return { default_config: { permission: "deny" }, configs };
 }
