@@ -29,7 +29,7 @@ TRANSITIONS: dict[str, set[str]] = {
     "QA_PASSED": {"SENT", "INTAKE_PENDING", "BLOCKED"},
     "QA_FAILED": {"BLOCKED", "INTAKE_PENDING"},
     "SENT": {"CALL_BOOKED", "INTAKE_PENDING", "BLOCKED"},
-    "CALL_BOOKED": {"INTAKE_PENDING"},
+    "CALL_BOOKED": {"INTAKE_PENDING", "BLOCKED"},
     "STALLED": {"INTAKE_PENDING", "BLOCKED", "NOT_ELIGIBLE"},
     "NOT_ELIGIBLE": {"INTAKE_PENDING"},
     "BLOCKED": {"INTAKE_PENDING", "READY", "NOT_ELIGIBLE"},
@@ -70,7 +70,6 @@ class Case:
     @property
     def revisions(self) -> int:
         return max(0, self.memos_sent - 1)
-    decision_mailed: bool = False
     message_ids: list[str] = field(default_factory=list)
     facts: dict[str, Any] | None = None
     quotes: dict[str, str] = field(default_factory=dict)
@@ -259,6 +258,7 @@ class State:
             return
         case.facts = e.payload["facts"]
         case.facts_event_id = e.id
+        case.resume_status = None  # new facts: this is a real revision now
         case.quotes = (e.private or {}).get("quotes") or e.payload["quotes"]  # raw, for QA
         case.assumed = e.payload["assumed"]
         case.facts_version += 1

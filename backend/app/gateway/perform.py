@@ -37,6 +37,8 @@ from app.gateway.masking import (
     company_label,
     has_email,
     has_phone,
+    MAX_BODY_CHARS,
+    TAX_WORDS,
     agent_text,
     html_to_text,
     mail_identity,
@@ -110,21 +112,29 @@ POST_CHANNELS = ("x", "linkedin")
 SEND_ATTEMPTS = 3  # first try + 2 retries (Error & Rescue Map)
 MAX_RETRY_SLEEP = 5.0
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-_AUTO_SUBJECT = re.compile(r"(?i)^\s*(auto(matic)?[ -]?(reply|response)|auto:|out of (the )?office"
-                           r"|autoreply|vacation|abwesenheit)")
+_AUTO_SUBJECT = re.compile(r"(?i)^\s*(auto(matic)?[ -]?(reply|response)\b|auto:|out of (the )?office\b"
+                           r"|autoreply\b|vacation\b|abwesenheit\b)")
 CLIENT_REPLY_WAKES_PER_DAY = 3
 MAX_REVISIONS = 2
 
 
 def new_text(body: str) -> str:
-    """v1.6.2: only what the client newly wrote: no quoted lines, no signature."""
+    """v1.6.2: only what the client newly wrote: no quoted lines, no signature, no
+    "On ... wrote:" attribution (any length, or wrapped onto two lines), no Outlook
+    "From:/Sent:" header block or "Original Message" divider."""
+    lines = body.splitlines()
     out = []
-    for line in body.splitlines():
+    for i, line in enumerate(lines):
         stripped = line.strip()
         if stripped.startswith(">"):
             continue
-        if stripped in ("--", "-- ") or re.match(r"(?i)^on .{3,80} wrote:$", stripped) \
-                or re.match(r"(?i)^-+\s*original message\s*-+$", stripped):
+        nxt = lines[i + 1].strip() if i + 1 < len(lines) else ""
+        if stripped in ("--", "-- ") \
+                or re.match(r"(?i)^on\b.*\bwrote:\s*$", stripped) \
+                or (re.match(r"(?i)^on\b", stripped) and re.search(r"(?i)\bwrote:\s*$", nxt)) \
+                or re.match(r"(?i)^-+\s*original message\s*-+$", stripped) \
+                or (re.match(r"(?i)^from:\s", stripped)
+                    and re.match(r"(?i)^(sent|date|to):\s", nxt)):
             break
         out.append(line)
     return "\n".join(out)
@@ -387,6 +397,9 @@ class Gateway:
             return ToolResult("refused", error={"code": "tool_not_allowed",
                                                 "message": f"{actor} may not call {name}"})
         args = dict(args or {})
+        args.pop("_actor", None)  # never caller-supplied
+        if actor is not None:
+            args["_actor"] = actor
         result, wakes = self._perform_locked(name, handler, args)
         # Outside the lock: a slow Naïve call or CRM mirror never blocks the next write.
         self._deliver_wakes(wakes)
@@ -465,6 +478,13 @@ class Gateway:
             raise Refused("not_found", f"no case {case_id}")
         return case
 
+    @staticmethod
+    def _fact_texts(case: Case) -> list[str]:
+        """What facts are judged on, oldest first: the subject, then what each message newly
+        says (quoted originals cut), so a later correction supersedes cleanly."""
+        return [case.agent_subject or case.subject,
+                *(new_text(t) for t in (case.agent_texts or case.texts))]
+
     def _status(self, case: Case, to: str) -> NewEvent | None:
         if case.status == to:
             return None
@@ -481,7 +501,7 @@ class Gateway:
     def _done_from(self, key: str) -> Event | None:
         return self.store.find_by_key(key)
 
-    def _block(self, case: Case, reason: str) -> list[Event]:
+    def _block(self, case: Case, reason: str, *, notice_key: str | None = None) -> list[Event]:
         events = [NewEvent(type="case.blocked", actor="system", case_id=case.case_id,
                            payload={"reason": reason, "needs": "human"})]
         status = self._status(case, "BLOCKED") if "BLOCKED" in TRANSITIONS.get(case.status, ()) \
@@ -490,7 +510,7 @@ class Gateway:
             events.append(status)
         out = self._emit(events)
         self._notify_ceo("blocked", f"Blocked: {case.masked_name}", f"{case.masked_name}: {reason}",
-                         key=f"ceo:blocked:{out[0].id}")
+                         key=notice_key or f"ceo:blocked:{out[0].id}")
         return out
 
     def _notify_ceo(self, reason: str, subject: str, summary: str, *, key: str,
@@ -662,16 +682,16 @@ class Gateway:
 
     def _route_inbound(self, mail: InMail, inbox: str) -> dict:
         """Contract §6c: two inboxes. Checkups open cases; applicants go to HR."""
-        own = {a.strip().lower() for a in (self.settings.ceo_email, self.settings.inbox_clients,
-                                           self.settings.inbox_hiring) if a}
-        if mail.sender.strip().lower() in own:  # v1.6 mail-loop guard
+        own = {mail_identity(a) for a in (self.settings.ceo_email, self.settings.inbox_clients,
+                                          self.settings.inbox_hiring) if a}
+        if mail_identity(mail.sender) in own:  # v1.6 mail-loop guard (+tags, Gmail dots)
             log.warning("dropped mail from the firm's own address %s", mail.sender)
             return {"dropped": True, "reason": "own address"}
         if mail.auto_reply or _AUTO_SUBJECT.search(mail.subject or ""):  # v1.6.2
             log.info("dropped an auto-reply from %s", mail.sender)
             return {"dropped": True, "reason": "auto-reply"}
         mail = InMail(message_id=mail.message_id, sender=mail.sender, subject=mail.subject,
-                      body=html_to_text(mail.body))  # v1.6: no markup is ever stored
+                      body=html_to_text(mail.body[:MAX_BODY_CHARS]))  # v1.6: no markup stored
         if inbox == "hiring":
             return self._receive_applicant(mail)
         result = self._receive(mail, provider=self.ports.mail.provider)
@@ -791,14 +811,15 @@ class Gateway:
         result = {"case_id": case_id, "masked_name": masked_name,
                   "redacted": redacted + sub_redacted}
         if case is not None and case.status in ("SENT", "CALL_BOOKED"):
-            if re.search(r"\d", new_text(body)):
+            if re.search(r"\d", strip_contacts(new_text(body))):  # a phone isn't a fact
                 day_ago = self._now() - timedelta(days=1)
                 today = [ts for ts in case.client_reply_log if parse_ts(ts) > day_ago]
                 if len(today) >= CLIENT_REPLY_WAKES_PER_DAY or \
                         case.revisions >= MAX_REVISIONS:
                     # v1.6.2: a human looks before another round
                     self._emit(events)
-                    self._block(case, "client keeps sending new numbers (revision limit)")
+                    self._block(case, "client keeps sending new numbers (revision limit)",
+                                notice_key=f"ceo:blocked:revisions:{case_id}")
                     result["blocked"] = True
                     return result
                 # v1.6: a reply with numbers re-reads the case (memo v2 only if a fact changed)
@@ -1051,7 +1072,14 @@ class Gateway:
 
     def _get_case(self, args: dict) -> dict:
         case = self._case(args)
-        return {**case.detail(), "offered_slots": self.offered_slots(case)}
+        detail = {**case.detail(), "offered_slots": self.offered_slots(case)}
+        if args.get("_actor") not in (None, "intake", "qa"):
+            # v1.6 names are for the seats that read facts; everyone else gets the masked
+            # copy, so a post or a DM can't name a client it never saw
+            detail["messages"] = list(case.texts)
+            detail["subject"] = case.subject
+            detail["conversation"] = []
+        return detail
 
     def offered_slots(self, case: Case | None = None) -> list[str]:
         """The next free 15-minute slots (9:00-16:00 Pacific). Anchored to the case's memo
@@ -1240,7 +1268,7 @@ class Gateway:
             raise Refused("not_eligible", "not a Delaware corporation: call mark_not_eligible")
         digest = _digest({"q": quotes, "inc": inc, "f": foreign, "t": len(case.texts),
                           "r": case.reopens})
-        texts = [*(case.agent_texts or case.texts), case.agent_subject or case.subject]
+        texts = self._fact_texts(case)
         check = intake.check_facts(quotes=quotes, incorporated_delaware=inc,
                                    foreign_owner_25=foreign, texts=texts)
         if not check.ok:
@@ -1251,11 +1279,12 @@ class Gateway:
                                  private={"problems": check.problems})])
             return {"missing": check.missing, "problems": check.problems,
                     "next": "ask_client" if case.asks < self.settings.max_asks else "firm_brief"}
-        if case.resume_status and case.facts and check.ok and check.facts == case.facts:
+        if case.resume_status and case.status == "INTAKE_PENDING" and case.facts \
+                and check.ok and check.facts == case.facts \
+                and case.facts_version == case.memo_version:
             # v1.6: the reply changed no fact: no memo v2, the case goes back where it was
             back = case.resume_status
-            self._emit([NewEvent(type="case.status", actor="system", case_id=case.case_id,
-                                 payload={"from": case.status, "to": back})])
+            self._emit([self._status(case, back)])
             return {"facts": check.facts, "unchanged": True, "status": back}
         key = f"facts:{case.case_id}:{digest}"
         seen = self._done_from(key)
@@ -1421,7 +1450,7 @@ class Gateway:
             return {"passed": done.type == "qa.passed", "checks": done.payload["checks"],
                     "duplicate": True}
         self._require_status(case, "COMPUTED")
-        texts = [*(case.agent_texts or case.texts), case.agent_subject or case.subject]
+        texts = self._fact_texts(case)
         checks: list[dict] = []
         quote_problem = False
         for fact in ("authorized_shares", "issued_shares", "gross_assets", "stated_par"):
@@ -1677,7 +1706,8 @@ class Gateway:
         if image_url and (not image_url.startswith(("https://", "local://"))
                           or has_email(image_url) or _CASE_REF.search(image_url)):
             raise Refused("content_guard", "post refused: image_url must be a plain https link")
-        problem = post_problem(text, allowed_url=self.settings.public_talk_url)
+        problem = post_problem(text, allowed_url=self.settings.public_talk_url) \
+            or self._names_a_client(text)
         if problem:
             raise Refused("content_guard", f"post refused: {problem}")
         text = f"{text.rstrip()} {link}"  # v1.5: the gateway appends the link after the guard
@@ -1702,9 +1732,21 @@ class Gateway:
                                       "image_url": image_url}, idempotency_key=key)])
         return {"url": posted.url}
 
+    def _names_a_client(self, text: str) -> str | None:
+        lowered = text.lower()
+        for case in self.state.cases.values():
+            words = [w for w in [case.company, *sender_words(case.sender_key)]
+                     if w and len(w) >= 3 and w.lower() not in TAX_WORDS]
+            if any(re.search(rf"\b{re.escape(w.lower())}\b", lowered) for w in words):
+                return "it names a client"
+        return None
+
     def _draft_dm(self, args: dict) -> dict:
         label = _str(args, "recipient_label", max_len=120)
         text, _ = redact_ids(_str(args, "text", max_len=3000))
+        problem = self._names_a_client(f"{label} {text}")
+        if problem:
+            raise Refused("content_guard", f"DM refused: {problem}")
         key = f"dm:{_digest([label, text])}"
         self._emit([NewEvent(type="dm.drafted", actor="mkt",
                              payload={"recipient_label": label, "text": text},

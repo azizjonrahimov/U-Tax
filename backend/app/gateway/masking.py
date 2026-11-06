@@ -126,17 +126,48 @@ TAX_WORDS = frozenset({"delaware", "corporation", "corp", "inc", "llc", "shares"
                        "s-corp", "c-corp", "yes", "no"})
 
 
+MAX_BODY_CHARS = 50_000  # every inbound body is capped before any parsing
+
+
+_TAG = re.compile(r"<(/?)\s*([a-zA-Z][a-zA-Z0-9]*)?[^<>]*>")  # linear: stops at the next "<"
+_TAG_LEFTOVER = re.compile(r"<[/!?]?[a-zA-Z][^<>]*")  # an unclosed "<img src=x ..." fragment
+_BLOCK_TAGS = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table"}
+
+
 def html_to_text(body: str) -> str:
-    """v1.6: text/html bodies become plain text at ingress; no markup is ever stored."""
+    """v1.6: text/html bodies become plain text at ingress; no markup is ever stored.
+    One linear pass (the stdlib HTMLParser is quadratic on unclosed tags): script/style
+    content dropped, entities decoded, and any tag that decoding produces removed too."""
     import html as _html
 
-    if not re.search(r"(?is)<\s*(html|body|div|p|br|span|table|td|a)\b", body):
+    body = body[:MAX_BODY_CHARS]
+    if not re.search(r"<\s*/?\s*[a-zA-Z!]", body) and "&" not in body:
         return body
-    text = re.sub(r"(?is)<(script|style)\b.*?</\1\s*>", " ", body)
-    text = re.sub(r"(?i)<\s*br\s*/?>|</\s*(p|div|tr|li|h[1-6])\s*>", "\n", text)
-    text = re.sub(r"(?s)<[^>]+>", " ", text)
-    text = _html.unescape(text)
-    text = re.sub(r"[ \t\u00a0]+", " ", text)
+    parts: list[str] = []
+    skip: str | None = None  # inside <script>/<style> until its close tag
+    pos = 0
+    for m in _TAG.finditer(body):
+        if skip is None:
+            parts.append(body[pos:m.start()])
+        name = (m.group(2) or "").lower()
+        closing = bool(m.group(1))
+        if skip is not None:
+            if closing and name == skip:
+                skip = None
+        elif name in ("script", "style") and not closing:
+            skip = name
+        elif name in _BLOCK_TAGS:
+            parts.append("\n")
+        else:
+            parts.append(" ")
+        pos = m.end()
+    if skip is None:
+        parts.append(body[pos:])
+    text = _html.unescape("".join(parts))
+    text = _TAG.sub(" ", text)  # "&lt;img&gt;" decoded into a tag
+    text = _TAG_LEFTOVER.sub(" ", text)
+    text = re.sub(r"[ \t ]+", " ", text)
+    text = re.sub(r" *\n *", "\n", text)
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
@@ -188,7 +219,10 @@ def mask_text(text: str, *, masked_name: str, company: str | None,
     # "Zebra Robotics, a Delaware corporation": the capitalised words naming the entity go
     text = _NAMED_ENTITY.sub(lambda m: replacement + m.group(2), text)
     if company and company.lower() not in TAX_WORDS:
-        text = re.sub(rf"(?i)\b{re.escape(company)}\b", replacement, text)
+        # "zebrarobotics" (the domain label) also hides "Zebra Robotics" / "zebra-robotics"
+        spaced = r"[\s.-]?".join(re.escape(c) for c in company) if len(company) >= 4 \
+            else re.escape(company)
+        text = re.sub(rf"(?i)\b{spaced}\b", replacement, text)
     for word in hide_words or []:
         if word.lower() not in TAX_WORDS:
             text = re.sub(rf"(?i)\b{re.escape(word)}\b", "[name]", text)

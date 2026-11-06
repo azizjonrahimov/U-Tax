@@ -123,8 +123,12 @@ class LocalMail:
         sender = email.utils.parseaddr(str(msg.get("From", "")))[1]
         if not sender:
             return None
-        part = msg.get_body(preferencelist=("plain",))
+        part = msg.get_body(preferencelist=("plain", "html"))  # HTML-only mail too
         body = part.get_content() if part is not None else ""
+        if part is not None and part.get_content_subtype() == "html":
+            from app.gateway.masking import html_to_text
+
+            body = html_to_text(body)
         subject = str(msg.get("Subject", ""))
         mid = str(msg.get("Message-ID", "")).strip("<> ") or \
             f"local-in-{_digest(f'{sender}|{subject}|{body}')}"

@@ -184,3 +184,147 @@ def test_quotes_are_masked_on_the_screen_but_qa_checks_the_raw_ones(h):
     assert "Zebra" not in public and "Delaware corporation" in public
     h.ok("compute_tax", case_id=case_id)
     assert h.ok("qa_check", case_id=case_id)["passed"] is True
+
+
+# ---------------------------------------------------------------- 6c review fixes
+
+
+def _reply_changed(h, case_id, issued="9,000,000"):
+    h.new_case(body=f"Correction: we have {issued} issued.")
+    return h.ok("extract_facts", case_id=case_id,
+                quotes={**HAPPY_QUOTES, "issued_shares": issued},
+                incorporated_delaware=True, foreign_owner_25=False)
+
+
+def test_a_retry_after_a_changed_fact_still_sends_memo_v2(h):
+    # review #1: a stale resume_status made the retry jump READY -> SENT, skipping memo v2
+    case_id = h.to_sent()
+    _reply_changed(h, case_id)
+    again = h.ok("extract_facts", case_id=case_id,
+                 quotes={**HAPPY_QUOTES, "issued_shares": "9,000,000"},
+                 incorporated_delaware=True, foreign_owner_25=False)
+    assert "unchanged" not in again and h.gw.state.cases[case_id].status == "READY"
+    moves = [(e.payload["from"], e.payload["to"]) for e in h.events("case.status")]
+    assert ("READY", "SENT") not in moves
+    h.ok("compute_tax", case_id=case_id)
+    h.ok("qa_check", case_id=case_id)
+    h.ok("send_memo", case_id=case_id)
+    assert len(h.events("memo.sent")) == 2
+
+
+def test_only_intake_and_qa_read_names(h):
+    # review #2: mkt/hr/cos get the masked copy, and can't name a client in a post or DM
+    case_id = h.new_case(body=ZEBRA, sender="jane.doe@zebrarobotics.ai")
+    for actor, named in (("intake", True), ("qa", True), ("mkt", False), ("cos", False)):
+        msg = h.gw.perform("get_case", {"case_id": case_id}, actor=actor).data["messages"][0]
+        assert ("Zebra Robotics" in msg) is named, actor
+    assert h.gw.perform("get_case", {"case_id": case_id, "_actor": "intake"},
+                        actor="mkt").data["messages"][0] == h.gw.state.cases[case_id].texts[0]
+    post = h.gw.perform("post_social", {"channel": "x", "text": "Thanks Jane, great call!"},
+                        actor="mkt")
+    assert post.error["code"] == "content_guard"
+    dm = h.gw.perform("draft_dm", {"recipient_label": "founder",
+                                   "text": "We just helped zebrarobotics save $10k"}, actor="mkt")
+    assert dm.error["code"] == "content_guard"
+
+
+def test_real_mail_client_quoting_wakes_nobody(h):
+    # review #3: long or wrapped attributions, Outlook headers and signature phones
+    wakes = []
+    h.gw.on_wake(wakes.append)
+    case_id = h.to_sent()
+    before = list(wakes)
+    replies = [
+        "Thanks a lot!\n\nOn Sat, Nov 7, 2026 at 9:14 PM U-Tax Delaware Franchise Tax Desk "
+        "<checkup@u-tax.test> wrote:\n10,000,000 authorized shares",
+        "Thanks!\n\nOn Sat, Nov 7, 2026 at 9:14 PM U-Tax <checkup@u-tax.test>\nwrote:\n"
+        "10,000,000 authorized",
+        "Perfect, thank you.\n\nFrom: U-Tax <checkup@u-tax.test>\nSent: Saturday, November 7, "
+        "2026 9:14 PM\nTo: Jane\nSubject: Your estimate\n\n10,000,000 authorized shares",
+        "Thanks!\nJane\n+1 (415) 555-0100",
+    ]
+    for body in replies:
+        h.new_case(body=body)
+        assert h.gw.state.cases[case_id].status == "SENT", body
+    assert wakes == before and h.gw.state.cases[case_id].client_reply_log == []
+
+
+def test_a_correction_above_a_quoted_original_supersedes_it(h):
+    # review #4: the quoted original made the correction look like a conflict
+    case_id = h.to_sent()
+    h.new_case(body="Small correction: 20,000,000 authorized shares.\n\n"
+                    "On Sat, Nov 7, 2026 Jane <founder@team7.dev> wrote:\n"
+                    "> We have 10,000,000 authorized shares, 8,000,000 issued")
+    out = h.ok("extract_facts", case_id=case_id,
+               quotes={**HAPPY_QUOTES, "authorized_shares": "20,000,000"},
+               incorporated_delaware=True, foreign_owner_25=False)
+    assert out["facts"]["authorized_shares"] == 20_000_000
+
+
+def test_the_subject_never_overrides_a_later_reply(h):
+    # review #5: the first subject was read as the latest message
+    case_id = h.to_sent(h.new_case(subject="tax check: 10,000,000 authorized shares"))
+    h.new_case(body="Correction: 20,000,000 authorized shares.")
+    out = h.ok("extract_facts", case_id=case_id,
+               quotes={**HAPPY_QUOTES, "authorized_shares": "20,000,000"},
+               incorporated_delaware=True, foreign_owner_25=False)
+    assert out["facts"]["authorized_shares"] == 20_000_000
+
+
+def test_a_booked_case_blocks_at_the_limit_and_tells_the_ceo_once(make_harness):
+    # review #6: CALL_BOOKED had no edge to BLOCKED, so the CEO got a mail per reply
+    h = make_harness(ceo_email="ceo@u-tax.dev")
+    case_id = h.to_sent()
+    slot = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    h.approve_pending(h.do("book_call", case_id=case_id, start=slot))
+    h.ok("book_call", case_id=case_id, start=slot)
+    assert h.gw.state.cases[case_id].status == "CALL_BOOKED"
+    for i in range(3):
+        h.new_case(body=f"Update {i}: 10,000,000 authorized shares")
+        h.ok("extract_facts", case_id=case_id, quotes=HAPPY_QUOTES,
+             incorporated_delaware=True, foreign_owner_25=False)
+        assert h.gw.state.cases[case_id].status == "CALL_BOOKED"
+    for i in range(3):
+        h.new_case(body=f"Again {i}: 10,000,000 authorized shares")
+    assert h.gw.state.cases[case_id].status == "BLOCKED"
+    blocked = [e for e in h.events("ceo.notified") if e.payload.get("reason") == "blocked"]
+    assert len(blocked) == 1
+
+
+def test_html_is_linear_and_leaves_no_markup():
+    # review #7/#8
+    import time
+
+    from app.gateway.masking import html_to_text
+
+    start = time.perf_counter()
+    html_to_text("<p>x</p>" + "<script " * 8000)
+    assert time.perf_counter() - start < 1.0
+    out = html_to_text("<b>Hi</b> &lt;img src=x onerror=alert(1)&gt; <img src=x onerror=y>"
+                       "<b>a</b><script>bad()</script>10 shares")
+    assert "<" not in out and ">" not in out and "bad()" not in out and "10 shares" in out
+
+
+def test_html_only_eml_is_read(h):
+    eml = (b"From: Jane <jane@team9.dev>\r\nSubject: tax\r\nMessage-ID: <h1@team9.dev>\r\n"
+           b"MIME-Version: 1.0\r\nContent-Type: text/html; charset=utf-8\r\n\r\n"
+           b"<p>We're a Delaware C-corp with 10,000,000 authorized shares.</p>")
+    mail = h.ports.mail.parse_inbound(eml)
+    assert mail.body == "We're a Delaware C-corp with 10,000,000 authorized shares."
+
+
+def test_auto_reply_subjects_need_a_whole_word_and_aliases_are_own(make_harness):
+    # review #9/#12
+    h = make_harness(inbox_clients="checkup@u-tax.dev")
+    assert "dropped" not in h.ok("inject_email", **{
+        "from": "a@vacationly.io", "subject": "Vacationly Inc - franchise tax question",
+        "body": "We're a Delaware C-corp."})
+    assert h.ok("inject_email", **{"from": "checkup+loop@u-tax.dev", "subject": "x",
+                                   "body": "y"})["dropped"] is True
+
+
+def test_the_domain_label_hides_the_spaced_company_name():
+    # review #12: "zebrarobotics" left "Zebra Robotics" visible on the public copy
+    out = mask_text("zebra robotics and Zebra-Robotics and ZebraRobotics owe tax",
+                    masked_name="Team #3", company="zebrarobotics")
+    assert "ebra" not in out and out.count("Team #3") == 3
