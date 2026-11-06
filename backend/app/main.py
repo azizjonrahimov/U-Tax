@@ -33,6 +33,7 @@ class Health(BaseModel):
 def tick(gw: Gateway) -> None:
     """Background upkeep: CRM mirror, failed wakes, the 6 h stall sweep, the CEO digest."""
     for job in (gw.drain_outbox, gw.retry_wakes, gw.retry_questionnaires,
+                gw.retry_decision_mails,
                 lambda: gw.perform("stall_sweep", {}),
                 lambda: gw.perform("ceo_digest", {})):
         try:

@@ -169,15 +169,18 @@ class State:
             "trust": dict(self.trust),
             "money": {
                 "tax_saved_cents": self.tax_saved_cents,
-                "spent_usd": _money(self.spent_usd()),
-                "spent_by_provider": {p: _money(v) for p, v in sorted(self.spent_by_provider.items())},
+                "spent_usd": money_text(self.spent_usd()),
+                "spent_by_provider": {p: money_text(v)
+                                      for p, v in sorted(self.spent_by_provider.items())},
             },
             # v1.5: every screened candidate is listed for the CEO (no silent rejection)
             "hiring": {**self.hiring, "candidates": [
                 {"candidate_id": c["candidate_id"], "name_masked": c["name_masked"],
                  "stage": c.get("stage"), "credentials": c.get("credentials")}
                 for c in sorted(self.candidates.values(), key=lambda c: c["candidate_id"])
-                if c.get("stage") in ("screened", "shortlisted", "hired", "declined")]},
+                # applicants too: nobody waits unseen when a questionnaire didn't go out
+                if c.get("stage") in ("applicant", "screened", "shortlisted", "hired",
+                                      "declined")]},
             "queue": {
                 "waiting": sum(1 for c in cases if c.status in OPEN_STATUSES and c.status != "BLOCKED"),
                 "blocked": sum(1 for c in cases if c.status == "BLOCKED"),
@@ -305,7 +308,9 @@ class State:
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)
         if case is not None and e.status == "ok" and case.reply_to:
-            self.memo_log.setdefault(case.reply_to.lower(), []).append(e.ts)
+            from app.gateway.masking import mail_identity
+
+            self.memo_log.setdefault(mail_identity(case.reply_to), []).append(e.ts)
         if case is not None and e.status == "ok":
             case.memo_message_id = e.payload["message_id"]
             case.memo_version = case.facts_version
@@ -382,9 +387,9 @@ class State:
             cand["sender_key"] = private["sender_key"]
             cand["reply_to"] = private.get("reply_to")
         if stage == "applicant" and private.get("text"):
-            cand.setdefault("texts", []).append(private["text"])  # contact-free answers
-            if cand.get("questionnaire_sent"):
+            if cand.get("texts"):  # every mail after the first is an answer
                 cand["answers"] = cand.get("answers", 0) + 1
+            cand.setdefault("texts", []).append(private["text"])  # contact-free answers
         if stage == "applicant" and e.payload["note"] and "credentials" not in cand:
             cand["credentials"] = e.payload["note"]
         # stages only move forward: a questionnaire reply never demotes a shortlisted person
@@ -432,7 +437,7 @@ class State:
         pass
 
 
-def _money(value: Decimal) -> str:
+def money_text(value: Decimal) -> str:
     """Spend for the rail: 2 places when whole cents, else up to 4 ("11.38", "0.0034")."""
     text = usd_string(value)
     return text[:-2] if text.endswith("00") else text

@@ -157,7 +157,9 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
 
     def _talk_limit(limiter: RateLimiter) -> None:
         # PUBLIC_MODE=event: the finale crowd shares one venue IP, so 60/min per IP
-        limiter.limit = 60 if gw().settings.public_mode == "event" else 20
+        event = gw().settings.public_mode == "event"
+        limiter.limit = 60 if event else 20
+        limiter.global_limit = 360 if event else 120  # the global cap keeps its 6x headroom
 
     def act(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return result_or_raise(gw().perform(name, args))
@@ -232,7 +234,13 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         _talk_limit(public_limiter)
         public_limiter.check(_client_ip(request))
         prompt_path = gw().settings.voice_prompt_path
-        instructions = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
+        try:
+            instructions = prompt_path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeError):
+            instructions = ""
+        if not instructions:  # never mint a general assistant on the firm's key
+            log.error("voice prompt %s missing or empty; refusing to mint", prompt_path)
+            raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat")
         try:
             session = gw().ports.voice.create_session(instructions)
         except NotConfigured as exc:

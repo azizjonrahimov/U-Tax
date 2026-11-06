@@ -196,7 +196,11 @@ class Templates:
         path = self._path(name)
         if path is None or not path.exists():
             return spec.builtin, "builtin"
-        return path.read_text(encoding="utf-8"), str(path)
+        try:
+            return path.read_text(encoding="utf-8"), str(path)
+        except (OSError, UnicodeError) as exc:  # mid-edit, or saved in another encoding
+            log.warning("template %s unreadable (%s); built-in text sent", path, exc)
+            return spec.builtin, "builtin"
 
     def render(self, name: str, values: dict[str, str]) -> str:
         spec = SPECS[name]
@@ -232,7 +236,8 @@ def memo_values(*, masked_name: str, result: dict, form5472: bool, rnd: bool,
 
 
 def ask_values(masked_name: str, missing: list[str], problems: list[str]) -> dict[str, str]:
-    labels = [FACT_LABELS.get(f, f.replace("_", " ")) for f in missing if f != "stated_par"]
+    labels = [FACT_LABELS.get(f, f.replace("_", " ")) for f in missing
+              if f != "stated_par" or missing == ["stated_par"]]
     return {"masked_name": masked_name, "missing_list": _join(labels) or "a few numbers",
             "problems_line": ("Can you double-check: " + "; ".join(problems) + "?")
             if problems else ""}

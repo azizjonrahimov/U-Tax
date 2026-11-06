@@ -148,7 +148,11 @@ def test_at_most_three_memos_a_day_per_address(h):
         h.new_case(body="again", sender="founder@team7.dev")
     case_id = h.to_qa_passed("case_1")
     assert h.do("send_memo", case_id=case_id).error["code"] == "memo_cap"
+    assert h.gw.state.cases[case_id].status == "BLOCKED"  # the CEO sees it, not stranded
     h.clock.advance(days=1, minutes=1)
+    h.ok("unblock", case_id=case_id, to="READY")
+    h.ok("compute_tax", case_id=case_id)
+    h.ok("qa_check", case_id=case_id)
     assert h.ok("send_memo", case_id=case_id)["message_id"]
 
 
@@ -177,7 +181,9 @@ def test_screened_candidates_are_listed_for_the_ceo(h):
     h.ok("inject_email", **{"from": "b@y.io", "subject": "g", "body": "-", "inbox": "hiring"})
     h.ok("hr_record", stage="screened", candidate_id="cand_2", note="")
     listed = h.gw.public_state()["hiring"]["candidates"]
-    assert [c["candidate_id"] for c in listed] == ["cand_2"]  # screened, even if not shortlisted
+    # every candidate is visible to the CEO, screened or still waiting
+    assert [(c["candidate_id"], c["stage"]) for c in listed] == [("cand_1", "applicant"),
+                                                                  ("cand_2", "screened")]
     assert "a@x.io" not in json.dumps(listed)
 
 
@@ -213,3 +219,56 @@ def test_event_mode_allows_60_per_minute(make_harness):
     with TestClient(create_app(h.gw, start_background=False)) as client:
         codes = [client.post("/api/voice/session").status_code for _ in range(45)]
     assert 429 not in codes
+
+
+
+# ---------------------------------------------------------------- 6b review regressions
+
+
+def test_spoken_email_mask_is_linear_and_leaves_tax_answers_alone():
+    import time
+
+    from app.gateway.masking import mask_spoken_emails
+
+    t = time.perf_counter()
+    mask_spoken_emails("x at b" + "dot" * 400 + "_")
+    assert time.perf_counter() - t < 0.2
+    for text in ("Total gross assets at 5000000. We have no foreign owners.",
+                 "We're incorporated at Delaware. Our gross assets are $500k",
+                 "valued at 85165. That is all", "Please look at me"):
+        assert mask_spoken_emails(text) == text
+    assert "[email hidden]" in mask_spoken_emails("write to jane dot doe at example dot com")
+    assert "[email hidden]" in mask_spoken_emails("it's jane at gmail")
+
+
+def test_ein_before_a_comma_is_redacted():
+    from app.gateway.masking import redact_ids
+
+    assert redact_ids("our EIN is 12-3456789, thanks")[1] == 1
+    assert redact_ids("ssn 123-45-6789.")[1] == 1
+    assert redact_ids("10,000,000 shares")[1] == 0
+
+
+def test_memo_cap_counts_aliases_as_one_mailbox():
+    from app.gateway.masking import mail_identity
+
+    assert mail_identity("Jane.Doe+demo@GMail.com") == mail_identity("janedoe@gmail.com")
+    assert mail_identity("a+x@team7.dev") == "a@team7.dev"
+
+
+def test_voice_session_refuses_without_the_intake_prompt(make_harness, tmp_path):
+    h = make_harness(voice_prompt_path=tmp_path / "missing.md")
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        r = client.post("/api/voice/session")
+    assert r.status_code == 503 and r.json()["error"]["code"] == "voice_unavailable"
+
+
+def test_unreadable_template_falls_back(tmp_path):
+    (tmp_path / "hr-hired.md").write_bytes(bytes([0xFF, 0xFE, 0x80, 0x20, 0x81]))
+    assert "book you" in Templates(tmp_path).render("hr-hired", {})
+
+
+def test_long_customer_transcript_is_refused_not_cut(h):
+    turns = [{"speaker": "customer", "text": "x" * 4100}]
+    r = h.do("voice", turns=turns, speaker="customer", reply_email="j@yc.com")
+    assert r.error["code"] == "too_long"
