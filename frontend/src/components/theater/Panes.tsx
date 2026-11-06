@@ -7,12 +7,15 @@ import { humanTouches, TRAINABLE_ACTION_TYPES } from "@/theater/rail";
 import type { Cell, ScreenState } from "@/theater/screen";
 import type { Pane as PaneKey } from "@/theater/script";
 import { formatCents, formatClock, formatUsd } from "@/theater/format";
+import { assetAllowed, parseAssetHosts } from "@/theater/live";
 
 /** Text as it should show right now (a step being typed reveals progressively). */
 export type Typed = (target: string, full: string | undefined) => string | undefined;
 
 export const SHOW_BLOCKED = process.env.NEXT_PUBLIC_SHOW_BLOCKED !== "0";
 export const SHOW_QUEUE = process.env.NEXT_PUBLIC_SHOW_QUEUE !== "0";
+/** v1.6.4: images render only from these hosts (NEXT_PUBLIC_ASSET_HOSTS, comma-separated). */
+const ASSET_HOSTS = parseAssetHosts(process.env.NEXT_PUBLIC_ASSET_HOSTS);
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -73,9 +76,13 @@ export function MailPane({ screen, typed }: { screen: ScreenState; typed: Typed 
       ) : (
         <>
           <div className="from" data-target="mail.message">
-            From: {m.from} · “{m.subject}”{view?.name ? ` · ${view.name}` : ""}
+            From: {m.from} · “{m.hidden ? "hidden: flagged by QA" : m.subject}”{view?.name ? ` · ${view.name}` : ""}
           </div>
-          <div className="body">{highlight(m.body, m.quotes)}</div>
+          {m.hidden ? (
+            <div className="body hidden-body">hidden: flagged by QA</div>
+          ) : (
+            <div className="body">{highlight(m.body, m.quotes)}</div>
+          )}
           {m.compose && (
             <div className="compose" data-target="mail.compose">
               <div className="to">{m.compose.header}</div>
@@ -222,7 +229,7 @@ export const CalendarPane = memo(function CalendarPane({ screen }: { screen: Scr
   const slots = Array.from({ length: 4 }, (_, i) => (base ? new Date(base.getTime() + (i - 1) * 30 * 60_000) : null));
   const day = base ? base.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" }) : "today";
   return (
-    <Pane k="calendar" screen={screen} label="Calendar" name={day} tag="via Google Calendar">
+    <Pane k="calendar" screen={screen} label="Calendar" name={day} tag="via calendar invite">
       <div className="cal" data-target="calendar.block">
         {slots.map((t, i) => {
           const label = t ? formatClock(t.toISOString()) : ["9:00", "9:30", "10:00", "10:30"][i];
@@ -242,7 +249,7 @@ export const CalendarPane = memo(function CalendarPane({ screen }: { screen: Scr
 
 export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Typed }) {
   const s = screen.social;
-  const img = s.image?.startsWith("https://") ? s.image : undefined;
+  const img = assetAllowed(s.image, ASSET_HOSTS) ? s.image : undefined;
   return (
     <Pane k="social" screen={screen} label="Social" name="posts & DMs" tag={`via ${s.channel ?? "social"} · rendered from log`}>
       {!s.caption && !s.dm ? (

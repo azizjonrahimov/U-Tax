@@ -20,6 +20,8 @@ export interface MailView {
   /** Quoted spans to highlight in the body, by fact. */
   quotes: Record<string, string>;
   compose?: { header: string; text: string; sent?: string; pressed?: boolean };
+  /** v1.6.4: the case was flagged possible_injection; its body is never shown again. */
+  hidden?: boolean;
 }
 
 export interface SheetView {
@@ -53,6 +55,12 @@ export interface LogLine {
 }
 
 export interface ScreenState {
+  /**
+   * Cases flagged possible_injection (contract §8): their mail body and subject are
+   * never shown, including later emails on the same case. Kept on the screen, not
+   * on a mail view that the next email would replace.
+   */
+  flagged: string[];
   camera: Pane | null;
   /** Case shown on the mail / sheet panes. */
   mailCase: string | null;
@@ -78,6 +86,7 @@ export interface ScreenState {
 }
 
 export const emptyScreen = (): ScreenState => ({
+  flagged: [],
   camera: null,
   mailCase: null,
   sheetCase: null,
@@ -150,7 +159,7 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
           withCase((v) => ({
             ...v,
             name: str(meta.masked_name) ?? v.name,
-            mail: { quotes: {}, from: str(meta.from), subject: str(meta.subject), body: text },
+            mail: { quotes: {}, from: str(meta.from), subject: str(meta.subject), body: text, hidden: s.flagged.includes(caseId!) || undefined },
           }));
         }
         break;
@@ -255,7 +264,13 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
         const raw = str(meta.to) ?? (text === "not eligible" ? "NOT_ELIGIBLE" : undefined);
         next = { ...row, status: text, raw, blocked: raw === "BLOCKED" ? row.blocked : undefined };
       } else if (step.action === "block") next = { ...row, status: "blocked", raw: "BLOCKED", blocked: text };
-      else if (step.action === "flag") next = { ...row, flags: row.flags?.includes(text) ? row.flags : [...(row.flags ?? []), text] };
+      else if (step.action === "flag") {
+        next = { ...row, flags: row.flags?.includes(text) ? row.flags : [...(row.flags ?? []), text] };
+        if (meta.kind === "possible_injection") {
+          if (!s.flagged.includes(caseId)) s.flagged = [...s.flagged, caseId];
+          mail((m) => ({ ...m, hidden: true }));
+        }
+      }
       s.caseRows = { ...s.caseRows, [caseId]: next };
       if (!s.caseOrder.includes(caseId)) s.caseOrder = [...s.caseOrder, caseId];
       break;
@@ -281,6 +296,52 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
     // hiring numbers come from the rail projection (counts only, never names).
   }
   return s;
+}
+
+export interface SeedCase {
+  caseId: string;
+  name: string;
+  /** Contract status, e.g. CALL_BOOKED. */
+  status?: string;
+  flagged?: boolean;
+}
+
+/**
+ * A screen that starts from known facts instead of empty: live mode seeds the case
+ * rows from /api/state (so the rail's cards match its numbers after a reload), and
+ * replay pre-marks cases the log flags later, so their mail never shows at all.
+ */
+export function seedScreen(base: ScreenState, cases: readonly SeedCase[], flagged: readonly string[] = []): ScreenState {
+  const s: ScreenState = { ...base, caseRows: { ...base.caseRows }, caseOrder: [...base.caseOrder], flagged: [...base.flagged] };
+  for (const c of cases) {
+    if (!Object.hasOwn(s.caseRows, c.caseId)) {
+      const status = c.status ? c.status.toLowerCase().replace(/_/g, " ") : "new";
+      s.caseRows[c.caseId] = { caseId: c.caseId, name: c.name, status, raw: c.status };
+      s.caseOrder.push(c.caseId);
+    }
+    if (c.flagged && !s.flagged.includes(c.caseId)) s.flagged.push(c.caseId);
+  }
+  for (const id of flagged) if (!s.flagged.includes(id)) s.flagged.push(id);
+  // Mail already on screen for a case we now know is flagged comes down right away.
+  for (const id of s.flagged) {
+    const v = own(s.cases, id);
+    if (v && !v.mail.hidden) {
+      if (s.cases === base.cases) s.cases = { ...base.cases };
+      s.cases[id] = { ...v, mail: { ...v.mail, hidden: true } };
+    }
+  }
+  return s;
+}
+
+/** Case ids a log flags possible_injection anywhere (replay knows the whole night up front). */
+export function flaggedInLog(events: readonly { type: string; case_id: string | null; payload: Record<string, unknown> }[]): string[] {
+  const out = new Set<string>();
+  for (const e of events) {
+    // /api/events items are unvalidated here: a null or primitive entry must not kill the replay.
+    if (typeof e !== "object" || e === null) continue;
+    if (e.type === "case.flagged" && typeof e.case_id === "string" && e.payload?.kind === "possible_injection") out.add(e.case_id);
+  }
+  return [...out];
 }
 
 /** Apply many steps at once (replay jumps, tests). */

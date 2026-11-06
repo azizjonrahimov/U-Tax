@@ -123,7 +123,10 @@ const defaultLog = (s: SkippedEvent) =>
 export function startScript(seed: { caseNames?: Record<string, string>; lastId?: number } = {}): ScriptCursor {
   const caseNames: Record<string, string> = Object.create(null);
   for (const [id, name] of Object.entries(seed.caseNames ?? {})) caseNames[id] = name;
-  const lastId = seed.lastId !== undefined && Number.isSafeInteger(seed.lastId) && seed.lastId >= 0 ? seed.lastId : 0;
+  // A seed that isn't a non-negative integer starts from 0 and says so (it would replay history).
+  const valid = seed.lastId !== undefined && Number.isSafeInteger(seed.lastId) && seed.lastId >= 0;
+  if (seed.lastId !== undefined && !valid) console.warn(`[theater] ignoring invalid lastId seed ${JSON.stringify(seed.lastId)}; starting from 0`);
+  const lastId = valid ? (seed.lastId as number) : 0;
   return { state: { camera: null, caseNames, onScreen: {}, approvalTypes: Object.create(null) }, lastId };
 }
 
@@ -187,6 +190,8 @@ export const KNOWN_TYPES: readonly string[] = [...PANE_OF.keys()];
 export const NEW_CLIENT = "New client";
 /** Public /talk text is unmoderated: the theater shows at most this many characters of a customer turn. */
 export const MAX_CUSTOMER_TEXT = 240;
+/** Any spoken words shown as a caption (CEO orders included) stay short enough to read. */
+export const MAX_SPOKEN_TEXT = MAX_CUSTOMER_TEXT;
 
 /** Clip to at most `max` characters (code points, so an emoji is never split), ending in "…". */
 export const clip = (text: string, max: number) => {
@@ -195,7 +200,7 @@ export const clip = (text: string, max: number) => {
 };
 
 /** Email text is public input too: keep a single message to a readable length on the projector. */
-export const MAX_EMAIL_BODY = 1200;
+export const MAX_EMAIL_BODY = 2400;
 export const MAX_EMAIL_SUBJECT = 160;
 
 /** "social_post" → "social post". */
@@ -354,12 +359,12 @@ export function stepsForEvent(
   }
   const pane = PANE_OF.get(ev.type);
   if (!pane) return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "unknown_type" } };
-  if ((pane === "mail" || pane === "sheet") && ev.case_id === null) {
-    // Without a case we can't know whose email or sheet this belongs on.
-    return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "bad_event", detail: "case_id required" } };
-  }
   if (ev.status === "skipped") {
     return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "status_skipped" } };
+  }
+  if ((pane === "mail" || pane === "sheet") && ev.case_id === null && ev.status === "ok") {
+    // Without a case we can't know whose email or sheet this belongs on.
+    return { state, steps: [], skipped: { eventId: ev.id, type: ev.type, reason: "bad_event", detail: "case_id required" } };
   }
   try {
     return mapEvent(state, ev, pane);
@@ -464,7 +469,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       push({ target: "mail.compose", agent, action: "appear", text: `To: ${to} · Subject: ${subject}` });
       push({ target: "mail.memo", agent, action: "type", text: body });
       push({ target: "mail.send", agent, action: "click" });
-      push({ target: "mail.sent", agent: null, action: "appear", text: `✓ Sent · ${secs} s after last fact`, meta: { message_id: str(p, "message_id") } });
+      push({ target: "mail.sent", agent: null, action: "appear", text: `✓ Sent · ${secs} s after last fact`, meta: { message_id: str(p, "message_id"), memo_ref: strOrNull(p, "memo_ref") } });
       break;
     }
     case "law.searched": {
@@ -551,18 +556,19 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       str(p, "candidate_id");
       str(p, "transcript_excerpt");
       const seconds = nonNeg(p, "seconds");
-      push({ target: "phone.dial", agent, action: "dial", text: `${Math.max(1, Math.round(seconds / 60))}-min screen`, meta: { seconds } });
+      push({ target: "phone.dial", agent, action: "dial", text: seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`, meta: { seconds } });
       break;
     }
     case "phone.checked": {
+      // v1.7: the screenshot is private (it shows the real outgoing mail); the card says what was checked.
       const ok = bool(p, "rendered_ok");
-      const shot = safeUrl(strOrNull(p, "screenshot_url"));
+      const note = strOrNull(p, "status_note");
       push({
         target: "phone.check",
         agent,
         action: ok ? "tick" : "circle",
-        text: ok ? "Memo renders on phone" : "Memo failed to render on phone",
-        meta: { screenshot_url: shot.url, screenshot_rejected: shot.rejected },
+        text: ok ? "Memo checked on a cloud phone" : "Memo failed to render on a cloud phone",
+        meta: { status_note: note },
       });
       break;
     }
@@ -611,9 +617,18 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       const channel = str(p, "channel"); // display only: vocabulary drift must not drop the event
       const speaker = has(p, "speaker") ? oneOf(p, "speaker", ["customer", "ceo"] as const) : ev.actor === "ceo" ? "ceo" : "customer";
       const caseId = strOrNull(p, "case_id");
+      // v1.6.4: a /talk case carries its masked name; show it on the rail like an emailed case.
+      const masked = strOrNull(p, "masked_name");
+      if (speaker === "customer" && ev.case_id !== null && masked) {
+        const known = Object.hasOwn(caseNames, ev.case_id);
+        const next: Record<string, string> = Object.create(null);
+        Object.assign(next, caseNames, { [ev.case_id]: masked });
+        caseNames = next;
+        if (!known) push({ pane: "rail", target: "rail.cases", agent: null, action: "appear", text: masked });
+      }
       // A customer's words are inbound speech, not an agent action: no cursor,
       // and unmoderated public text is clipped before any renderer sees it.
-      const shown = speaker === "customer" ? clip(text, MAX_CUSTOMER_TEXT) : text;
+      const shown = clip(text, MAX_SPOKEN_TEXT);
       push({ target: "rail.voice", agent: speaker === "ceo" ? agent : null, action: "say", text: shown, meta: { channel, speaker, case_id: caseId } });
       break;
     }

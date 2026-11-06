@@ -206,7 +206,7 @@ describe("buildScript on the happy-path fixture", () => {
     ]);
     // The candidate's words and id stay off the projector: only the length of the screen shows.
     expect(content(stepsOf(steps, "screen.call")).map((x) => [x.target, x.action, x.agent, x.text])).toEqual([
-      ["phone.dial", "dial", "hr", "5-min screen"],
+      ["phone.dial", "dial", "hr", "5 min"],
     ]);
     expect(stepsOf(steps, "phone.checked").at(-1)).toMatchObject({ target: "phone.check", action: "tick", agent: "qa" });
   });
@@ -440,15 +440,15 @@ describe("mapping details", () => {
         ev(2, "tool.bought", { tool: "free tool", provider: "local" }, { actor: "mkt", case_id: null }),
         ev(3, "cost.booked", { provider: "openrouter", model: "m", estimated: true }, { case_id: null, cost_usd: "1E-7" }),
         ev(4, "case.not_eligible", { reason: "not Delaware" }),
-        ev(5, "phone.checked", { screenshot_url: "local://s.png", rendered_ok: false }, { actor: "qa" }),
+        ev(5, "phone.checked", { rendered_ok: false, status_note: "blank screen" }, { actor: "qa" }),
       ],
       quiet,
     );
     expect(skipped).toMatchObject([{ eventId: 2, reason: "bad_payload", detail: "cost_usd: required" }]);
     const texts = content(steps).map((s) => s.text);
-    expect(texts).toEqual(["Apify actor · $1.50", "$0.0000001", "not eligible", "Memo failed to render on phone"]);
+    expect(texts).toEqual(["Apify actor · $1.50", "$0.0000001", "not eligible", "Memo failed to render on a cloud phone"]);
     expect(steps.find((s) => s.eventId === 3)?.meta?.cost_usd).toBe("0.0000001");
-    expect(steps.at(-1)).toMatchObject({ action: "circle", meta: { screenshot_url: "local://s.png" } });
+    expect(steps.at(-1)).toMatchObject({ action: "circle", meta: { status_note: "blank screen" } });
   });
 
   it("v1.4 case.flagged puts an amber chip on the case card (QA cursor); a case is required", () => {
@@ -465,7 +465,7 @@ describe("mapping details", () => {
     expect(steps.find((s) => s.action === "drag")?.text).toBe("New client · 15-min review");
   });
 
-  it("unmoderated customer text is clipped to 240 characters; CEO orders are not", () => {
+  it("spoken captions (customer and CEO) are clipped to 240 characters", () => {
     const long = "x".repeat(500);
     const { steps } = buildScript(
       [
@@ -476,7 +476,7 @@ describe("mapping details", () => {
     );
     expect(steps[0].text).toHaveLength(240);
     expect(steps[0].text?.endsWith("…")).toBe(true);
-    expect(steps[1].text).toHaveLength(500);
+    expect(steps[1].text).toHaveLength(240);
   });
 
   it("clip never splits an emoji; long email bodies are clipped for the projector", () => {
@@ -486,7 +486,7 @@ describe("mapping details", () => {
     const body = "b".repeat(5000);
     const mail = buildScript([ev(2, "email.received", { masked_name: "T", from_masked: "f", subject: "s".repeat(500), body })], quiet).steps;
     const open = mail.find((s) => s.action === "open")!;
-    expect(Array.from(open.text ?? "")).toHaveLength(1200);
+    expect(Array.from(open.text ?? "")).toHaveLength(2400);
     expect(String(open.meta?.subject)).toHaveLength(160);
   });
 
