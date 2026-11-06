@@ -236,7 +236,7 @@ def test_spend_cap_pauses_auto(make_harness):
     h.to_sent()
     h.ok("book_spend", provider="openrouter", model="m", cost_usd="1.00")
     second = h.to_qa_passed(h.new_case(sender="b@other.io"))
-    assert h.do("send_memo", case_id=second).status == "needs_approval"
+    assert h.do("send_memo", case_id=second).error["code"] == "paused"
     assert h.gw.state.trust["email"] == "PAUSED"
 
 
@@ -247,8 +247,9 @@ def test_questionnaires_count_against_the_email_cap(make_harness):
     h.ok("inject_email", **{"from": "a@x.io", "subject": "gig", "body": "EA", "inbox": "hiring"})
     second = h.ok("inject_email", **{"from": "b@y.io", "subject": "gig", "body": "CPA",
                                      "inbox": "hiring"})
-    assert second["questionnaire"] == "needs_approval"
+    assert second["questionnaire"] == "paused"
     assert h.gw.state.trust["email"] == "PAUSED"
+    assert len(h.events("hr.questionnaire_sent")) == 1  # v1.4.1: the auto-reply is an event
 
 
 # ---------------------------------------------------------------- hiring
@@ -257,7 +258,7 @@ def test_questionnaires_count_against_the_email_cap(make_harness):
 def test_questionnaire_reply_keeps_the_shortlist(h):
     h.ok("inject_email", **{"from": "ann@example.com", "subject": "gig", "body": "EA, 6 yrs",
                             "inbox": "hiring"})
-    h.ok("hr_record", stage="shortlisted", candidate_id="cand_1", name_masked="x", note="")
+    h.ok("hr_record", stage="shortlisted", candidate_id="cand_1", note="")
     h.ok("inject_email", **{"from": "ann@example.com", "subject": "Re: gig",
                             "body": "4. $150 for the hour", "inbox": "hiring"})
     assert h.gw.state.candidates["cand_1"]["stage"] == "shortlisted"
@@ -266,8 +267,9 @@ def test_questionnaire_reply_keeps_the_shortlist(h):
 def test_double_click_hire_counts_one_touch(h):
     h.ok("inject_email", **{"from": "ann@example.com", "subject": "gig", "body": "EA",
                             "inbox": "hiring"})
-    h.ok("hr_hire", candidate_id="cand_1")
-    h.ok("hr_hire", candidate_id="cand_1")
+    h.ok("candidate_decision", candidate_id="cand_1", decision="hire")
+    again = h.ok("candidate_decision", candidate_id="cand_1", decision="hire")
+    assert again["duplicate"] is True
     assert h.gw.state.touches["operating"] == 1
 
 

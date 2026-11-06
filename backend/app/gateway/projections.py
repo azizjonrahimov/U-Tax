@@ -37,7 +37,7 @@ _STAGE_RANK = {"applicant": 0, "screened": 1, "shortlisted": 2, "declined": 3, "
 
 # Event types that count against an action type's hourly cap.
 CAP_EVENTS = {
-    "email": ("memo.sent", "client.asked", "case.not_eligible"),
+    "email": ("memo.sent", "client.asked", "case.not_eligible", "hr.questionnaire_sent"),
     "social_post": ("post.published",),
     "calendar_invite": ("call.booked",),
     "voice_screen": ("screen.call",),
@@ -81,6 +81,7 @@ class Case:
     not_eligible_reason: str | None = None
     phone: dict[str, Any] | None = None
     laws: list[dict] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
 
     def public(self) -> dict[str, Any]:
         result = None
@@ -140,9 +141,10 @@ class State:
 
     @property
     def tax_saved_cents(self) -> int:
-        """Contract §4: Σ over sent cases of (authorized_method_cents − total_cents).
-        (Proposed to the controller: exclude the fee and clamp at 0; see READY notes.)"""
-        return sum(c.result["authorized_method_cents"] - c.result["total_cents"]
+        """Contract §4 (v1.4.1): Σ over sent cases of max(0, authorized − (total − fee)).
+        The annual report fee is paid under either method, so it is never a saving."""
+        return sum(max(0, c.result["authorized_method_cents"]
+                       - (c.result["total_cents"] - c.result["annual_report_fee_cents"]))
                    for c in self.cases.values()
                    if c.result and c.memo_message_id is not None)
 
@@ -181,8 +183,6 @@ class State:
         for action_type, types in CAP_EVENTS.items():
             if e.type in types and e.status == "ok":
                 self.cap_log[action_type].append(e.ts)
-        if e.type == "hr.applicant" and (e.private or {}).get("questionnaire"):
-            self.cap_log["email"].append(e.ts)  # the questionnaire auto-reply is outbound mail
         handler = getattr(self, "_on_" + e.type.replace(".", "_"), None)
         if handler is not None:
             handler(e)
@@ -255,6 +255,16 @@ class State:
         case = self._case(e)
         if case is not None:
             case.not_eligible_reason = e.payload["reason"]
+
+    def _on_case_flagged(self, e: Event) -> None:
+        case = self._case(e)
+        if case is not None and e.payload["kind"] not in case.flags:
+            case.flags.append(e.payload["kind"])
+
+    def _on_hr_questionnaire_sent(self, e: Event) -> None:
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is not None:
+            cand["questionnaire_sent"] = True
 
     def _on_law_searched(self, e: Event) -> None:
         case = self._case(e)
@@ -349,6 +359,10 @@ class State:
         if private.get("sender_key"):  # applicant mail: gateway-only contact details
             cand["sender_key"] = private["sender_key"]
             cand["reply_to"] = private.get("reply_to")
+        if stage == "applicant" and private.get("text"):
+            cand.setdefault("texts", []).append(private["text"])  # contact-free answers
+        if stage == "applicant" and e.payload["note"] and "credentials" not in cand:
+            cand["credentials"] = e.payload["note"]
         # stages only move forward: a questionnaire reply never demotes a shortlisted person
         if _STAGE_RANK.get(stage, 0) >= _STAGE_RANK.get(cand.get("stage"), -1):
             cand["stage"] = stage

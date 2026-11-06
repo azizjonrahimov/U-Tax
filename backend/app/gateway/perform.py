@@ -81,6 +81,7 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "compute_tax": ("tax",), "qa_check": ("qa",), "send_memo": ("acct",),
     "book_call": ("intake",), "phone_check": ("qa",), "post_social": ("mkt",),
     "draft_dm": ("mkt",), "hr_record": ("hr",), "firm_brief": ("cos",),
+    "get_candidate": ("hr",), "flag_case": ("qa",),  # v1.4
 }
 SLOT_COUNT = 3
 SLOT_MINUTES = 15
@@ -221,6 +222,8 @@ class Gateway:
             "post_social": self._post_social,
             "draft_dm": self._draft_dm,
             "hr_record": self._hr_record,
+            "get_candidate": self._get_candidate,
+            "flag_case": self._flag_case,
             "firm_brief": self._firm_brief,
             # gateway / control actions (contract §5, §6a-c): never callable by an agent token
             "inject_email": self._inject_email,
@@ -234,11 +237,15 @@ class Gateway:
             "ceo_digest": self._ceo_digest,
             "book_spend": self._book_spend,
             "send_dm_by_human": self._send_dm_by_human,
-            "hr_hire": self._hr_hire,
+            "set_trust": self._set_trust,
+            "candidate_decision": self._candidate_decision,
+            "retry_wakes": self._retry_wakes_action,
         }
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
         self._outbox_tries: dict[str, tuple[int, float]] = {}
+        # failed wake deliveries: (message, waker, attempt, due monotonic time)
+        self._wake_retries: list[tuple[str, Callable[[str], None], int, float]] = []
 
     READ_ONLY = frozenset({"list_open_cases", "get_case"})
 
@@ -256,14 +263,42 @@ class Gateway:
     def _wake(self, message: str) -> None:
         self._pending_wakes.append(message)
 
+    WAKE_BACKOFF = (5, 15, 60, 300)  # seconds; then every 5 minutes until it lands
+
     def _deliver_wakes(self, wakes: list[str]) -> None:
         for message in wakes:
             log.info("WAKE %s", message)
             for waker in list(self._wakers):
-                try:
-                    waker(message)
-                except Exception:  # noqa: BLE001 - a dead waker never blocks the firm
-                    log.exception("waker failed for %r", message)
+                self._try_wake(message, waker, attempt=0)
+
+    def _try_wake(self, message: str, waker: Callable[[str], None], *, attempt: int) -> None:
+        try:
+            waker(message)
+        except Exception:  # noqa: BLE001 - a dead waker never blocks the firm; retried
+            delay = self.WAKE_BACKOFF[min(attempt, len(self.WAKE_BACKOFF) - 1)]
+            log.exception("waker failed for %r (attempt %d); retry in %ss", message,
+                          attempt + 1, delay)
+            with self._lock:
+                self._wake_retries.append((message, waker, attempt + 1,
+                                           time.monotonic() + delay))
+
+    def retry_wakes(self) -> int:
+        """Re-deliver failed wakes whose backoff has passed (the server timer calls this)."""
+        now = time.monotonic()
+        with self._lock:
+            due = [w for w in self._wake_retries if w[3] <= now]
+            self._wake_retries = [w for w in self._wake_retries if w[3] > now]
+        for message, waker, attempt, _ in due:
+            if waker in self._wakers:
+                self._try_wake(message, waker, attempt=attempt)
+        return len(due)
+
+    def pending_wake_retries(self) -> list[str]:
+        with self._lock:
+            return [w[0] for w in self._wake_retries]
+
+    def _retry_wakes_action(self, args: dict) -> dict:
+        return {"pending": self.pending_wake_retries()}
 
     def boot_wakes(self) -> list[str]:
         """Wake-ups owed after a restart (wakes live in memory only): every open case and
@@ -445,9 +480,17 @@ class Gateway:
             reason = self._cap_hit(action_type)
             if reason is None:
                 return
-            self._emit([NewEvent(type="trust.changed", actor="system",
-                                 payload={"action_type": action_type, "from": "AUTO",
-                                          "to": "PAUSED", "reason": reason})])
+            written = self._emit([NewEvent(type="trust.changed", actor="system",
+                                           payload={"action_type": action_type, "from": "AUTO",
+                                                    "to": "PAUSED", "reason": reason})])
+            self._notify_ceo("paused", f"{action_type} paused ({reason})",
+                             f"{action_type} sends are paused ({reason}). Resume it in the "
+                             "CEO console when you're ready.",
+                             key=f"ceo:paused:{written[0].id}")
+        if self.state.trust[action_type] == "PAUSED":
+            # v1.4: a pause (cap, budget or the CEO's standing order) holds until resumed
+            raise Refused("paused", f"{action_type} is paused; the CEO resumes it "
+                                    "(POST /api/trust)", {"action_type": action_type})
         approval_id = self.state.approval_by_key.get(action_key)
         if approval_id:
             approval = self.state.approvals[approval_id]
@@ -570,10 +613,10 @@ class Gateway:
                                       "note": note},
                              idempotency_key=key,
                              private={"reply_to": mail.sender.strip(), "sender_key": sender_key,
-                                      "message_id": mail.message_id, "text": raw,
-                                      # a first mail triggers the questionnaire: it counts
-                                      # against the email cap like any other outbound mail
-                                      "questionnaire": new})])
+                                      "message_id": mail.message_id,
+                                      "text": mask_text(raw, masked_name=name_masked,
+                                                        company=None,
+                                                        hide_words=sender_words(sender_key))})])
         questionnaire = "skipped"
         if new:
             questionnaire = self._send_questionnaire(candidate_id)
@@ -583,24 +626,32 @@ class Gateway:
 
     def _send_questionnaire(self, candidate_id: str) -> str:
         """Auto-reply (trust type email). If email is still ASK, the approval sends it later."""
-        # The contract has no event type for this auto-reply, so it writes none; the
-        # MailPort key makes a resend (e.g. after the approval) a no-op.
         cand = self.state.candidates[candidate_id]
         key = f"questionnaire:{candidate_id}"
+        if cand.get("questionnaire_sent"):
+            return "sent"
         try:
             self._gate("email", key, _cap(f"{self._first('email')}hiring questionnaire: "
                                           f"{cand['name_masked']}"), None)
         except NeedsApproval:
             return "needs_approval"
-        except Refused:
-            return "denied"
+        except Refused as err:  # denied by the CEO, or email is paused
+            return err.code
         try:
-            self._with_retry("questionnaire email", lambda: self.ports.mail.send(
+            sent = self._with_retry("questionnaire email", lambda: self.ports.mail.send(
                 OutMail(to=cand["reply_to"], subject=QUESTIONNAIRE_SUBJECT,
                         body=questionnaire_body()), key))
         except ToolError as err:
             log.warning("questionnaire to %s failed: %s", candidate_id, err)
             return "failed"
+        # contract v1.4.1: the auto-reply is an event, and it counts against the email cap
+        self._emit([NewEvent(type="hr.questionnaire_sent", actor="system",
+                             provider=self.ports.mail.provider,
+                             payload={"candidate_id": candidate_id,
+                                      "name_masked": cand["name_masked"],
+                                      "note": "AI-screen questionnaire (disclosed)"},
+                             idempotency_key=f"qsent:{candidate_id}",
+                             private={"message_id": sent.message_id})])
         return "sent"
 
     def _new_case_number(self) -> int:
@@ -715,8 +766,7 @@ class Gateway:
                                    payload={"note": f"{action_type} → AUTO",
                                             "approval_id": approval_id},
                                    idempotency_key=key, private=private))
-            reason = ("first approval" if first else
-                      "resumed by a human" if current == "PAUSED" else "approved again")
+            reason = "first approval" if first else "approved again"
             events.append(NewEvent(type="trust.changed", actor="system",
                                    payload={"action_type": action_type, "from": current,
                                             "to": "AUTO", "reason": reason}))
@@ -1291,7 +1341,7 @@ class Gateway:
         if image_url and (not image_url.startswith(("https://", "local://"))
                           or has_email(image_url) or _CASE_REF.search(image_url)):
             raise Refused("content_guard", "post refused: image_url must be a plain https link")
-        problem = post_problem(text)
+        problem = post_problem(text, allowed_url=self.settings.public_talk_url)
         if problem:
             raise Refused("content_guard", f"post refused: {problem}")
         self._gate("social_post", key,
@@ -1333,41 +1383,89 @@ class Gateway:
         return {"sent_by_human": True}
 
     def _hr_record(self, args: dict) -> dict:
-        stage = _one_of(args, "stage", ("applicant", "screened", "shortlisted", "declined"))
-        candidate_id = _str(args, "candidate_id", max_len=64)
-        cand = self.state.candidates.get(candidate_id)
-        if cand is None:
-            # Only a new, sourced applicant may be recorded under an agent's own id, and
-            # never in the inbox's cand_N space (that would merge two people later).
-            if stage != "applicant" or re.fullmatch(r"cand_\d+", candidate_id):
-                raise Refused("not_found", f"no candidate {candidate_id}; applicants come in "
-                                           "through the hiring inbox")
-            name = _str(args, "name_masked", max_len=80)
-        else:
-            name = cand["name_masked"]
-        note, _ = redact_ids(_str(args, "note", required=False, max_len=500) or "")
-        note = strip_contacts(note)
-        self._emit([NewEvent(type=f"hr.{stage}", actor="hr", provider="local",
-                             payload={"candidate_id": candidate_id, "name_masked": name,
-                                      "note": note},
-                             idempotency_key=f"hr:{stage}:{candidate_id}")])
-        return {"candidate_id": candidate_id, "stage": stage}
-
-    def _hr_hire(self, args: dict) -> dict:
-        """The human makes the final call (legal limit): only the CEO's console hires."""
+        """v1.4: HR screens and shortlists. Applicants come from the gateway (§6c); hiring
+        and declining are the CEO's (POST /api/candidates/{id}/decision)."""
+        stage = _one_of(args, "stage", ("screened", "shortlisted"))
         candidate_id = _str(args, "candidate_id", max_len=64)
         cand = self.state.candidates.get(candidate_id)
         if cand is None:
             raise Refused("not_found", f"no candidate {candidate_id}")
-        note = _str(args, "note", required=False, max_len=300) or "hired by the CEO"
-        self._emit([NewEvent(type="hr.hired", actor="ceo", provider="local",
+        note = strip_contacts(_str(args, "note", required=False, max_len=500) or "")
+        written = self._emit([NewEvent(type=f"hr.{stage}", actor="hr", provider="local",
+                                       payload={"candidate_id": candidate_id,
+                                                "name_masked": cand["name_masked"],
+                                                "note": note},
+                                       idempotency_key=f"hr:{stage}:{candidate_id}")])
+        if stage == "shortlisted":
+            self._notify_ceo("shortlisted", f"Shortlisted: {cand['name_masked']}",
+                             f"{cand['name_masked']} is shortlisted ({cand.get('credentials')}). "
+                             "Hire or decline in the CEO console.",
+                             key=f"ceo:shortlisted:{candidate_id}:{written[0].id}")
+        return {"candidate_id": candidate_id, "stage": stage}
+
+    def _get_candidate(self, args: dict) -> dict:
+        """v1.4 (hr): the masked candidate. Stated credentials, questionnaire answers with
+        contact details removed, stage; never the address."""
+        candidate_id = _str(args, "candidate_id", max_len=64)
+        cand = self.state.candidates.get(candidate_id)
+        if cand is None:
+            raise Refused("not_found", f"no candidate {candidate_id}")
+        return {"candidate_id": candidate_id, "name_masked": cand["name_masked"],
+                "stage": cand.get("stage"), "credentials": cand.get("credentials"),
+                "answers": list(cand.get("texts", [])),
+                "questionnaire_sent": bool(cand.get("questionnaire_sent"))}
+
+    FLAG_KINDS = ("possible_injection", "unrealistic_inputs")
+
+    def _flag_case(self, args: dict) -> dict:
+        """v1.4 (qa): `case.flagged`; it goes into the next CEO update email."""
+        case = self._case(args)
+        kind = _one_of(args, "kind", self.FLAG_KINDS)
+        written = self._emit([NewEvent(type="case.flagged", actor="qa", case_id=case.case_id,
+                                       payload={"kind": kind},
+                                       idempotency_key=f"flag:{case.case_id}:{kind}")])
+        self._notify_ceo("flagged", f"Flagged: {case.masked_name}",
+                         f"{case.masked_name}: QA flagged {kind.replace('_', ' ')}",
+                         key=f"ceo:flagged:{case.case_id}:{kind}:{written[0].id}")
+        return {"case_id": case.case_id, "kind": kind}
+
+    def _candidate_decision(self, args: dict) -> dict:
+        """POST /api/candidates/{id}/decision: the human makes the final call (legal
+        limit), as `hr.hired` / `hr.declined` with actor ceo, plus an operating touch."""
+        candidate_id = _str(args, "candidate_id", max_len=64)
+        decision = _one_of(args, "decision", ("hire", "decline"))
+        cand = self.state.candidates.get(candidate_id)
+        if cand is None:
+            raise Refused("not_found", f"no candidate {candidate_id}")
+        stage = "hired" if decision == "hire" else "declined"
+        if cand.get("stage") in ("hired", "declined"):
+            return {"candidate_id": candidate_id, "stage": cand["stage"], "duplicate": True}
+        note = _str(args, "note", required=False, max_len=300) or f"{stage} by the CEO"
+        self._emit([NewEvent(type=f"hr.{stage}", actor="ceo", provider="local",
                              payload={"candidate_id": candidate_id,
                                       "name_masked": cand["name_masked"], "note": note},
-                             idempotency_key=f"hr:hired:{candidate_id}"),
+                             idempotency_key=f"hr:{stage}:{candidate_id}"),
                     NewEvent(type="touch.operating", actor="ceo",
-                             payload={"note": f"hire {cand['name_masked']}", "approval_id": None},
-                             idempotency_key=f"touch:hr:hired:{candidate_id}")])
-        return {"candidate_id": candidate_id, "stage": "hired"}
+                             payload={"note": f"{decision} {cand['name_masked']}",
+                                      "approval_id": None},
+                             idempotency_key=f"touch:hr:{stage}:{candidate_id}")])
+        return {"candidate_id": candidate_id, "stage": stage}
+
+    def _set_trust(self, args: dict) -> dict:
+        """POST /api/trust: the CEO's standing order ("stop posting" = social_post PAUSED;
+        resume = AUTO). trust.changed + touch.operating."""
+        action_type = _one_of(args, "action_type", TRUST_TYPES)
+        to = _one_of(args, "state", ("PAUSED", "AUTO"))
+        current = self.state.trust[action_type]
+        if current == to:
+            return {"action_type": action_type, "trust": to, "duplicate": True}
+        self._emit([NewEvent(type="touch.operating", actor="ceo",
+                             payload={"note": f"{action_type} → {to}",
+                                      "approval_id": None}),
+                    NewEvent(type="trust.changed", actor="system",
+                             payload={"action_type": action_type, "from": current, "to": to,
+                                      "reason": "CEO order"})])
+        return {"action_type": action_type, "trust": to}
 
     def _book_spend(self, args: dict) -> dict:
         """Contract §6a: the gateway books agent spend; no agent reports money.
@@ -1474,8 +1572,20 @@ def credentials_summary(text: str) -> str:
     return " · ".join(found) or "no credentials stated"
 
 
-def post_problem(text: str) -> str | None:
-    """Contract §6 post_social content guard: no client may be identifiable in a post."""
+_HANDLE = re.compile(r"(?<![\w@.])@[A-Za-z0-9_]{2,}")
+_URL = re.compile(r"(?i)\b(?:https?://|www\.)\S+|\b[a-z0-9-]+\.(?:com|io|ai|dev|co|net|org|app|xyz)\b\S*")
+
+
+def post_problem(text: str, *, allowed_url: str = "") -> str | None:
+    """Contract §6 post_social content guard: no client may be identifiable in a post,
+    and the only link is the firm's own PUBLIC_TALK_URL (v1.4)."""
+    if _HANDLE.search(text):
+        return "it mentions an @handle"
+    allowed = allowed_url.rstrip("/").lower()
+    for match in _URL.finditer(text):
+        url = match.group(0).rstrip(".,;!?)").rstrip("/").lower()
+        if not allowed or url != allowed:
+            return "it links somewhere other than the firm's talk page"
     if _CASE_REF.search(text):
         return "it names a case or a Team #N"
     if has_email(text):

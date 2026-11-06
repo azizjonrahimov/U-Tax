@@ -51,6 +51,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "hr.shortlisted": _HR,
     "hr.hired": _HR,
     "hr.declined": _HR,
+    "hr.questionnaire_sent": _HR,
     "screen.call": ("candidate_id", "transcript_excerpt", "seconds"),
     "voice.command": ("text", "channel", "speaker", "case_id"),
     "ceo.notified": ("channel", "subject", "summary", "reason"),
@@ -62,6 +63,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "cost.booked": ("provider", "model", "estimated"),
     "tool.bought": ("tool", "provider"),
     "brief.generated": ("text", "counts"),
+    "case.flagged": ("kind",),
 }
 
 FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",

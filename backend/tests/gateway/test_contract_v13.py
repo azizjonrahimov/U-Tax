@@ -39,7 +39,7 @@ def test_every_tool_has_an_owner_and_book_cost_is_gone():
     assert set(TOOL_ACTORS) == {
         "list_open_cases", "get_case", "extract_facts", "ask_client", "mark_not_eligible",
         "law_search", "compute_tax", "qa_check", "send_memo", "book_call", "phone_check",
-        "post_social", "draft_dm", "hr_record", "firm_brief"}
+        "post_social", "draft_dm", "hr_record", "firm_brief", "get_candidate", "flag_case"}
 
 
 # ---------------------------------------------------------------- wake-ups (§6b)
