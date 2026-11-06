@@ -1,4 +1,4 @@
-# API contract (v1.1): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.2): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -79,7 +79,8 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `dm.drafted` / `dm.sent_by_human` | mkt / ceo | `{recipient_label, text}` |
 | `hr.applicant` / `hr.screened` / `hr.shortlisted` / `hr.hired` / `hr.declined` | hr (hired: ceo) | `{candidate_id, name_masked, note}` |
 | `screen.call` | hr | `{candidate_id, transcript_excerpt, seconds}` |
-| `voice.command` | ceo | `{text, channel: "mic"\|"typed", speaker: "ceo"\|"judge", case_id}` (`case_id` set for judge cases) |
+| `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id}` (actor `intake` and `case_id` set for customer conversations) |
+| `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"digest"\|"login"}` |
 | `approval.requested` | system | `{approval_id, action_type, summary}` |
 | `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id}` |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
@@ -133,18 +134,26 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/approve` `{approval_id, decision: "allow"|"deny", note}` → `200 {"ok": true}`.
   Writes `touch.training` (first approval of an action type) or `touch.operating`, plus
   `trust.changed` when the type flips. Idempotent by `approval_id`.
-- `POST /api/voice` `{text, channel: "mic"|"typed", speaker: "ceo"|"judge", reply_email}` →
-  writes `voice.command`. `speaker: "ceo"`: forwarded to the Chief of Staff via the Naïve
-  REST client once wired (stand-in: log only). `speaker: "judge"`: opens a **fast-path
-  case** from the transcript (priority, no queue), memo goes to `reply_email`; returns
-  `{case_id}` so the mic page can follow it.
+- `POST /api/voice` `{text, channel: "voice"|"typed", speaker: "customer"|"ceo", reply_email}` →
+  writes `voice.command`. `speaker: "customer"` (the `/talk` page, design D23): opens a
+  **fast-path case** from the transcript (priority, no queue), memo goes to `reply_email`;
+  returns `{case_id}` so the page can follow it. `speaker: "ceo"`: an optional typed order
+  from `/ceo`, forwarded to the Chief of Staff once Naïve is wired (stand-in: log only).
 - `POST /api/voice/session` → `{client_secret, model, expires_at}`: an ephemeral OpenAI
   Realtime session minted with the gateway's `OPENAI_API_KEY` (the key never reaches the
   browser). `503 voice_unavailable` when no key is set; the mic page then falls back to
   typed text plus browser speech.
 - `GET /api/brief/audio?event_id=<brief.generated id>` → `audio/mpeg` (OpenAI TTS of the
-  brief text). `503 voice_unavailable` without a key; the theater falls back to browser
+  brief text). `503 voice_unavailable` without a key; the page falls back to browser
   `speechSynthesis`.
+- `GET /api/ceo/brief?since_id=<last event id the CEO saw>` → `{brief_event_id, text,
+  counts, pending_approvals: [{approval_id, action_type, summary}], last_event_id}`. Writes a
+  `brief.generated` (stand-in tonight: a deterministic template over the projections;
+  Saturday: the Chief of Staff's `firm_brief`). The `/ceo` console calls it on login and
+  stores `last_event_id` locally.
+- CEO email updates (design D24): the gateway sends to `CEO_EMAIL` through MailPort when
+  an approval is requested or a case is BLOCKED, and a digest every `CEO_DIGEST_HOURS`
+  (default 3). Each send writes `ceo.notified`. Stand-in: the console outbox.
 - `POST /api/dev/inject-email` `{from, subject, body}` → local MailPort only; produces
   `email.received` exactly as a real inbound mail would. Refused unless `ADAPTER_MAIL=local`.
 - `POST /hooks/agentmail` (Saturday): AgentMail webhook; idempotency key = message id.
@@ -197,16 +206,28 @@ Amounts arrive formatted (`$85,165`). The template must contain the line
 `Educational estimate — not tax advice.` The gateway refuses to send if it doesn't, and
 falls back to a built-in template if the file is missing.
 
-## 8. Theater flags and the mic page
+## 8. Theater flags and the two voice/console pages
 
 - Theater env: `NEXT_PUBLIC_SHOW_BLOCKED` and `NEXT_PUBLIC_SHOW_QUEUE`, both default `1`
   (design D22): red BLOCKED card from `case.blocked` / `qa.failed`, waiting chips from
   `/api/state` `queue.waiting`.
-- Mic page: `/mic` in the frontend app, using the admin token (it is the CEO's console).
-  Speaker toggle CEO / Judge, a reply-email field for judges, live transcript, read-back
-  of the numbers heard, then follows the judge's `case_id` on the stream.
+- **`/talk`: "Talk to U-Tax"** (design D23), public-facing, no admin token. A customer or
+  the finale judge talks with the firm's AI agent (OpenAI Realtime session from
+  `POST /api/voice/session`; fallback: typed chat plus browser speech). The agent speaks
+  for the firm, asks for the facts, reads the numbers back, takes a reply email, posts the
+  transcript to `POST /api/voice` (`speaker: "customer"`), then shows the case moving live.
+  Because it's public, `POST /api/voice` with `speaker: "customer"` and `/api/voice/session`
+  are rate-limited per IP and need no admin token.
+- **`/ceo`: the CEO console** (design D24/D25), admin token. On login it plays and shows
+  the brief from `GET /api/ceo/brief`, lists pending approvals with Approve/Deny
+  (`POST /api/approve`), and has an optional typed order box (`POST /api/voice`,
+  `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.2 (2026-11-06): the CEO never speaks (design D23-D25). `/mic` becomes `/talk` (customers
+  talk with the AI agent) and `/ceo` (login brief, click approvals, typed orders);
+  `speaker: "customer"|"ceo"`; `GET /api/ceo/brief`; CEO email updates and `ceo.notified`.
 
 - v1.1 (2026-11-06): voice moved to a mic page (design D21): `POST /api/voice` gains
   `speaker`/`reply_email` and judge fast-path cases; `POST /api/voice/session`;
