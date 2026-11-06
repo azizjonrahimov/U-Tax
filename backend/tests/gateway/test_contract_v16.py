@@ -3,6 +3,8 @@ Client replied, greeting_name, hr.decision_mailed, ingress rules, admin-only can
 
 import json
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app.gateway.masking import mask_text
@@ -385,3 +387,35 @@ def test_tidy_and_clip_edges():
     assert time.perf_counter() - start < 0.5  # was 7 s under the gateway lock
     assert tidy_lines("a  \n\n\n\nb\t\n") == "a\n\nb\n"
     assert clip("abcdef", 0) == "" and len(clip("abcdef", 1)) <= 1
+
+
+# ---------------------------------------------------------------- v1.6.4
+
+
+def test_customer_voice_command_carries_the_masked_name(h):
+    data = h.ok("voice", text="We're a Delaware C-corp", speaker="customer",
+                reply_email="j@team9.dev")
+    payload = h.events("voice.command")[0].payload
+    assert payload["masked_name"] == h.gw.state.cases[data["case_id"]].masked_name
+    assert payload["masked_name"].startswith("Team #")
+    h.ok("voice", text="stop posting", speaker="ceo")
+    assert "masked_name" not in h.events("voice.command")[-1].payload  # customer cases only
+
+
+@pytest.mark.parametrize("url,ok", [
+    (None, True), ("", True),
+    ("https://cdn.u-tax.test/card.png", True),
+    ("https://CDN.u-tax.test/card.png", True),
+    ("http://cdn.u-tax.test/card.png", False),
+    ("https://evil.example/card.png", False),
+    ("https://cdn.u-tax.test.evil.example/x.png", False),
+    ("https://user:pw@cdn.u-tax.test/x.png", False),
+    ("javascript:alert(1)", False),
+])
+def test_post_images_only_from_our_asset_hosts(make_harness, url, ok):
+    h = make_harness(public_asset_hosts=frozenset({"cdn.u-tax.test"}))
+    args = {"channel": "x", "text": "We help founders check Delaware franchise tax."}
+    if url is not None:
+        args["image_url"] = url
+    r = h.gw.perform("post_social", args, actor="mkt")
+    assert (r.error is None or r.error["code"] != "bad_input") is ok, r.error

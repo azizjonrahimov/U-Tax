@@ -113,7 +113,10 @@ SEND_ATTEMPTS = 3  # first try + 2 retries (Error & Rescue Map)
 MAX_RETRY_SLEEP = 5.0
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _AUTO_SUBJECT = re.compile(r"(?i)^\s*(auto(matic)?[ -]?(reply|response)\b|auto:|out of (the )?office\b"
-                           r"|autoreply\b|vacation\b|abwesenheit\b)")
+                           r"|autoreply\b|vacation\b|abwesenheit\b"
+                           # calendar RSVPs to our review-call invitation (D27)
+                           r"|(accepted|declined|tentative|tentatively accepted|"
+                           r"updated invitation|invitation)\s*:)")
 CLIENT_REPLY_WAKES_PER_DAY = 3
 MAX_REVISIONS = 2
 
@@ -785,7 +788,8 @@ class Gateway:
         try:
             sent = self._with_retry("questionnaire email", lambda: self.ports.mail.send(
                 OutMail(to=cand["reply_to"], subject=QUESTIONNAIRE_SUBJECT,
-                        body=self.templates.render("hr-questionnaire", {})), key))
+                        body=self.templates.render("hr-questionnaire", {}), inbox="hiring"),
+                key))
         except ToolError as err:
             log.warning("questionnaire to %s failed: %s", candidate_id, err)
             return "failed"
@@ -925,7 +929,8 @@ class Gateway:
             payload={"text": mask_text(text, masked_name=masked_name,
                                        company=company_label(reply),
                                        hide_words=sender_words(reply)),
-                     "channel": channel, "speaker": "customer", "case_id": case_id},
+                     "channel": channel, "speaker": "customer", "case_id": case_id,
+                     "masked_name": masked_name},  # v1.6.4
             private={"reply_to": reply, "sender_key": sender_key, "masked_name": masked_name,
                      "company": None, "agent_text": agent_text(text), "turns": context},
             idempotency_key=f"voice:{request_id}" if request_id else None,
@@ -1693,7 +1698,7 @@ class Gateway:
         try:
             self._with_retry("calendar booking", lambda: self.ports.calendar.book(
                 Slot(start=start_iso, minutes=SLOT_MINUTES), case.reply_to,
-                f"U-Tax review: {case.masked_name}", slot_key))
+                "U-Tax: your franchise tax review call", slot_key))
         except ToolError as err:
             self._block(case, f"calendar booking failed: {err.code} (memo was sent)")
             raise
@@ -1726,7 +1731,10 @@ class Gateway:
         if not link:
             raise Refused("no_hiring_inbox", "hiring posts need MAIL_INBOX_HIRING")
         text, _ = redact_ids(raw)
-        image_url = _str(args, "image_url", required=False, max_len=2000)
+        image_url = _str(args, "image_url", required=False, max_len=2000) or None
+        if image_url is not None and not self._asset_url_ok(image_url):
+            # v1.6.4: the theater renders it, so only our own asset hosts, over https
+            raise Refused("bad_input", "image_url must be https on a host in PUBLIC_ASSET_HOSTS")
         key = f"post:{_digest([channel, kind, text, image_url])}"
         done = self._done_from(key)
         if done is not None:
@@ -1761,6 +1769,17 @@ class Gateway:
                              payload={"channel": channel, "text": text, "url": posted.url,
                                       "image_url": image_url}, idempotency_key=key)])
         return {"url": posted.url}
+
+    def _asset_url_ok(self, url: str) -> bool:
+        from urllib.parse import urlsplit
+
+        try:
+            parts = urlsplit(url)
+            host = (parts.hostname or "").lower()
+        except ValueError:
+            return False
+        return parts.scheme == "https" and not parts.username and not parts.password \
+            and host in self.settings.public_asset_hosts
 
     def _names_a_client(self, text: str) -> str | None:
         lowered = text.lower()
@@ -1892,7 +1911,8 @@ class Gateway:
         try:
             self._with_retry("decision email", lambda: self.ports.mail.send(
                 OutMail(to=cand["reply_to"], subject=DECISION_SUBJECT,
-                        body=self.templates.render(f"hr-{stage}", {})), key))
+                        body=self.templates.render(f"hr-{stage}", {}), inbox="hiring"),
+                key))
         except ToolError as err:
             log.warning("decision mail to %s failed: %s", candidate_id, err)
             return "failed"

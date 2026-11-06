@@ -1,4 +1,4 @@
-# API contract (v1.6): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.7): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -76,9 +76,9 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `law.searched` | tax | `{query, results: [{cite, snippet}]}` |
 | `tax.computed` | tax | `{authorized_method_cents, assumed_par_method_cents, chosen: "assumed_par"\|"authorized", annual_report_fee_cents, fee_source, total_cents, due_date: "2027-03-01", form5472_flag, rnd_flag, engine_version}` |
 | `qa.passed` / `qa.failed` | qa | `{checks: [{field, ok, note}]}`; `qa.failed` carries at least one check with `ok: false`, and `qa.passed` has none |
-| `memo.sent` | acct | `{to_masked, subject, body, message_id, seconds_since_last_fact}` |
+| `memo.sent` | acct | `{to_masked, subject, body, message_id, seconds_since_last_fact, memo_ref}` (`memo_ref` like `UTX-7F3K9Q2M`, unique per memo version) |
 | `call.booked` | intake | `{start, minutes, invitee_masked}` |
-| `phone.checked` | qa | `{screenshot_url, rendered_ok}` |
+| `phone.checked` | qa | `{rendered_ok, status_note}` (the screenshot URL is **private**, never in the public payload: it shows the real outgoing mail) |
 | `crm.sync_requested` / `crm.synced` | system | `{object: "contact"\|"deal", stage}` |
 | `post.published` | mkt | `{channel, text, url, image_url}` |
 | `dm.drafted` / `dm.sent_by_human` | mkt / ceo | `{recipient_label, text}` |
@@ -86,7 +86,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `hr.questionnaire_sent` | system | `{candidate_id, name_masked, note}` (the §6c auto-reply; counts against the `email` cap) |
 | `hr.decision_mailed` | system | `{candidate_id, name_masked, note}` (hire/decline mail sent; counts against the `email` cap) |
 | `screen.call` | hr | `{candidate_id, transcript_excerpt, seconds}` |
-| `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id}` (actor `intake` and `case_id` set for customer conversations) |
+| `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id, masked_name}` (`masked_name` set for customer cases) (actor `intake` and `case_id` set for customer conversations) |
 | `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"flagged"\|"shortlisted"\|"paused"\|"digest"\|"login"}` |
 | `approval.requested` | system | `{approval_id, action_type, summary}` |
 | `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id}` |
@@ -127,9 +127,14 @@ Projections rebuilt from events (never stored by hand):
   "queue": {"waiting": 0, "blocked": 0}
 }
 ```
-`Under the theater token, `hiring` carries counts only; the per-candidate list (with stages)
+`Each `cases[]` entry carries `flagged: true|false` (any `case.flagged`). `hiring` carries
+`applicants, screened, shortlisted, awaiting, hired, declined` (`awaiting` = shortlisted with no
+hire/decline yet). Under the theater token, `hiring` carries counts only; the per-candidate list (with stages)
 is admin-only, for `/ceo`.
 
+Per case, the saving comes from the `tax.computed` that preceded that case's **latest**
+`memo.sent`; the theater's replay projection follows the same rule and keeps the last valid
+value (never drops a case's saving on a malformed later event).
 `tax_saved_cents` = Σ over sent cases of max(0, `authorized_method_cents` − (`total_cents` −
 `annual_report_fee_cents`)): franchise tax saved only. The fee is paid under either method,
 so it is never counted as a saving, and the sum never goes negative.
@@ -213,13 +218,13 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `extract_facts` | intake | `{case_id, quotes: {<fact>: "<verbatim span from the email>"}, incorporated_delaware, foreign_owner_25}` | code parses each quote (`parse_amount`), checks it appears verbatim, conflicting spans → re-ask; `facts.extracted` or `facts.missing` |
 | `ask_client` | intake | `{case_id, missing: [<fact>...]}` | templated re-ask email (trust type `email`, max 2); `client.asked` |
 | `mark_not_eligible` | intake | `{case_id, reason: "not_incorporated"\|"outside_delaware"\|"not_a_corporation"}` | kind templated reply chosen by the enum (no free text reaches the client); anything else → `refused`; `case.not_eligible` |
-| `law_search` | tax | `{case_id, query}` | `law.searched` (stand-in: canned Delaware results) |
+| `law_search` | tax | `{case_id, query}` | `law.searched` with the **cleaned** query (operators, emails, money and ID-like numbers stripped); at most 20 per hour firm-wide (stand-in: canned Delaware results) |
 | `compute_tax` | tax | `{case_id}` | engine on the extracted facts only; `tax.computed` |
 | `qa_check` | qa | `{case_id}` | re-runs the engine, re-matches quotes; `qa.passed` / `qa.failed` |
 | `send_memo` | acct | `{case_id}` | refuses unless `QA_PASSED`; memo from template + engine output only; `memo.sent` |
 | `book_call` | intake | `{case_id, start}` | `start` must be one of the case's `offered_slots`, else `refused`; trust type `calendar_invite`; `call.booked` |
-| `phone_check` | qa | `{case_id}` | DevicePort; `phone.checked` (never blocks the case) |
-| `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
+| `phone_check` | qa | `{case_id}` | starts a DevicePort run for the case's latest `memo_ref` and returns `status: "done", data: {pending: true}`; the gateway tick finishes it and writes `phone.checked` (never blocks the case). Only an `ok` result short-circuits a retry; a skipped attempt gets a fresh per-attempt key, at most 3 attempts per memo version |
+| `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; `image_url` must be null or an https URL on a host in `PUBLIC_ASSET_HOSTS` (comma-separated), else refused; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
 | `draft_dm` | mkt | `{recipient_label, text}` | `dm.drafted` (the human sends it) |
 | `get_candidate` | hr | `{candidate_id}` | the masked candidate: stated credentials, questionnaire answers, stage (no contact details) |
 | `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
@@ -232,13 +237,22 @@ at most): `gross_receipts` (cents) and `years_with_receipts` (int), used only fo
 payroll-credit flag. Unknown → `rnd_flag: false` and the memo's `{{rnd_note}}` carries a
 conditional "you may qualify if…" line instead of a claim.
 
+## 6f. Slow ports and the gateway lock
+
+Sponsor I/O (DevicePort, ScrapePort, and any adapter call that can take seconds) never runs
+while the gateway lock is held: fetch outside the lock, then take the lock only to validate
+and append events. The Delaware fee is fetched at boot and refreshed before its 6 h TTL; a
+live fee that differs from the snapshot fee uses the snapshot and writes `case.flagged`-style
+CEO notice (`ceo.notified` reason `flagged`, summary "fee page differs from snapshot").
+
 ## 6a. Who books money (no agent does)
 
 Agents never report money. The gateway books agent spend itself as `cost.booked`: from
 Naïve's `session.usage` events (`consumed_micro_usd`, integer micro-USD, converted in
 code) or `GET /v1/credits/spend` per agent, and from sponsor responses (OpenRouter cost,
 Monid charges) when those adapters run. Stand-in tonight: the local driver books a fixed
-price-table estimate in code (`estimated: true`).
+price-table estimate in code (`estimated: true`). Apify and Mobilerun runs book an estimate
+per run (Apify ≤ its `maxTotalChargeUsd`; Mobilerun from steps × the per-step price in code).
 
 ## 6b. Waking the crew (gateway → Naïve)
 
@@ -315,17 +329,23 @@ cannot replace them.
 ## 7. Memo template
 
 `naive/templates/memo.md` (agents lane writes the words), rendered by the gateway with
-only these placeholders: `{{greeting_name}}` (the outgoing mail only: derived from the **sender's email domain label**,
+only these placeholders: `{{memo_ref}}`, `{{greeting_name}}` (the outgoing mail only: derived from the **sender's email domain label**,
 letters/digits/spaces only, at most 40 chars, never from body text; `/talk` cases and free-mail
 domains get `there`; the `memo.sent` event copy uses the masked name),
 `{{masked_name}}`, `{{authorized_method}}`, `{{assumed_par_method}}`,
 `{{annual_report_fee}}`, `{{total}}`, `{{due_date}}`, `{{form5472_note}}`, `{{rnd_note}}`.
-Amounts arrive formatted (`$85,165`). The template must contain the line
+The memo's **last line** is `Reference: {{memo_ref}}` (`UTX-` plus 8 to 16 capitals/digits, made by
+the gateway per memo version); the phone check finds the memo only by it. Amounts arrive formatted (`$85,165`). The template must contain the line
 `Educational estimate — not tax advice.` The gateway refuses to send if it doesn't, and
 falls back to a built-in template if the file is missing.
 
 ## 8. Theater flags and the two voice/console pages
 
+- Once a case has a `case.flagged` (`possible_injection`) event, the gateway serves **every**
+  event of that case (earlier ones included) to theater-token readers with `subject` and `body`
+  replaced by `"[hidden: flagged by QA]"` (`/api/events`, the stream, `/api/state`); the admin
+  token still sees them. The theater never shows the mail body of a flagged case either; it shows "hidden: flagged by QA" instead. It renders images only from hosts in
+  `NEXT_PUBLIC_ASSET_HOSTS`.
 - Theater env: `NEXT_PUBLIC_SHOW_BLOCKED` and `NEXT_PUBLIC_SHOW_QUEUE`, both default `1`
   (design D22): red BLOCKED card from `case.blocked` only (a `qa.failed` the firm resolves by
   re-asking never shows it), waiting chips from
@@ -343,6 +363,16 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.1 (2026-11-07, frontend slice 3 review): `cases[].flagged`; hiring `awaiting` and `declined`;
+  gateway hides flagged cases' subject/body from theater-token readers, retroactively; tax-saved parity rule.
+
+- v1.7 (2026-11-07, agents task 4 review): `{{memo_ref}}` last line and `memo_ref` on memo.sent;
+  phone.checked public payload without the screenshot URL; async phone check with per-attempt keys;
+  cleaned law queries with an hourly cap; slow ports outside the lock (§6f); per-run spend estimates.
+
+- v1.6.4 (2026-11-07, frontend slice 2): `masked_name` on customer `voice.command`; `image_url` host
+  allowlist (`PUBLIC_ASSET_HOSTS` / `NEXT_PUBLIC_ASSET_HOSTS`); flagged cases' mail bodies hidden on the theater.
 
 - v1.6.3 (2026-11-07, backend task 7): `get_case` names-kept copy for intake and qa only; other
   seats get the masked copy.
