@@ -36,9 +36,22 @@ const RAIL_FALLBACK: Record<string, string> = {
   "rail.crm": "rail.cases",
 };
 
+/** A target the cursor can actually reach: rendered and visible (stage mode hides the rail cards). */
+function visible(el: Element | null): Element | null {
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 ? el : null;
+}
+
 function locate(target: string, pane: Pane): Element | null {
-  const q = (t: string) => document.querySelector(`[data-target="${CSS.escape(t)}"]`);
-  return q(target) ?? (RAIL_FALLBACK[target] ? q(RAIL_FALLBACK[target]) : null) ?? q(target.split(".").slice(0, 2).join(".")) ?? q(pane);
+  const q = (t: string) => visible(document.querySelector(`[data-target="${CSS.escape(t)}"]`));
+  return (
+    q(target) ??
+    (RAIL_FALLBACK[target] ? q(RAIL_FALLBACK[target]) : null) ??
+    q(target.split(".").slice(0, 2).join(".")) ??
+    q(pane) ??
+    (pane === "rail" ? visible(document.querySelector(".stagebox")) : null)
+  );
 }
 
 type Pos = { x: number; y: number };
