@@ -23,3 +23,12 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-06 17:10Z RESEARCH done: research/naive-sdk.md (TS-only SDK; FastAPI uses REST api.vetta.sh/v1; $20 plan or card trial needed before any route works) and research/sponsors.md (Stripe, AgentMail, Apify/Monid, Mobilerun most useful; closed loop lead->email->reply->pay->fulfil)
 - 2026-11-06 17:10Z DECISION keep FastAPI: REST path is documented (quickstart curl arc); no stack change, within owner's stack choice
 - 2026-11-06 17:10Z SENT backend Task 3 (Naive REST client, mocked tests, no routes)
+- 2026-11-06 17:40Z OWNER "can you look into it one more time, if you get access dont start antyhing wait for me"
+- 2026-11-06 17:40Z ACCESS shared chat read via headed browser (copy in controller scratchpad); nothing started per owner
+- 2026-11-06 17:40Z READY lane/backend 07a8c25080c3 from backend (Task 3 Naive REST client; pytest 34 passed; controller rerun 34 passed; owned paths only). HELD, not merged: owner said wait
+- 2026-11-06 18:20Z OWNER "look into the folder, there should be new files and resources and docs; also if you need to install new CLI, you can do it if its for the best"
+- 2026-11-06 18:20Z FOUND owner's U-Tax package: U-TAX-CLAUDE.md, HANDOFF.md, docs/designs/u-tax.md, theater mockup, reference media; committed f9109ff
+- 2026-11-06 18:20Z INSTALLED @usenaive-sdk/cli 1.0.0 globally (naive whoami: no key yet)
+- 2026-11-06 18:22Z OWNER chose "FastAPI + Next.js (recommended)", "Add agents lane (recommended)", "Start now (recommended)" (direct)
+- 2026-11-06 18:22Z MERGED lane/backend 07a8c25080c3 (Naive REST client) as d08ce40
+- 2026-11-06 18:40Z CONTRACT v1 + events.sample.jsonl; design doc D16-D20; CREW rules 12-14, agents lane, SPEND $5 Naive spikes; briefs rewritten for U-Tax

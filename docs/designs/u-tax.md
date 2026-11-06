@@ -370,6 +370,16 @@ Naïve itself is the host, not a sponsor: sign up today on the 7-day trial and t
 8. Drafts for Saturday: client-sourcing posts, demo script cards, backup slide.
 **End-of-day goal:** a fake email in `fixtures/inbox/` becomes a QA-passed memo in the console outbox, every step visible on the theater, with no sponsor key.
 
+## Build Mapping (crew, decided 2026-11-06)
+Owner's answers in Claude Code on Nov 6: stack "FastAPI + Next.js (recommended)", lanes "Add agents lane (recommended)", start "Start now (recommended)".
+| # | Decision | Answer |
+|---|---|---|
+| D16 | Stack | The architecture above maps onto the existing scaffold: **gateway in `backend/` (Python FastAPI)**, engine + `parse_amount` as pure Python with pytest, **Agent Theater in `frontend/` (Next.js)** ported from the mockup. `naive.config.ts` stays TypeScript in `naive/`. Gateway port is 8000 (not 8787). |
+| D17 | Agent → gateway transport | Naïve custom client tools are "coming soon", so the gateway exposes its tools as an **MCP server at `/mcp`** over public HTTPS (cloudflared tonight, Render Saturday), `Authorization: Bearer $UTAX_TOOL_SECRET` from a Naïve vault. Every MCP tool calls `perform(action)`. Replaces `POST /tools/:name`. |
+| D18 | Crew | Three lanes mirror P1/P2/P3: **backend** (engine, gateway, ports, event store, MCP), **frontend** (theater), **agents** (`naive/`: config, prompts, templates, voice spike, sourcing drafts, demo cards). |
+| D19 | Shapes | `contracts/api.md` v1 fixes the event envelope, event types, `/api/state`, SSE, MCP tool names and memo placeholders; `contracts/events.sample.jsonl` is the shared happy-path fixture. Tax amounts are integer cents on the wire. |
+| D20 | CLI | The Naïve CLI is `@usenaive-sdk/cli` 1.0.0 (`naive`); `@usenaive-sdk/vetta-cli` named in the handoff is the old package. |
+
 ## Open Questions
 1. Can a Naïve phone number take **inbound** calls routed to the coordinator? If not: mic page for the CEO; the judge finale becomes "judge emails the firm."
 2. Does Naïve expose an event stream/webhook? Not required: the U-Tax tool wrappers emit our own events.
