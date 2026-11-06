@@ -6,9 +6,12 @@
 //  4. a prompt naming a gateway tool its agent may not call (or missing one it may),
 //  5. a system prompt without the firm rules or the disclaimer,
 //  6. templates/memo.md missing, using placeholders outside contract §7, or without the disclaimer line,
-//  7. a `tasks[]` declaration (the engine would create an extra org "CEO" agent outside the policy).
-// Run: npm run check   (sets dummy UTAX_MCP_URL / UTAX_TOOL_SECRET when none are set)
+//  7. a `tasks[]` declaration (the engine would create an extra org "CEO" agent outside the policy),
+//  8. an agent without its own identity + vault + token env (contract v1.3 §1),
+//  9. the config ACCEPTING a bad env (http / localhost / non-/mcp URL, short, padded or shared tokens).
+// Run: npm run check   (sets dummy UTAX_MCP_URL / UTAX_TOOL_TOKEN_* when none are set)
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,8 +19,11 @@ import { createJiti } from "jiti";
 import { loadConfig, whatItCanDo } from "@usenaive-sdk/blueprints";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-process.env.UTAX_MCP_URL ??= "https://utax-check.example.com/mcp";
-process.env.UTAX_TOOL_SECRET ??= "offline-check-dummy-secret-0123456789abcdef";
+const DUMMY = {
+  UTAX_MCP_URL: "https://utax-check.example.com/mcp",
+  ...Object.fromEntries(["COS", "INTAKE", "TAX", "QA", "ACCT", "MKT", "HR"].map((a) => [`UTAX_TOOL_TOKEN_${a}`, `offline-check-dummy-token-${a.toLowerCase()}-0123456789abcdef`])),
+};
+for (const [k, v] of Object.entries(DUMMY)) process.env[k] ??= v;
 
 const failures = [];
 const fail = (msg) => failures.push(msg);
@@ -40,10 +46,20 @@ const contractPath = join(ROOT, "..", "contracts", "api.md");
 if (existsSync(contractPath)) {
   const api = readFileSync(contractPath, "utf8");
   const s6 = api.split(/^## 6\./m)[1]?.split(/^## 7\./m)[0] ?? "";
-  const contractTools = [...s6.matchAll(/^\| `(\w+)` \|/gm)].map((m) => m[1]).sort();
+  const rows = [...s6.matchAll(/^\| `(\w+)` \| (\w+) \|/gm)].map((m) => ({ tool: m[1], agent: m[2] }));
+  const contractTools = rows.map((r) => r.tool).sort();
   if (contractTools.length === 0) fail("contracts/api.md: could not read the §6 tool table");
   else if (contractTools.join() !== [...GATEWAY_TOOLS].sort().join())
     fail(`src/crew.ts GATEWAY_TOOLS (${[...GATEWAY_TOOLS].sort()}) != contract §6 (${contractTools})`);
+  // The Agent column: a seat may hold a tool only if the contract gives it to that actor or "any",
+  // and every actor-specific tool is held by its actor.
+  for (const { tool, agent } of rows) {
+    for (const seat of Object.values(CREW)) {
+      const holds = seat.tools.includes(tool);
+      if (holds && agent !== "any" && agent !== seat.actor) fail(`${seat.name}: holds ${tool}, which contract §6 gives to ${agent}`);
+      if (!holds && agent === seat.actor) fail(`${seat.name}: missing ${tool}, which contract §6 gives to ${agent}`);
+    }
+  }
 } else {
   fail("contracts/api.md not found next to naive/");
 }
@@ -73,7 +89,16 @@ for (const [key, seat] of Object.entries(CREW)) {
   if (missing.length) fail(`${seat.name}: missing tools: ${missing}`);
   for (const t of DENY_ALWAYS) if (configs[t]?.permission !== "deny") fail(`${seat.name}: ${t} is not denied by name`);
   if (key !== "cos") for (const t of policy.COORDINATOR) if (configs[t]?.permission !== "deny") fail(`${seat.name}: ${t} not denied`);
-  if (!agent.identity) fail(`${seat.name}: holds no identity, so the vault bearer would not reach it`);
+  // 8. own identity, own vault, own token
+  const identity = config.identities.find((i) => i.name === agent.identity);
+  if (!identity) fail(`${seat.name}: holds no declared identity, so no vault bearer would reach it`);
+  const holders = config.agents.filter((a) => a.identity === agent.identity);
+  if (holders.length !== 1) fail(`${seat.name}: identity ${agent.identity} is shared by ${holders.map((a) => a.name)}`);
+  const vaults = config.vaults.filter((v) => v.identity === agent.identity);
+  const creds = vaults.flatMap((v) => v.credentials);
+  if (creds.length !== 1 || creds[0].kind !== "static_bearer" || creds[0].value.from_env !== seat.tokenEnv)
+    fail(`${seat.name}: its identity's vault must hold exactly one static_bearer from ${seat.tokenEnv}`);
+  else if (creds[0].mcp_server_url !== agent.mcp_servers?.[0]?.url) fail(`${seat.name}: vault credential URL != its MCP server URL`);
   const server = agent.mcp_servers?.find((s) => s.name === MCP_SERVER);
   if (server?.headers?.["X-UTax-Actor"] !== seat.actor) fail(`${seat.name}: X-UTax-Actor header is not ${seat.actor}`);
 
@@ -107,9 +132,36 @@ if (!existsSync(memoPath)) {
   const allowed = ["masked_name", "authorized_method", "assumed_par_method", "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note"];
   const used = [...memo.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]);
   const extra = used.filter((p) => !allowed.includes(p));
+  const absent = allowed.filter((p) => !used.includes(p));
   if (extra.length) fail(`templates/memo.md: placeholders outside contract §7: ${extra}`);
+  if (absent.length) fail(`templates/memo.md: missing contract §7 placeholders: ${absent}`);
+  if (/^\s*subject:/i.test(memo)) fail("templates/memo.md: starts with a Subject: line; the gateway sets the subject and sends the whole file as the body");
   if (!memo.includes(`${DISCLAIMER}.`)) fail(`templates/memo.md: missing the line "${DISCLAIMER}."`);
   if (/\$\s?\d/.test(memo.replace(/\{\{[^}]*\}\}/g, ""))) fail("templates/memo.md: contains a literal dollar amount; amounts come only from placeholders");
+}
+
+// 9. the config must REFUSE a bad env. Each case loads the config in a fresh process.
+const LOADER = `import("@usenaive-sdk/blueprints").then(async (b) => { const r = await b.loadConfig(process.argv[1]); process.exit(r.ok ? 0 : 3); })`;
+const good = { ...process.env, ...DUMMY };
+const badEnvs = {
+  "http URL": { UTAX_MCP_URL: "http://utax.example.com/mcp" },
+  "localhost URL": { UTAX_MCP_URL: "https://localhost:8000/mcp" },
+  "private IP URL": { UTAX_MCP_URL: "https://10.0.0.5/mcp" },
+  "IPv6 loopback URL": { UTAX_MCP_URL: "https://[::1]/mcp" },
+  "URL not ending in /mcp": { UTAX_MCP_URL: "https://utax.example.com/" },
+  "empty token": { UTAX_TOOL_TOKEN_QA: "" },
+  "short token": { UTAX_TOOL_TOKEN_TAX: "short" },
+  "token with CR": { UTAX_TOOL_TOKEN_HR: DUMMY.UTAX_TOOL_TOKEN_HR + String.fromCharCode(13) },
+  "token with spaces": { UTAX_TOOL_TOKEN_INTAKE: ` ${DUMMY.UTAX_TOOL_TOKEN_INTAKE} ` },
+  "URL with query": { UTAX_MCP_URL: "https://utax.example.com/mcp?token=abc" },
+  "single-label host": { UTAX_MCP_URL: "https://gateway/mcp" },
+  "shared token": { UTAX_TOOL_TOKEN_MKT: DUMMY.UTAX_TOOL_TOKEN_ACCT },
+};
+const control = spawnSync(process.execPath, ["-e", LOADER, ROOT], { cwd: ROOT, env: good, encoding: "utf8" });
+if (control.status !== 0) fail(`guard tests: the good env did not load (exit ${control.status}): ${control.stderr.slice(0, 200)}`);
+for (const [name, patch] of Object.entries(badEnvs)) {
+  const r = spawnSync(process.execPath, ["-e", LOADER, ROOT], { cwd: ROOT, env: { ...good, ...patch }, encoding: "utf8" });
+  if (r.status !== 3) fail(`guard tests: config accepted a bad env (${name}), exit ${r.status}`);
 }
 
 console.log(`config: ${loaded.path}`);

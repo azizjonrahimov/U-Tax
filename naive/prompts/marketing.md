@@ -27,7 +27,8 @@ authorized shares can show $85,165. The assumed-par method is often a few hundre
 
 ## What you may claim
 - "Free", "educational estimate, not tax advice", "back in minutes", "run by AI agents with a human CEO".
-- Example numbers only as the firm's standard example: "10M authorized shares can show $85,165;
+- The only dollar amounts allowed in a post are $85,165, $400, $450 and $50 (the gateway refuses any
+  other). Use them only as the firm's standard example: "10M authorized shares can show $85,165;
   the assumed-par method is often a few hundred dollars." No other figures, no guarantees, no
   "we'll save you $X".
 - Never claim we file returns, are CPAs, or are affiliated with Delaware, YC or Naïve.

@@ -5,12 +5,14 @@
 //   live in the gateway's perform(), which answers `needs_approval` when a human must say
 //   yes. A Naïve `ask` gate on top would stall the firm on approvals the gateway already
 //   enforces, and a pending approval also skips scheduled fires.
-// - Naïve's ask-by-default tools still resolve to `ask` under a deny default unless named,
-//   so each one is denied by name (https://usenaive.ai/docs/capabilities/tools.md#permission-policies).
+// - Naïve's docs say ask-by-default tools still resolve to `ask` under a deny default unless
+//   named (https://usenaive.ai/docs/capabilities/tools.md#permission-policies); the local engine's
+//   permissionOf resolves them to deny. The server decides, so each one is denied by name.
+// - Gateway tools outside an agent's seat are denied by name too (MCP tools default to `ask`).
 // - Native email, social and phone tools are denied by name too, so nothing can reach a
 //   client without going through perform().
 
-import { CREW, MCP_SERVER, type AgentKey } from "./crew.js";
+import { CREW, GATEWAY_TOOLS, MCP_SERVER, type AgentKey } from "./crew.js";
 
 type Permission = "allow" | "deny" | "ask";
 interface ToolConfig {
@@ -97,6 +99,7 @@ export function toolsetFor(agent: AgentKey): Toolset {
   // Members never delegate onward; the coordinator holds the roster.
   for (const name of COORDINATOR) configs[name] = agent === "cos" ? ALLOW : DENY;
   for (const name of BOARD) configs[name] = ALLOW;
+  for (const tool of GATEWAY_TOOLS) configs[`${MCP_SERVER}.${tool}`] = DENY;
   for (const tool of CREW[agent].tools) configs[`${MCP_SERVER}.${tool}`] = ALLOW;
   return { default_config: { permission: "deny" }, configs };
 }

@@ -20,7 +20,8 @@ returned.** You never do tax math in your head, check its arithmetic or "sanity-
    - `done`: note on your card the two method amounts and the chosen one **exactly as returned**,
      for example "case_7: authorized $85,165 / assumed par $400 → assumed_par". Move it to done.
    - `refused` / `error` with a ValidationError (issued > authorized, zero issued shares, negative
-     numbers): block the card with the engine's message word for word. Intake will re-ask the client.
+     numbers): block the card with the error code and the field name. The gateway marks the case
+     BLOCKED and a human decides; don't re-ask or re-compute.
 4. Never change a fact to make the engine accept it. Facts come only from Intake's quotes.
 
 ## What you may say about the law

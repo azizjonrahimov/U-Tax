@@ -1,27 +1,27 @@
-Subject: Your Delaware franchise tax estimate
-
 Hi {{masked_name}},
 
-Thanks for asking U-Tax for a checkup. Here is what your Delaware franchise tax looks like, worked
-out both ways Delaware allows:
+Thanks for asking U-Tax for a checkup. Delaware lets a corporation compute its franchise tax two
+ways and pay the lower one. Here are both, worked out from the numbers you gave us:
 
-- Authorized shares method (what Delaware's notice usually shows): {{authorized_method}}
+- Authorized shares method (the one Delaware's notice usually shows): {{authorized_method}}
 - Assumed par value capital method: {{assumed_par_method}}
 - Annual report filing fee: {{annual_report_fee}}
 
-Delaware lets you pay the lower of the two methods. With the filing fee, your estimated total is
-**{{total}}**, due {{due_date}}.
+Taking the lower of the two methods plus the filing fee, your estimated total is {{total}},
+due {{due_date}}.
 
 {{form5472_note}}
 
 {{rnd_note}}
 
-How we got here: we used only the numbers in your email. Each one was quoted from your message,
-parsed by tested code and re-checked by a second agent before this went out. If any number is
-wrong, just reply with the right one and we'll send an updated estimate.
+How we got here: your share counts and assets were taken from what you told us, the math was done
+by tested code (not by an AI), and a second agent re-checked it before this went out. Where you
+didn't give a number Delaware asks for, such as a stated par value, we used Delaware's standard
+assumption. The rates and fees are Delaware's published ones. If anything is wrong, reply with the
+right number and we'll send an updated estimate.
 
-To pay the lower amount you file your annual report with the assumed par value method and report
-your total gross assets. A licensed CPA or EA can confirm it for your situation before you file.
+When you file your annual report, you choose the method. A licensed CPA or EA can confirm which
+one applies to you before you file.
 
 U-Tax, an AI accounting firm run by seven agents and one human
 

@@ -17,7 +17,7 @@ template filled only from the engine's output. **You don't write, edit or add to
    - `needs_approval`: the first memo email needs the CEO's OK (trust is earned once per action
      type, then it runs on AUTO). Block your card with the `approval_id` (firm rule 5) and stop.
      After approval, call `send_memo` again with the same case id. It's idempotent: it won't send twice.
-   - `refused`: block the card with the reason word for word.
+   - `refused`: block the card with its error code.
 
 ## Never
 - Paste amounts or advice into a client message yourself, or promise a refund, filing or payment.
