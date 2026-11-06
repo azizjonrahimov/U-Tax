@@ -11,6 +11,7 @@ retry rule (retryable = backoff can help) holds for all of them:
 from __future__ import annotations
 
 import hashlib
+import re
 from collections.abc import Callable
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -20,6 +21,10 @@ import httpx
 from app.gateway.ports import NotConfigured, PortError, RateLimited, Rejected, Unavailable
 
 MAX_RETRY_AFTER = 60.0
+# Short on purpose: ports run inside perform() under the gateway lock, and webhooks must
+# answer within the provider's window (AgentMail: 15 s). perform() retries up to 3 times.
+TIMEOUT = httpx.Timeout(8.0, connect=3.0)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 
 
 def retry_after(response: httpx.Response) -> float | None:
@@ -40,20 +45,58 @@ def retry_after(response: httpx.Response) -> float | None:
 
 
 def _detail(response: httpx.Response) -> str:
+    """A short reason from the provider's error body, with any email address removed
+    (a 400 may echo the recipient; this text reaches agents and logs)."""
     try:
         body = response.json()
     except ValueError:
-        return response.text[:200]
-    if isinstance(body, dict):
-        return str(body.get("message") or body.get("error") or body.get("code") or body)[:200]
-    return str(body)[:200]
+        text = response.text
+    else:
+        if isinstance(body, dict):
+            parts = [str(body[k]) for k in ("code", "message", "error") if body.get(k)]
+            text = ": ".join(parts) or str(body)
+        else:
+            text = str(body)
+    return _EMAIL.sub("[email]", text)[:200]
+
+
+def provider_code(response: httpx.Response) -> str:
+    """The machine-readable error code in a provider's body (`code`, else `name`)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    inner = body.get("error") if isinstance(body.get("error"), dict) else body
+    return str(inner.get("code") or inner.get("type") or inner.get("name") or "")
+
+
+def json_dict(response: httpx.Response) -> dict:
+    """A 2xx body as a dict ({} when it is empty, not JSON, or not an object)."""
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def check(response: httpx.Response, provider: str) -> httpx.Response:
-    """Raise the port error for a non-2xx answer; return the response otherwise."""
+    """Raise the port error for a non-2xx answer; return the response otherwise. The
+    raised error carries `.status` and `.provider_code` so an adapter can refine it."""
     status = response.status_code
     if 200 <= status < 300:
         return response
+    try:
+        _raise(response, provider, status)
+    except PortError as err:
+        err.status = status  # type: ignore[attr-defined]
+        err.provider_code = provider_code(response)  # type: ignore[attr-defined]
+        raise
+    return response
+
+
+def _raise(response: httpx.Response, provider: str, status: int) -> None:
     detail = f"{provider} {status}: {_detail(response)}"
     if status == 429:
         raise RateLimited(detail, retry_after=retry_after(response))
@@ -75,6 +118,13 @@ def call(provider: str, fn: Callable[[], httpx.Response]) -> httpx.Response:
     except httpx.TransportError as err:
         raise Unavailable(f"{provider} unreachable: {type(err).__name__}") from err
     return check(response, provider)
+
+
+def fingerprint(*parts: object) -> str:
+    """A short hash of what a call does (recipient, subject, body...), so one gateway key
+    reused for a different call is a different provider key."""
+    raw = "\x1f".join(str(p) for p in parts).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 def safe_key(key: str, prefix: str = "utax") -> str:

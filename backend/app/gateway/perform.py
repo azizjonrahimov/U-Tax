@@ -113,7 +113,10 @@ SEND_ATTEMPTS = 3  # first try + 2 retries (Error & Rescue Map)
 MAX_RETRY_SLEEP = 5.0
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _AUTO_SUBJECT = re.compile(r"(?i)^\s*(auto(matic)?[ -]?(reply|response)\b|auto:|out of (the )?office\b"
-                           r"|autoreply\b|vacation\b|abwesenheit\b)")
+                           r"|autoreply\b|vacation\b|abwesenheit\b"
+                           # calendar RSVPs to our review-call invitation (D27)
+                           r"|(accepted|declined|tentative|tentatively accepted|"
+                           r"updated invitation|invitation)\s*:)")
 CLIENT_REPLY_WAKES_PER_DAY = 3
 MAX_REVISIONS = 2
 
@@ -1695,7 +1698,7 @@ class Gateway:
         try:
             self._with_retry("calendar booking", lambda: self.ports.calendar.book(
                 Slot(start=start_iso, minutes=SLOT_MINUTES), case.reply_to,
-                f"U-Tax review: {case.masked_name}", slot_key))
+                "U-Tax: your franchise tax review call", slot_key))
         except ToolError as err:
             self._block(case, f"calendar booking failed: {err.code} (memo was sent)")
             raise

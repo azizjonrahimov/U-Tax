@@ -29,9 +29,10 @@ def test_post_uses_the_documented_route_and_body(tmp_path):
     request = fake.requests[-1]
     assert request.url.path == f"/v1/identities/{fake.identity}/social/posts"
     assert request.headers["authorization"] == "Bearer sk_test"
-    assert request.headers["idempotency-key"] == _http.safe_key("post:abc")
+    assert request.headers["idempotency-key"].startswith("utax-")
+    assert request.headers["vetta-version"] == "2026-09-30"
     assert json.loads(request.content) == {"content": "We check Delaware franchise tax.",
-                                           "platforms": ["linkedin"],
+                                           "platforms": ["linkedin"], "ai_generated": True,
                                            "media_urls": ["https://cdn.u-tax.test/card.png"]}
     assert posted.url == f"naive://identities/{fake.identity}/social/posts/pst_1"
 
@@ -52,7 +53,8 @@ def test_the_answer_url_wins_when_naive_gives_one(tmp_path):
 
 
 @pytest.mark.parametrize("status,error", [(429, RateLimited), (503, Unavailable),
-                                          (401, NotConfigured), (400, Rejected)])
+                                          (401, NotConfigured), (400, Rejected),
+                                          (422, Rejected)])
 def test_answers_map_onto_port_errors(tmp_path, status, error):
     transport = httpx.MockTransport(lambda r: httpx.Response(status, json={"error": {}}))
     port = NaiveSocial("sk_test", identity="idn_x", data_dir=tmp_path, transport=transport)
@@ -71,11 +73,32 @@ def test_unknown_channel_and_missing_config(tmp_path):
         NaiveSocial("sk_test", identity="", data_dir=tmp_path)
 
 
-def test_an_answer_without_an_id_is_not_a_post(tmp_path):
-    transport = httpx.MockTransport(lambda r: httpx.Response(200, json={"status": "ok"}))
-    port = NaiveSocial("sk_test", identity="idn_x", data_dir=tmp_path, transport=transport)
-    with pytest.raises(Rejected):
-        port.post(Post(channel="x", text="hi"), key="k")
+@pytest.mark.parametrize("answer", [{"status": "ok"}, {"data": {"id": "p1"}},
+                                    {"posts": [{"id": "p2"}]}, {"post": "p3"}, None, [1]])
+def test_any_2xx_is_a_live_post_and_a_retry_never_reposts(tmp_path, answer):
+    # review: a 2xx without a readable id used to be recorded as failed, then re-posted
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        if answer is None:
+            return httpx.Response(202)
+        return httpx.Response(201, json=answer)
+
+    port = NaiveSocial("sk_test", identity="idn_x", data_dir=tmp_path,
+                       transport=httpx.MockTransport(handle))
+    first = port.post(Post(channel="x", text="hi"), key="k")
+    assert first.url.startswith("naive://identities/idn_x/social/posts/")
+    assert port.post(Post(channel="x", text="hi"), key="k") == first and len(calls) == 1
+
+
+def test_409_in_flight_is_retryable_and_404_is_configuration(tmp_path):
+    for status, error in ((409, Unavailable), (404, NotConfigured), (403, NotConfigured)):
+        transport = httpx.MockTransport(lambda r, s=status: httpx.Response(s, json={}))
+        port = NaiveSocial("sk_test", identity="utax-mkt", data_dir=tmp_path / str(status),
+                           transport=transport)
+        with pytest.raises(error):
+            port.post(Post(channel="x", text="hi"), key="k")
 
 
 def test_registry_builds_it_only_with_key_and_identity(tmp_path):

@@ -81,7 +81,7 @@ def test_send_uses_the_documented_request_and_a_safe_idempotency_key(tmp_path):
     assert request.url.path == "/v0/inboxes/checkup@u-tax.test/messages/send"
     assert request.headers["authorization"] == "Bearer am_test"
     key = request.headers["idempotency-key"]
-    assert key == _http.safe_key("memo:case_1:v1r0") and len(key) <= 256
+    assert key.startswith("utax-") and len(key) <= 256
     assert all(c.isalnum() or c in "-._~" for c in key) and "case" not in key
     assert json.loads(request.content) == {"to": ["founder@team7.dev"],
                                            "subject": "Your estimate", "text": "Hi"}
@@ -249,15 +249,19 @@ def test_the_hook_is_closed_without_a_secret_or_token(make_harness):
         body = json.dumps(received()).encode()
         assert client.post("/hooks/agentmail", content=body).status_code == 503
     t = make_harness(hook_token="t" * 40)
+    auth = {"X-UTax-Hook-Token": "t" * 40}
     with TestClient(create_app(t.gw, start_background=False)) as client:
-        local = client.post("/hooks/agentmail", content=body, params={"token": "t" * 40})
+        local = client.post("/hooks/agentmail", content=body, headers=auth)
         assert local.status_code == 503  # ADAPTER_MAIL=local: retry later, never drop
     t.gw.ports.mail = AgentMailMail("am_test", inboxes={"clients": CLIENTS},
                                     data_dir=t.tmp / "am", transport=FakeAgentMail().transport())
     with TestClient(create_app(t.gw, start_background=False)) as client:
         assert client.post("/hooks/agentmail", content=body,
-                           params={"token": "wrong"}).status_code == 401
-        ok = client.post("/hooks/agentmail", content=body, params={"token": "t" * 40})
+                           headers={"X-UTax-Hook-Token": "wrong"}).status_code == 401
+        # review: never in the query string (it lands in access logs)
+        assert client.post("/hooks/agentmail", content=body,
+                           params={"token": "t" * 40}).status_code == 401
+        ok = client.post("/hooks/agentmail", content=body, headers=auth)
         assert ok.status_code == 200 and ok.json()["data"]["case_id"] == "case_1"
 
 
@@ -318,8 +322,7 @@ def test_booking_creates_an_event_with_an_invitation(tmp_path):
                                                               "2026-11-08T17:45:00", "UTC")
     assert body["attendees"] == [{"email": "founder@team7.dev", "role": "required"}]
     assert body["send_invites"] is True and "not tax advice" in body["description"]
-    assert body["client_id"] == _http.safe_key("call:case_1:v1:slot") and "@" not in \
-        body["client_id"]
+    assert body["client_id"].startswith("utax-") and "@" not in body["client_id"]
     assert booking.event_id == "evt-1"
 
 
@@ -373,8 +376,13 @@ def test_registry_builds_the_agentmail_calendar(tmp_path):
     from app.gateway.registry import AdapterNotReady, build_port
     from app.gateway.settings import Settings
 
-    base = replace(Settings(), data_dir=tmp_path, adapters={"calendar": "agentmail"})
+    base = replace(Settings(), data_dir=tmp_path,
+                   adapters={"calendar": "agentmail", "mail": "agentmail"})
     with pytest.raises(AdapterNotReady, match="AGENTMAIL_API_KEY"):
         build_port("calendar", base)
+    # review: real invitations never go out for local (fixture) mail
+    with pytest.raises(AdapterNotReady, match="ADAPTER_MAIL=agentmail"):
+        build_port("calendar", replace(base, adapters={"calendar": "agentmail"},
+                                       agentmail_api_key="am_x", inbox_clients=CLIENTS))
     port = build_port("calendar", replace(base, agentmail_api_key="am_x", inbox_clients=CLIENTS))
     assert port.provider == "agentmail"

@@ -6,6 +6,8 @@ message instead of silently falling back (a demo should never run on a surprise 
 
 from __future__ import annotations
 
+import logging
+
 from app.gateway.adapters import local
 from app.gateway.adapters.jsonl_store import JsonlEventStore
 from app.gateway.perform import Gateway
@@ -18,6 +20,9 @@ SPONSORS = {
     "device": ("mobilerun",), "scrape": ("apify",), "toolbuy": ("monid",),
     "voice": ("openai",), "calendar": ("agentmail", "google"), "social": ("naive",), "pay": ("stripe",),
 }
+
+
+log = logging.getLogger("utax.registry")
 
 
 class AdapterNotReady(RuntimeError):
@@ -40,6 +45,16 @@ def _local(name: str, settings: Settings):
     }[name]()
 
 
+def _https(url: str, switch: str) -> str:
+    """Bearer keys never travel over plain http (localhost aside, for a local fake)."""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    if parts.scheme != "https" and parts.hostname not in ("localhost", "127.0.0.1"):
+        raise AdapterNotReady(f"{switch}: the API base URL must be https ({url!r})")
+    return url
+
+
 def _need(value: str, env: str, switch: str) -> str:
     if not value:
         raise AdapterNotReady(f"{switch} needs {env} (set it in backend/.env)")
@@ -51,19 +66,38 @@ def _sponsor(name: str, choice: str, settings: Settings):
     if name == "mail" and choice == "agentmail":
         from app.gateway.adapters.agentmail import AgentMailMail
 
-        key = _need(settings.agentmail_api_key, "AGENTMAIL_API_KEY", "ADAPTER_MAIL=agentmail")
-        _need(settings.inbox_clients, "MAIL_INBOX_CLIENTS", "ADAPTER_MAIL=agentmail")
+        switch = "ADAPTER_MAIL=agentmail"
+        key = _need(settings.agentmail_api_key, "AGENTMAIL_API_KEY", switch)
+        _need(settings.inbox_clients, "MAIL_INBOX_CLIENTS", switch)
+        if settings.agentmail_webhook_secret:
+            from app.gateway.adapters.agentmail import secret_key
+
+            try:
+                secret_key(settings.agentmail_webhook_secret)
+            except ValueError as err:
+                raise AdapterNotReady(str(err)) from err
+        elif not settings.hook_token:
+            log.warning("%s: no AGENTMAIL_WEBHOOK_SECRET or UTAX_HOOK_TOKEN, so /hooks/agentmail "
+                        "answers 503 and no inbound mail arrives", switch)
+        if not settings.inbox_hiring:
+            log.warning("%s: MAIL_INBOX_HIRING unset: hiring mail is sent from the clients "
+                        "inbox and applicants can't write in", switch)
         return AgentMailMail(key, inboxes={"clients": settings.inbox_clients,
                                            "hiring": settings.inbox_hiring},
-                             data_dir=settings.data_dir, base_url=settings.agentmail_base_url)
+                             data_dir=settings.data_dir,
+                             base_url=_https(settings.agentmail_base_url, switch))
     if name == "calendar" and choice == "agentmail":  # design D27
         from app.gateway.adapters.agentmail import AgentMailCalendar
 
         switch = "ADAPTER_CALENDAR=agentmail"
+        if settings.adapters.get("mail") != "agentmail":
+            # invitations are real mail: never send them for local (fixture) cases
+            raise AdapterNotReady(f"{switch} needs ADAPTER_MAIL=agentmail too")
         return AgentMailCalendar(
             _need(settings.agentmail_api_key, "AGENTMAIL_API_KEY", switch),
             inbox=_need(settings.inbox_clients, "MAIL_INBOX_CLIENTS", switch),
-            data_dir=settings.data_dir, base_url=settings.agentmail_base_url)
+            data_dir=settings.data_dir, base_url=_https(settings.agentmail_base_url, switch),
+            location=settings.call_location)
     if name == "social" and choice == "naive":
         from app.gateway.adapters.naive_social import NaiveSocial
 

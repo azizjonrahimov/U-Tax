@@ -51,11 +51,15 @@ class Settings:
     agentmail_api_key: str = ""
     agentmail_webhook_secret: str = ""  # whsec_... (Svix); verifies /hooks/agentmail
     agentmail_base_url: str = "https://api.agentmail.to"
-    hook_token: str = ""  # fallback for /hooks/*: ?token=<this> when no signing secret
+    hook_token: str = ""  # fallback for /hooks/*: X-UTax-Hook-Token when no signing secret
+    call_location: str = ""  # the review call's meeting link or phone (calendar invites)
     public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"
-    naive_social_identity: str = ""  # idn_...: the identity whose social workspace posts
+    # the identity whose social workspace posts: its id (idn_...) or, as the agents config
+    # names it, "utax-mkt". Whether the {id} path takes a name is UNVERIFIED: use the idn_
+    # id from `naive identity list` if a post answers 404.
+    naive_social_identity: str = ""
 
     @property
     def events_file(self) -> Path:
@@ -104,6 +108,7 @@ class Settings:
             agentmail_webhook_secret=_env("AGENTMAIL_WEBHOOK_SECRET"),
             agentmail_base_url=_env("AGENTMAIL_BASE_URL") or "https://api.agentmail.to",
             hook_token=_env("UTAX_HOOK_TOKEN"),
+            call_location=_env("UTAX_CALL_LOCATION"),
             naive_api_key=_env("NAIVE_API_KEY"),
             naive_api_base=_env("NAIVE_API_BASE") or "https://api.vetta.sh",
             naive_social_identity=_env("NAIVE_SOCIAL_IDENTITY"),

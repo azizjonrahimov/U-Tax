@@ -70,8 +70,7 @@ Unverified:
 
 ## Saturday adapter swap
 
-Each port is picked by `ADAPTER_<PORT>` (`backend/app/gateway/registry.py`). Today only the
-local stand-ins exist, plus `ADAPTER_VOICE=openai` and `STORE=postgres`.
+Each port is picked by `ADAPTER_<PORT>` (`backend/app/gateway/registry.py`). Built: the local stand-ins, `STORE=postgres`, `ADAPTER_VOICE=openai`, and since task 8 `ADAPTER_MAIL=agentmail`, `ADAPTER_CALENDAR=agentmail` and `ADAPTER_SOCIAL=naive`. The agents lane builds Mobilerun, Apify, HubSpot and Monid; I wire them as they land.
 
 A sponsor adapter is done when both of these hold:
 - Its factory is added to that port's `FACTORIES` in `backend/tests/contract/test_ports.py`.
@@ -88,14 +87,14 @@ every key out of git.
 |---|---|---|---|
 | `STORE=postgres` | **built**, never run against a real DB | `DATABASE_URL`; non-empty `ADMIN_TOKEN` and `THEATER_TOKEN` (refuses to boot otherwise); the table from `db/001_events.sql` | `tests/contract/test_event_store.py` with `UTAX_TEST_DATABASE_URL=<a throwaway database>`. Those are tonight's 5 skips. |
 | `ADAPTER_VOICE=openai` | **built** | `OPENAI_API_KEY`, plus optional `OPENAI_REALTIME_MODEL`, `OPENAI_TTS_MODEL`, `OPENAI_TTS_VOICE`. Without a key it falls back to no voice (`/api/voice/session` answers 503). Paid: owner's word first. | `test_voice_without_key_is_not_configured`, plus the voice tests in `tests/gateway/test_api.py`. A live check means opening `/talk` and speaking. |
-| `ADAPTER_MAIL=agentmail` | not built | `AGENTMAIL_API_KEY`; `MAIL_INBOX_CLIENTS` / `MAIL_INBOX_HIRING` set to the AgentMail addresses; a `message.received` webhook pointed at the gateway | mail suite: `test_mail_send_returns_a_message_id`, `test_mail_same_key_no_second_mail`, `test_mail_maps_rate_limit`, `test_mail_bad_recipient_is_rejected_not_retryable`, `test_mail_parses_fixture_inbox` (all 4 fixtures) |
+| `ADAPTER_MAIL=agentmail` | **built** (task 8), never run against the real API | `AGENTMAIL_API_KEY`; `MAIL_INBOX_CLIENTS` (required) and `MAIL_INBOX_HIRING`, the inbox addresses; a `message.received` webhook scoped to those two inboxes, pointed at `https://<public-host>/hooks/agentmail`, with its secret in `AGENTMAIL_WEBHOOK_SECRET` (whsec_..., checked at boot) | the mail suite against the AgentMail fake (`tests/adapters/fakes.py`), plus `tests/adapters/test_agentmail.py` and `test_task8_review.py`; live: `test_live_send_once` with `AGENTMAIL_TEST_TO` set |
 | `ADAPTER_LLM=openrouter` / `openai` | not built (no gateway step needs an LLM tonight) | `OPENROUTER_API_KEY` or `OPENAI_API_KEY` | `test_llm_reports_tokens_and_maps_errors` |
 | `ADAPTER_CRM=hubspot` | not built | *proposed* `HUBSPOT_ACCESS_TOKEN` (private app token) | `test_crm_upsert_is_idempotent_and_maps_errors` |
 | `ADAPTER_DEVICE=mobilerun` | not built | `MOBILERUN_API_KEY` | `test_device_capture` |
 | `ADAPTER_SCRAPE=apify` | not built | `APIFY_TOKEN` | `test_scrape_fee_page_and_search` (fee page against `fixtures/snapshots/delaware-fees.html`) |
 | `ADAPTER_TOOLBUY=monid` | not built | *proposed* `MONID_API_KEY` | `test_toolbuy_reports_decimal_cost` (cost must be a Decimal, booked as `cost.booked`) |
-| `ADAPTER_CALENDAR=google` | not built | *proposed* `GOOGLE_CALENDAR_ID` plus `GOOGLE_SERVICE_ACCOUNT_JSON` | `test_calendar_book_is_idempotent`. Before it goes live, also close deferred item 7: an approved slot the real calendar keeps rejecting must not hold the other slots. |
-| `ADAPTER_SOCIAL=naive` | not built | `NAIVE_API_KEY`; `PUBLIC_TALK_URL` must be set (posts are refused without it) | `test_social_post_is_idempotent` |
+| `ADAPTER_CALENDAR=agentmail` (design D27; replaces google) | **built** (task 8), never run against the real API | the AgentMail mail env above, and `ADAPTER_MAIL=agentmail` too (refuses to boot otherwise); optional `UTAX_CALL_LOCATION` (the meeting link shown on the invitation); US region only | `test_calendar_book_is_idempotent` against the fake, plus the calendar tests in `test_agentmail.py` and `test_task8_review.py`. Deferred item 7 still stands: an approved slot the calendar keeps rejecting holds the other slots. |
+| `ADAPTER_SOCIAL=naive` | **built** (task 8), never run against the real API | `NAIVE_API_KEY` (scope `sessions:write`); `NAIVE_SOCIAL_IDENTITY` (`utax-mkt`, or its `idn_` id if the name answers 404), with its social workspace activated and X/LinkedIn connected; `PUBLIC_TALK_URL`; `PUBLIC_ASSET_HOSTS` for images | `test_social_post_is_idempotent` against the Naïve fake, plus `tests/adapters/test_naive_social.py`; live: `test_live_post_once` with `NAIVE_SOCIAL_TEST_POST=yes` (it posts publicly) |
 | `ADAPTER_PAY=stripe` | not built (no payment flow in v1.6) | `STRIPE_SECRET_KEY` (`sk_test_` first) | `test_pay_has_no_adapter_yet` must be replaced by a real pay suite |
 
 Each suite also checks error mapping through `FaultPlan`: 429 becomes `RateLimited`
