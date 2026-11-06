@@ -7,6 +7,7 @@
   --red: #ff4d3d; --green: #3ddc84; --amber: #ffb547;
   --a-cos: #ff4d3d; --a-intake: #4da3ff; --a-tax: #ffb547; --a-qa: #3ddc84;
   --a-acct: #c77dff; --a-mkt: #ff6fb5; --a-hr: #2ee6d6; --a-ceo: #ffffff;
+  --ink: #000; /* text and outlines on colored chips */
   --t: 1; /* time scale: 1 / speed */
   --k: 1; /* type and chrome scale: 1 at 1440x810, larger on 1080p projectors */
   --rail: calc(300px * var(--k));
@@ -21,7 +22,7 @@
 
 /* Header */
 .theater header { display: flex; align-items: center; gap: 14px; min-width: 0; }
-.theater .logo { background: var(--red); color: #000; font-weight: 800; padding: 4px 8px; border-radius: 4px; letter-spacing: .5px; }
+.theater .logo { background: var(--red); color: var(--ink); font-weight: 800; padding: 4px 8px; border-radius: 4px; letter-spacing: .5px; }
 .theater .title { font-weight: 800; font-size: calc(18px * var(--k)); }
 .theater .sub { color: var(--dim); font-size: calc(12px * var(--k)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .theater .pill { margin-left: auto; display: flex; gap: 8px; align-items: center; font-size: calc(12px * var(--k)); color: var(--dim); white-space: nowrap; }
@@ -71,7 +72,7 @@
 .theater .compose { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
 .theater .compose .to { color: var(--dim); font-size: calc(12px * var(--k)); }
 .theater .compose .txt { min-height: 60px; white-space: pre-wrap; font-size: calc(12.5px * var(--k)); }
-.theater .btn { display: inline-block; background: var(--red); color: #000; font-weight: 700; font-size: calc(12px * var(--k)); padding: 6px 14px; border-radius: 6px; margin-top: 6px; transition: transform .15s; }
+.theater .btn { display: inline-block; background: var(--red); color: var(--ink); font-weight: 700; font-size: calc(12px * var(--k)); padding: 6px 14px; border-radius: 6px; margin-top: 6px; transition: transform .15s; }
 .theater .btn.pressed { transform: scale(.94); }
 .theater .sent { color: var(--green); font-weight: 600; font-size: calc(12px * var(--k)); margin-left: 6px; }
 
@@ -137,7 +138,7 @@
 .theater .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--a-intake), var(--red)); transition: width .3s; }
 .theater .ctl { display: flex; gap: 6px; }
 .theater .ctl button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: calc(8px * var(--k)) calc(11px * var(--k)); min-height: calc(32px * var(--k)); transition: background-color .15s, border-color .15s; font: 600 calc(12px * var(--k)) var(--font-inter), Inter, sans-serif; cursor: pointer; }
-.theater .ctl button.on { background: var(--a-intake); color: #000; border-color: var(--a-intake); }
+.theater .ctl button.on { background: var(--a-intake); color: var(--ink); border-color: var(--a-intake); }
 .theater .ctl button:hover:not(:disabled) { border-color: var(--dim); background: #1c1c2a; }
 .theater .ctl button.on:hover { background: var(--a-intake); filter: brightness(1.1); }
 .theater .ctl button:active:not(:disabled) { transform: translateY(1px); }
@@ -148,7 +149,7 @@
 /* Cursors */
 .theater .cur { position: fixed; left: 0; top: 0; pointer-events: none; z-index: 50; transition: transform calc(.7s * var(--t)) cubic-bezier(.45,.05,.2,1); will-change: transform; }
 .theater .cur svg { display: block; filter: drop-shadow(0 0 6px rgba(0,0,0,.6)); }
-.theater .cur span { position: absolute; left: 14px; top: 14px; font: 600 calc(11px * var(--k)) var(--font-inter), Inter, sans-serif; color: #000; padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.theater .cur span { position: absolute; left: 14px; top: 14px; font: 600 calc(11px * var(--k)) var(--font-inter), Inter, sans-serif; color: var(--ink); padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
 
 /* Captions (spoken words) and states */
 .theater .caption { position: absolute; left: 50%; bottom: calc(88px * var(--k)); transform: translateX(-50%); max-width: min(900px, 80vw); background: rgba(15,15,22,.92); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; font-size: calc(16px * var(--k)); z-index: 40; }

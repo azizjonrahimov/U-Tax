@@ -14,15 +14,16 @@ import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
 import { CalendarPane, MailPane, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
 import "./theater.css";
 
+/** Agents in desk order: id, cursor label, color token (theater.css owns the hexes). */
 const AGENTS: [Agent, string, string][] = [
-  ["cos", "Chief of Staff", "#ff4d3d"],
-  ["intake", "Intake", "#4da3ff"],
-  ["tax", "Tax", "#ffb547"],
-  ["qa", "QA", "#3ddc84"],
-  ["acct", "Accounting", "#c77dff"],
-  ["mkt", "Marketing", "#ff6fb5"],
-  ["hr", "HR", "#2ee6d6"],
-  ["ceo", "You (CEO)", "#ffffff"],
+  ["cos", "Chief of Staff", "var(--a-cos)"],
+  ["intake", "Intake", "var(--a-intake)"],
+  ["tax", "Tax", "var(--a-tax)"],
+  ["qa", "QA", "var(--a-qa)"],
+  ["acct", "Accounting", "var(--a-acct)"],
+  ["mkt", "Marketing", "var(--a-mkt)"],
+  ["hr", "HR", "var(--a-hr)"],
+  ["ceo", "You (CEO)", "var(--a-ceo)"],
 ];
 const SPEEDS = [1, 4, 16] as const;
 const FIXTURE_URL = "/fixtures/events.sample.jsonl";
@@ -292,7 +293,7 @@ export function Theater() {
       <footer>
         <div className="avs" aria-hidden>
           {AGENTS.slice(0, 7).map(([id, , color]) => (
-            <span key={id} className="av" style={{ background: color }} />
+            <span key={id} className="av" style={{ background: color }} title={AGENTS.find((x) => x[0] === id)?.[1]} />
           ))}
         </div>
         <span className="mono firmline">
@@ -343,7 +344,7 @@ export function Theater() {
         return (
           <div key={id} className="cur" style={{ transform: `translate(${p.x}px, ${p.y}px)` }} aria-hidden>
             <svg width="18" height="20" viewBox="0 0 18 20">
-              <path d="M1 1 L16 9 L9 11 L6 18 Z" fill={color} stroke="#000" strokeWidth="1" />
+              <path d="M1 1 L16 9 L9 11 L6 18 Z" style={{ fill: color, stroke: "var(--ink)" }} strokeWidth="1" />
             </svg>
             <span style={{ background: color }}>{label}</span>
           </div>
