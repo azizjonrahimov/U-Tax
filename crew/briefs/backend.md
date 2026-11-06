@@ -97,3 +97,49 @@ event, 503 without a key). Stand-ins work with no key. See contract §5 and §8.
   PAUSED) and `POST /api/candidates/{id}/decision` (hire|decline, actor ceo).
 - The post guard also blocks @handles and any URL except `PUBLIC_TALK_URL`. CEO emails also
   fire on `case.flagged` and `hr.shortlisted`. Wake sessions pass identity `utax-cos`.
+
+## Contract v1.5 (2026-11-06, agents task 2 review). Items 1-2 are BLOCKING for autonomy.
+1. `post_social`: `kind` client|hiring; refused unless `PUBLIC_TALK_URL` is set; after the
+   guard, the gateway appends the link (talk URL, or the hiring inbox address).
+2. A new wake, `Applicant answered cand_N`, on the first questionnaire reply.
+3. Load every `naive/templates/*.md` (names and placeholders in `naive/README.md`) with
+   fallbacks; mint `/api/voice/session` with `naive/prompts/voice-intake.md` server-side.
+4. `/talk`: customer turns only; quotes match customer lines only; `reply_email` from the
+   typed field only.
+5. Throttles: flag mails at 1/hour then the digest; at most 3 memos a day per reply_email.
+6. Voice cases thread replies from their `reply_email`.
+7. Decision mails `hr-hired`/`hr-declined`; screened candidates appear in `/api/state`
+   hiring (the `/ceo` list).
+The per-seat `/mcp/<actor>` routes (v1.4) are required for Saturday's `naive up`; confirm
+they're in task 7.
+
+## Task 6c: cross-lane QA fixes (2026-11-07, contract v1.6), in this order, one READY
+HIGH
+1. EIN `NN-NNNNNNN` isn't redacted (it leaks into email.received and quotes).
+2. The 3 memos/day per reply_email cap isn't enforced.
+MEDIUM
+3. Masking hides tax words (v1.6 stop list); get_case serves the agents' body (contact
+   details and SSN/EIN only).
+4. `Client replied case_N` wake on a reply with digits to a SENT/CALL_BOOKED case → re-extract
+   → memo v2.
+5. `{{greeting_name}}`: the outgoing memo greets the client's company or "there"; the event
+   copy stays masked.
+6. tax_saved must follow v1.4.1: Σ max(0, authorized − (total − fee)). Today it counts the
+   fee and goes negative.
+7. Hire/decline decision mails (hr-hired / hr-declined).
+8. Drop mail from the firm's own addresses.
+9. HTML to text at ingress.
+LOW
+10. Collapse 3+ newlines after rendering.
+11. The approved slot must be the booked slot.
+12. Cut subjects at a word boundary.
+13. The login brief uses counts (login-brief.md).
+14. Plain-language re-ask for zero issued shares.
+15. Masking false positive "Yes, a Delaware corporation".
+DRIVER
+- D1: HR waits for `Applicant answered`, and never writes a note claiming a review that
+  didn't happen.
+- D2: read "Delaware corp", route Wyoming/LLC to mark_not_eligible, read "a UK company owns 40%".
+- D4: per-seat MCP is task 7.
+The agents lane's scripts (qa_validate.py, qa_routes.sh, qa_oddmail.py) can become tests; ask
+it for them.

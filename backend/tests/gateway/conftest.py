@@ -41,6 +41,9 @@ class Harness:
         self.clock = FakeClock()
         self.slept: list[float] = []
         settings_kw.setdefault("memo_template_path", tmp / "no-template.md")
+        settings_kw.setdefault("templates_dir", tmp / "no-templates")  # built-in texts
+        settings_kw.setdefault("public_talk_url", "https://u-tax.test/talk")
+        settings_kw.setdefault("inbox_hiring", "jobs@u-tax.test")
         self.settings = Settings(data_dir=tmp / "data", fixtures_dir=REPO_ROOT / "fixtures",
                                  **settings_kw)
         self.ports = build_ports(self.settings)

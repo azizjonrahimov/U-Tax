@@ -1,4 +1,4 @@
-# API contract (v1.4): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.6): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -84,9 +84,10 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `dm.drafted` / `dm.sent_by_human` | mkt / ceo | `{recipient_label, text}` |
 | `hr.applicant` / `hr.screened` / `hr.shortlisted` / `hr.hired` / `hr.declined` | hr (hired: ceo) | `{candidate_id, name_masked, note}` |
 | `hr.questionnaire_sent` | system | `{candidate_id, name_masked, note}` (the §6c auto-reply; counts against the `email` cap) |
+| `hr.decision_mailed` | system | `{candidate_id, name_masked, note}` (hire/decline mail sent; counts against the `email` cap) |
 | `screen.call` | hr | `{candidate_id, transcript_excerpt, seconds}` |
 | `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id}` (actor `intake` and `case_id` set for customer conversations) |
-| `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"digest"\|"login"}` |
+| `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"flagged"\|"shortlisted"\|"paused"\|"digest"\|"login"}` |
 | `approval.requested` | system | `{approval_id, action_type, summary}` |
 | `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id}` |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
@@ -126,6 +127,9 @@ Projections rebuilt from events (never stored by hand):
   "queue": {"waiting": 0, "blocked": 0}
 }
 ```
+`Under the theater token, `hiring` carries counts only; the per-candidate list (with stages)
+is admin-only, for `/ceo`.
+
 `tax_saved_cents` = Σ over sent cases of max(0, `authorized_method_cents` − (`total_cents` −
 `annual_report_fee_cents`)): franchise tax saved only. The fee is paid under either method,
 so it is never counted as a saving, and the sum never goes negative.
@@ -151,14 +155,24 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/trust` `{action_type, state: "PAUSED"|"AUTO"}` (admin) → the CEO's standing
   order as gateway state ("stop posting" = `social_post` PAUSED); writes `trust.changed`
   and `touch.operating`. `perform()` refuses PAUSED types until resumed.
+- `POST /api/cases/{case_id}/unblock` `{to: "INTAKE_PENDING"|"READY"|"NOT_ELIGIBLE", note}` (admin)
+  → `case.status` out of BLOCKED (or SENT/CALL_BOOKED → INTAKE_PENDING to reopen when the
+  client sends new numbers), a `touch.operating`, and a §6b wake (`New case case_N`).
+  `409 wrong_status` otherwise.
+- A cap hit (10/hr per action type or `SPEND_CAP_USD`) flips that type to PAUSED, writes
+  `trust.changed`, and mails the CEO; further calls get `refused` with code `paused` until
+  `POST /api/trust {state: "AUTO"}` (design: PAUSED → human operating touch → AUTO).
 - `POST /api/candidates/{candidate_id}/decision` `{decision: "hire"|"decline"}` (admin) →
-  `hr.hired` / `hr.declined` with actor `ceo` and a `touch.operating`.
+  `hr.hired` / `hr.declined` with actor `ceo`, a `touch.operating`, and the `hr-hired` /
+  `hr-declined` mail to the candidate (trust type `email`). `/ceo` lists **every screened
+  candidate**, not only shortlisted ones, so no AI screen becomes a silent rejection.
 - `POST /api/voice/session` → `{client_secret, model, expires_at}`: an ephemeral OpenAI
   Realtime session minted with the gateway's `OPENAI_API_KEY` (the key never reaches the
   browser). `503 voice_unavailable` when no key is set; the mic page then falls back to
   typed text plus browser speech.
-- `GET /api/brief/audio?event_id=<brief.generated id>` → `audio/mpeg` (OpenAI TTS of the
-  brief text). `503 voice_unavailable` without a key; the page falls back to browser
+- `GET /api/brief/audio?event_id=<brief.generated id>&token=` → `audio/mpeg` (OpenAI TTS of the
+  brief text). Accepts the **theater token or the admin token** (read-only audio the theater
+  plays). `503 voice_unavailable` without a key; the page falls back to browser
   `speechSynthesis`.
 - `GET /api/ceo/brief?since_id=<last event id the CEO saw>` → `{brief_event_id, text,
   counts, pending_approvals: [{approval_id, action_type, summary}], last_event_id}`. Writes a
@@ -195,7 +209,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | Tool | Agent | Input | Effect |
 |---|---|---|---|
 | `list_open_cases` | cos | `{}` | open cases with status, masked name, waiting reason |
-| `get_case` | any | `{case_id}` | masked case: email body, facts, quotes, status, result, and `offered_slots: [ISO...]` (the next free 15-minute slots the gateway can book) |
+| `get_case` | any | `{case_id}` | **intake and qa** get the email body with only contact details and SSN/EIN redacted (names left as written, so facts like "a Delaware corporation" survive); **cos, mkt and hr** get the masked copy. Plus facts, quotes, status, result, and `offered_slots: [ISO...]` (the next free 15-minute slots the gateway can book) |
 | `extract_facts` | intake | `{case_id, quotes: {<fact>: "<verbatim span from the email>"}, incorporated_delaware, foreign_owner_25}` | code parses each quote (`parse_amount`), checks it appears verbatim, conflicting spans → re-ask; `facts.extracted` or `facts.missing` |
 | `ask_client` | intake | `{case_id, missing: [<fact>...]}` | templated re-ask email (trust type `email`, max 2); `client.asked` |
 | `mark_not_eligible` | intake | `{case_id, reason: "not_incorporated"\|"outside_delaware"\|"not_a_corporation"}` | kind templated reply chosen by the enum (no free text reaches the client); anything else → `refused`; `case.not_eligible` |
@@ -205,7 +219,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `send_memo` | acct | `{case_id}` | refuses unless `QA_PASSED`; memo from template + engine output only; `memo.sent` |
 | `book_call` | intake | `{case_id, start}` | `start` must be one of the case's `offered_slots`, else `refused`; trust type `calendar_invite`; `call.booked` |
 | `phone_check` | qa | `{case_id}` | DevicePort; `phone.checked` (never blocks the case) |
-| `post_social` | mkt | `{channel, text, image_url}` | content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; `post.published` |
+| `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
 | `draft_dm` | mkt | `{recipient_label, text}` | `dm.drafted` (the human sends it) |
 | `get_candidate` | hr | `{candidate_id}` | the masked candidate: stated credentials, questionnaire answers, stage (no contact details) |
 | `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
@@ -239,7 +253,9 @@ with exactly one of these opening messages (the CoS prompt parses them):
 | `POST /api/voice` with `speaker: "customer"` | `FAST PATH case_N` |
 | `POST /api/approve` | `Approval apr_N allowed for case_N` / `Approval apr_N denied for case_N` (`for firm` when there is no case) |
 | `POST /api/voice` with `speaker: "ceo"` | `CEO: <text>` |
-| inbound applicant mail (hiring inbox) | `New applicant cand_N` |
+| inbound applicant mail (hiring inbox) | `New applicant cand_N` (the CoS does nothing yet) |
+| the applicant's first questionnaire reply | `Applicant answered cand_N` (the CoS routes it to an `hr` card) |
+| a client reply with digits on a SENT or CALL_BOOKED case | `Client replied case_N` (Intake re-extracts; a changed fact makes memo v2; a reply with no digits, like "thanks!", wakes nobody). Digits are looked for in the **new text only** (quoted lines and signatures stripped, after redaction). At most 3 such wakes per case per day and 2 memo revisions per case; beyond that the case is BLOCKED and flagged for the CEO. Revision memos use their own send bucket, separate from the firm-wide email cap. After a revision is sent, a case that had a call booked returns to CALL_BOOKED. |
 
 Each wake writes nothing extra; the session's own tool calls produce the events.
 Stand-in tonight (no Naïve until Saturday, design D26): the **local driver** receives the
@@ -254,10 +270,55 @@ stated credentials only (no contact details reach any agent), then wakes the cre
 `New applicant cand_N`. Questionnaire answers arrive as more mail on the same thread and are
 added to the candidate, masked the same way.
 
+## 6c-bis. Ingress rules (all inboxes)
+
+- Mail from the firm's own addresses (`CEO_EMAIL`, `MAIL_INBOX_CLIENTS`, `MAIL_INBOX_HIRING`) is
+  dropped and logged, never a case (mail-loop guard).
+- `text/html` bodies become plain text at ingress; no markup is ever stored.
+- Auto-replies are dropped at ingress (`Auto-Submitted` other than `no`, `X-Autoreply`,
+  `Precedence: bulk|auto_reply|list`).
+- Fact conflicts are judged **within one message**; a later message supersedes an earlier one.
+- Quotes are matched against the raw text but **masked before** they are written to
+  `facts.extracted`.
+- Masking never hides a word from the tax vocabulary (delaware, corporation, corp, inc, llc,
+  shares, authorized, issued, assets, foreign, owner, par, s-corp, c-corp, yes, no). SSN and EIN
+  forms are always redacted, including `NN-NNNNNNN`.
+
+## 6d. Templates and the voice prompt
+
+The gateway loads **every** `naive/templates/*.md` with the strict memo renderer (unknown or
+missing placeholder → built-in fallback, logged), not only `memo.md`. The names and
+placeholders are listed in `naive/README.md`: `memo`, `ask-client`,
+`not-eligible-<reason>`, `hr-questionnaire`, `hr-hired`, `hr-declined`, `ceo-update-email`
+(with an `action_line` per reason), `ceo-digest-email`, `login-brief`. Template files carry no
+Subject line; the gateway sets subjects. `hr-questionnaire` must contain the exact line
+`This screen is run by an AI agent. A human makes the final hiring decision.`
+`POST /api/voice/session` uses `naive/prompts/voice-intake.md` as the Realtime instructions
+and sets instructions and tools **server-side when minting**, so a client `session.update`
+cannot replace them.
+
+## 6e. Trust boundaries for `/talk` and mail volume
+
+- `/talk` posts speaker-labelled turns (`{turns: [{speaker: "customer"|"agent", text}]}`).
+  Agent turns are kept as **labelled, non-quotable context** (so a bare "No." keeps its
+  question). Fact quotes must match customer lines only, never the AI's read-back.
+- Known risk, accepted for the hackathon: an ephemeral Realtime session may let the client
+  replace server-set instructions. The session has no tools, a per-response cap, and facts
+  come only from customer turns checked in code, so the worst case is odd speech to that
+  caller. Post-hackathon fix: a server-side relay. `reply_email` comes from the typed field, never from the transcript.
+- Memos per `reply_email`: at most 3 a day, on top of the per-IP limit.
+- A reply from a voice case's `reply_email` threads onto that case (the voice case's sender
+  key is the reply address), never opening a new case.
+- Flag mails to the CEO: the first `case.flagged` in an hour mails right away; the rest go
+  into the 3-hour digest with a count.
+
 ## 7. Memo template
 
 `naive/templates/memo.md` (agents lane writes the words), rendered by the gateway with
-only these placeholders: `{{masked_name}}`, `{{authorized_method}}`, `{{assumed_par_method}}`,
+only these placeholders: `{{greeting_name}}` (the outgoing mail only: derived from the **sender's email domain label**,
+letters/digits/spaces only, at most 40 chars, never from body text; `/talk` cases and free-mail
+domains get `there`; the `memo.sent` event copy uses the masked name),
+`{{masked_name}}`, `{{authorized_method}}`, `{{assumed_par_method}}`,
 `{{annual_report_fee}}`, `{{total}}`, `{{due_date}}`, `{{form5472_note}}`, `{{rnd_note}}`.
 Amounts arrive formatted (`$85,165`). The template must contain the line
 `Educational estimate — not tax advice.` The gateway refuses to send if it doesn't, and
@@ -282,6 +343,31 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.6.3 (2026-11-07, backend task 7): `get_case` names-kept copy for intake and qa only; other
+  seats get the masked copy.
+
+- v1.6.2 (2026-11-07, agents v1.6 review): greeting_name from the sender domain only; Client
+  replied caps, new-text-only digits, revision send bucket, CALL_BOOKED restore; auto-reply drop;
+  per-message conflicts; quotes masked before events.
+
+- v1.6.1 (2026-11-07, backend 6b): AI turns kept as non-quotable context; Realtime override
+  risk accepted and documented; `hr.decision_mailed`; candidate list admin-only.
+
+- v1.6 (2026-11-07, agents cross-lane QA): `get_case` body keeps names and facts (contact
+  details and SSN/EIN redacted only); `Client replied case_N` wake and memo v2; ingress rules
+  (own-address drop, HTML to text, tax-word stop list, EIN form); `{{greeting_name}}`.
+
+- v1.5 (2026-11-06, agents task 2 review): post links appended by the gateway (`kind`
+  client|hiring, `PUBLIC_TALK_URL` required); `Applicant answered` wake; all templates loaded,
+  voice-intake prompt minted server-side; `/talk` customer-turns-only, 3 memos/day per address,
+  voice re-ask threading, flag mail throttle; every screened candidate visible to the CEO,
+  decision mails.
+
+- v1.4.3 (2026-11-06, frontend slice 2): `/api/brief/audio` accepts the theater token.
+
+- v1.4.2 (2026-11-06, backend task 6): `POST /api/cases/{id}/unblock`; cap-hit PAUSED flow;
+  `ceo.notified.reason` adds flagged, shortlisted, paused.
 
 - v1.4.1 (2026-11-06, backend task 5): `tax_saved_cents` excludes the annual fee and never goes
   negative; `hr.questionnaire_sent`; fixture post text says `$85,165` (the guard refuses `$85k`).

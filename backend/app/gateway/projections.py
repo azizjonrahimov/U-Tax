@@ -18,16 +18,18 @@ OPEN_STATUSES = ("NEW", "INTAKE_PENDING", "READY", "COMPUTED", "QA_PASSED", "QA_
                  "STALLED", "BLOCKED")
 DONE_STATUSES = ("SENT", "CALL_BOOKED", "NOT_ELIGIBLE")
 # Statuses a case may move to from each status (design doc state machine). A new client
-# message re-opens intake from anywhere but BLOCKED, which waits for a human.
+# message re-opens intake except from BLOCKED, SENT, CALL_BOOKED and NOT_ELIGIBLE, which
+# the CEO reopens with POST /api/cases/{id}/unblock.
 TRANSITIONS: dict[str, set[str]] = {
     "NEW": {"INTAKE_PENDING", "NOT_ELIGIBLE"},
-    "INTAKE_PENDING": {"READY", "STALLED", "NOT_ELIGIBLE", "BLOCKED"},
+    # INTAKE_PENDING -> SENT/CALL_BOOKED: a client reply re-read with no changed fact
+    "INTAKE_PENDING": {"READY", "STALLED", "NOT_ELIGIBLE", "BLOCKED", "SENT", "CALL_BOOKED"},
     "READY": {"COMPUTED", "INTAKE_PENDING", "BLOCKED", "NOT_ELIGIBLE"},
     "COMPUTED": {"QA_PASSED", "QA_FAILED", "INTAKE_PENDING", "BLOCKED"},
     "QA_PASSED": {"SENT", "INTAKE_PENDING", "BLOCKED"},
     "QA_FAILED": {"BLOCKED", "INTAKE_PENDING"},
     "SENT": {"CALL_BOOKED", "INTAKE_PENDING", "BLOCKED"},
-    "CALL_BOOKED": {"INTAKE_PENDING"},
+    "CALL_BOOKED": {"INTAKE_PENDING", "BLOCKED"},
     "STALLED": {"INTAKE_PENDING", "BLOCKED", "NOT_ELIGIBLE"},
     "NOT_ELIGIBLE": {"INTAKE_PENDING"},
     "BLOCKED": {"INTAKE_PENDING", "READY", "NOT_ELIGIBLE"},
@@ -37,7 +39,8 @@ _STAGE_RANK = {"applicant": 0, "screened": 1, "shortlisted": 2, "declined": 3, "
 
 # Event types that count against an action type's hourly cap.
 CAP_EVENTS = {
-    "email": ("memo.sent", "client.asked", "case.not_eligible"),
+    "email": ("memo.sent", "client.asked", "case.not_eligible", "hr.questionnaire_sent",
+              "hr.decision_mailed"),
     "social_post": ("post.published",),
     "calendar_invite": ("call.booked",),
     "voice_screen": ("screen.call",),
@@ -57,11 +60,23 @@ class Case:
     company: str | None = None
     subject: str = ""
     texts: list[str] = field(default_factory=list)  # masked client texts, oldest first
+    agent_texts: list[str] = field(default_factory=list)  # v1.6: names kept, contacts/ids gone
+    agent_subject: str = ""
+    conversation: list[dict] = field(default_factory=list)  # /talk turns, agent ones as context
+    resume_status: str | None = None  # a client reply reopened a sent case from this status
+    client_reply_log: list[str] = field(default_factory=list)
+    memos_sent: int = 0
+
+    @property
+    def revisions(self) -> int:
+        return max(0, self.memos_sent - 1)
     message_ids: list[str] = field(default_factory=list)
     facts: dict[str, Any] | None = None
     quotes: dict[str, str] = field(default_factory=dict)
     assumed: list[str] = field(default_factory=list)
     facts_version: int = 0
+    facts_event_id: int = 0
+    reopens: int = 0
     facts_ts: str | None = None
     missing: list[str] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
@@ -81,6 +96,7 @@ class Case:
     not_eligible_reason: str | None = None
     phone: dict[str, Any] | None = None
     laws: list[dict] = field(default_factory=list)
+    flags: list[str] = field(default_factory=list)
 
     def public(self) -> dict[str, Any]:
         result = None
@@ -94,7 +110,11 @@ class Case:
         """What get_case returns to an agent: masked, this case only."""
         return {
             "case_id": self.case_id, "masked_name": self.masked_name, "status": self.status,
-            "priority": self.priority, "subject": self.subject, "messages": list(self.texts),
+            "priority": self.priority, "subject": self.agent_subject or self.subject,
+            # v1.6: agents read the email with only contacts and SSN/EIN removed
+            "messages": list(self.agent_texts or self.texts),
+            # /talk: the whole conversation for context; quotes must come from customer turns
+            "conversation": list(self.conversation),
             "facts": self.facts, "quotes": dict(self.quotes), "assumed": list(self.assumed),
             "missing": list(self.missing), "problems": list(self.problems),
             "asks_so_far": self.asks, "result": self.result, "qa_checks": list(self.qa_checks),
@@ -132,6 +152,10 @@ class State:
                                                            "shortlisted": 0, "hired": 0})
     cap_log: dict[str, list[str]] = field(default_factory=lambda: {t: [] for t in TRUST_TYPES})
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
+    last_login_brief: dict | None = None
+    memo_log: dict[str, list[str]] = field(default_factory=dict)  # reply address -> ts
+    flag_notice_log: list[str] = field(default_factory=list)
+    public_notice_log: list[str] = field(default_factory=list)
     crm_failed: set[str] = field(default_factory=set)
     posts: int = 0
     briefs: list[int] = field(default_factory=list)
@@ -140,9 +164,10 @@ class State:
 
     @property
     def tax_saved_cents(self) -> int:
-        """Contract §4: Σ over sent cases of (authorized_method_cents − total_cents).
-        (Proposed to the controller: exclude the fee and clamp at 0; see READY notes.)"""
-        return sum(c.result["authorized_method_cents"] - c.result["total_cents"]
+        """Contract §4 (v1.4.1): Σ over sent cases of max(0, authorized − (total − fee)).
+        The annual report fee is paid under either method, so it is never a saving."""
+        return sum(max(0, c.result["authorized_method_cents"]
+                       - (c.result["total_cents"] - c.result["annual_report_fee_cents"]))
                    for c in self.cases.values()
                    if c.result and c.memo_message_id is not None)
 
@@ -160,10 +185,18 @@ class State:
             "trust": dict(self.trust),
             "money": {
                 "tax_saved_cents": self.tax_saved_cents,
-                "spent_usd": _money(self.spent_usd()),
-                "spent_by_provider": {p: _money(v) for p, v in sorted(self.spent_by_provider.items())},
+                "spent_usd": money_text(self.spent_usd()),
+                "spent_by_provider": {p: money_text(v)
+                                      for p, v in sorted(self.spent_by_provider.items())},
             },
-            "hiring": dict(self.hiring),
+            # v1.5: every screened candidate is listed for the CEO (no silent rejection)
+            "hiring": {**self.hiring, "candidates": [
+                {"candidate_id": c["candidate_id"], "name_masked": c["name_masked"],
+                 "stage": c.get("stage"), "credentials": c.get("credentials")}
+                for c in sorted(self.candidates.values(), key=lambda c: c["candidate_id"])
+                # applicants too: nobody waits unseen when a questionnaire didn't go out
+                if c.get("stage") in ("applicant", "screened", "shortlisted", "hired",
+                                      "declined")]},
             "queue": {
                 "waiting": sum(1 for c in cases if c.status in OPEN_STATUSES and c.status != "BLOCKED"),
                 "blocked": sum(1 for c in cases if c.status == "BLOCKED"),
@@ -180,9 +213,9 @@ class State:
                                                 + Decimal(e.cost_usd))
         for action_type, types in CAP_EVENTS.items():
             if e.type in types and e.status == "ok":
-                self.cap_log[action_type].append(e.ts)
-        if e.type == "hr.applicant" and (e.private or {}).get("questionnaire"):
-            self.cap_log["email"].append(e.ts)  # the questionnaire auto-reply is outbound mail
+                # sends for anonymous /talk cases have their own bucket (never pause the firm)
+                bucket = f"{action_type}_public" if (e.private or {}).get("public") else action_type
+                self.cap_log.setdefault(bucket, []).append(e.ts)
         handler = getattr(self, "_on_" + e.type.replace(".", "_"), None)
         if handler is not None:
             handler(e)
@@ -209,6 +242,11 @@ class State:
             self.cases[e.case_id] = case
             self.case_by_sender[case.sender_key] = e.case_id
         case.texts.append(text)
+        case.agent_texts.append(private.get("agent_text", text))
+        if private.get("agent_subject") and not case.agent_subject:
+            case.agent_subject = private["agent_subject"]
+        if private.get("turns"):
+            case.conversation = list(private["turns"])
         case.reply_to = private.get("reply_to") or case.reply_to
         case.company = private.get("company") or case.company
         if private.get("message_id"):
@@ -219,7 +257,9 @@ class State:
         if case is None:
             return
         case.facts = e.payload["facts"]
-        case.quotes = e.payload["quotes"]
+        case.facts_event_id = e.id
+        case.resume_status = None  # new facts: this is a real revision now
+        case.quotes = (e.private or {}).get("quotes") or e.payload["quotes"]  # raw, for QA
         case.assumed = e.payload["assumed"]
         case.facts_version += 1
         case.facts_ts = e.ts
@@ -242,6 +282,14 @@ class State:
     def _on_case_status(self, e: Event) -> None:
         case = self._case(e)
         if case is not None:
+            reason = (e.private or {}).get("reason")
+            if reason == "client_reply":  # v1.6: back to SENT/CALL_BOOKED if nothing changed
+                case.resume_status = e.payload["from"]
+                case.client_reply_log.append(e.ts)
+            elif e.payload["from"] in ("BLOCKED", "SENT", "CALL_BOOKED", "NOT_ELIGIBLE"):
+                case.reopens += 1  # a human reopened it: the next run is a fresh round
+            if e.payload["to"] in ("SENT", "CALL_BOOKED", "BLOCKED", "NOT_ELIGIBLE"):
+                case.resume_status = None
             case.status = e.payload["to"]
             if case.status != "BLOCKED":
                 case.blocked_reason = None
@@ -255,6 +303,21 @@ class State:
         case = self._case(e)
         if case is not None:
             case.not_eligible_reason = e.payload["reason"]
+
+    def _on_case_flagged(self, e: Event) -> None:
+        case = self._case(e)
+        if case is not None and e.payload["kind"] not in case.flags:
+            case.flags.append(e.payload["kind"])
+
+    def _on_hr_decision_mailed(self, e: Event) -> None:
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is not None:
+            cand["decision_mailed"] = True
+
+    def _on_hr_questionnaire_sent(self, e: Event) -> None:
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is not None:
+            cand["questionnaire_sent"] = True
 
     def _on_law_searched(self, e: Event) -> None:
         case = self._case(e)
@@ -277,6 +340,12 @@ class State:
 
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)
+        if case is not None and e.status == "ok" and case.reply_to and not case.memos_sent:
+            from app.gateway.masking import mail_identity
+
+            self.memo_log.setdefault(mail_identity(case.reply_to), []).append(e.ts)
+        if case is not None and e.status == "ok":
+            case.memos_sent += 1
         if case is not None and e.status == "ok":
             case.memo_message_id = e.payload["message_id"]
             case.memo_version = case.facts_version
@@ -311,6 +380,9 @@ class State:
                             case_id=e.case_id, summary=p["summary"])
         self.approvals[approval.approval_id] = approval
         self.approval_by_key[approval.action_key] = approval.approval_id
+        case = self.cases.get(e.case_id) if e.case_id else None
+        if case is not None and case.priority:
+            self.public_notice_log.append(e.ts)
 
     def _touch(self, kind: str, e: Event) -> None:
         self.touches[kind] += 1
@@ -349,6 +421,12 @@ class State:
         if private.get("sender_key"):  # applicant mail: gateway-only contact details
             cand["sender_key"] = private["sender_key"]
             cand["reply_to"] = private.get("reply_to")
+        if stage == "applicant" and private.get("text"):
+            if cand.get("texts"):  # every mail after the first is an answer
+                cand["answers"] = cand.get("answers", 0) + 1
+            cand.setdefault("texts", []).append(private["text"])  # contact-free answers
+        if stage == "applicant" and e.payload["note"] and "credentials" not in cand:
+            cand["credentials"] = e.payload["note"]
         # stages only move forward: a questionnaire reply never demotes a shortlisted person
         if _STAGE_RANK.get(stage, 0) >= _STAGE_RANK.get(cand.get("stage"), -1):
             cand["stage"] = stage
@@ -380,9 +458,21 @@ class State:
 
     def _on_brief_generated(self, e: Event) -> None:
         self.briefs.append(e.id)
+        self._last_brief = e
+
+    def _on_ceo_notified(self, e: Event) -> None:
+        if e.payload["reason"] == "flagged":
+            self.flag_notice_log.append(e.ts)
+        if e.payload["reason"] == "login" and getattr(self, "_last_brief", None) is not None:
+            b = self._last_brief
+            self.last_login_brief = {"brief_id": b.id, "notice_id": e.id, "ts": e.ts,
+                                     "text": b.payload["text"], "counts": b.payload["counts"]}
+
+    def _on_approval_requested_public(self, e: Event) -> None:  # pragma: no cover - alias
+        pass
 
 
-def _money(value: Decimal) -> str:
+def money_text(value: Decimal) -> str:
     """Spend for the rail: 2 places when whole cents, else up to 4 ("11.38", "0.0034")."""
     text = usd_string(value)
     return text[:-2] if text.endswith("00") else text

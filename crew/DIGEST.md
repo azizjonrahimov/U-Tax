@@ -1,22 +1,24 @@
-# Digest (Naive YC Hackathon · U-Tax) — 2026-11-06 14:00 local
+# Digest (Naive YC Hackathon · U-Tax) — 2026-11-06 18:30 local
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (deferred by owner, due Saturday morning before leaving): GitHub remote for deploys. In your own terminal: `cd "D:\Claude Projects\Naive YC Hackathon"` then `gh repo create azizjonrahimov/u-tax --private --source . --remote origin --push`. Reply "repo ready".
+- A (Saturday morning before leaving): GitHub remote. In your own terminal: `cd "D:\Claude Projects\Naive YC Hackathon"` then `gh repo create azizjonrahimov/u-tax --private --source . --remote origin --push`. Reply "repo ready".
+- B (Saturday at the event, after Naïve access): I'll walk you through `crew/reports/agents.md` "What the owner must do" and `backend/README.md` "Public URL for Saturday" in chat.
+- C (optional): if the backend tab asks to allow a cloudflared tunnel, deny it; it's not needed tonight.
 
 ## New
 
-- backend · 0m · MERGED task 5: event store, perform(), projections, 10 ports (301 tests)
-- controller · 0m · contract v1.4.1: tax saved excludes the fee; hr.questionnaire_sent
-- agents · 20m · MERGED task 1: naive.config.ts, 7 agents, deny-by-default tools
-- controller · 20m · contract v1.4: per-seat MCP, get_candidate, flag_case, CEO hire/decline, trust switches
-- frontend · 40m · MERGED slice 1: event → cursor script (132 tests)
+- backend · 0m · MERGED task 7: per-seat MCP /mcp/<actor> (434 tests); all backend must-haves for the event are on main
+- backend + agents · 45m · MERGED 6c + agents v1.6 together (greeting_name, Client replied, ingress rules, masking stop list)
+- backend · 1.5h · MERGED 6b (v1.5, EIN redaction, memo/day cap)
+- agents · 2h · cross-lane QA: 629 events valid; 2 HIGH fixed since
+- controller · 2.5h · end-to-end run: 5 fixture mails through the firm, memos at $450, hostile mail flagged, SSN redacted
 
 ## In progress
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| backend | `backend/`, `fixtures/`, `db/` | building: task 6 HTTP + SSE + local driver (+ v1.4 pieces, 2nd review pass) | 0m |
-| frontend | `frontend/` | building: slice 2, the theater screen | 40m |
-| agents | `naive/` | building: task 2 prompts and templates | 20m |
+| frontend | `frontend/` | slice 2 screen: /qa + /review → READY; then live, /talk, /ceo | 2h |
+| backend | `backend/`, `fixtures/`, `db/` | 6c LOW items + driver D2 (nice-to-have) | 0m |
+| agents | `naive/` | idle until Naïve access Saturday (task 3) | 45m |

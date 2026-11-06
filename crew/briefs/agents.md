@@ -82,3 +82,10 @@ removed from §6. Wake messages are exactly as in §6b, plus `New applicant cand
 4. QA gets `flag_case {case_id, kind}`. CEO emails include flags and shortlists. Standing
    orders are gateway switches (`POST /api/trust`), so the CoS doesn't need to remember them.
 5. `UTAX_PHONE_E164` stays unset.
+
+## Contract v1.6 (2026-11-07, your QA pass)
+- memo.md: greet with `{{greeting_name}}` ("Hi {{greeting_name}},"), never `{{masked_name}}`.
+- CoS prompt: handle `Client replied case_N` (route to Intake: get_case, re-extract; a
+  changed fact leads to a new memo through the normal QA path).
+- get_case now returns the real wording (contact details and SSN/EIN redacted only); prompts
+  must still never repeat contact details.

@@ -34,7 +34,8 @@ def test_happy_path_event_sequence(h):
                                           "authorized_method_cents": 8516500}}]
     assert state["touches"]["training"] == 2
     assert state["trust"]["email"] == "AUTO"
-    assert state["money"]["tax_saved_cents"] == 8516500 - 45000
+    # v1.4.1: franchise tax saved only (the $50 fee is paid either way)
+    assert state["money"]["tax_saved_cents"] == 8516500 - 40000
 
 
 def test_output_matches_sample_fields_per_type(h):
@@ -167,17 +168,19 @@ def test_ceo_stop_returns_to_ask(h):
     assert h.events("trust.changed")[-1].payload["reason"] == "approved again"
 
 
-def test_cap_hit_pauses_then_operating_touch_resumes(make_harness):
-    h = make_harness(cap_per_hour=2)
+def test_cap_hit_pauses_until_the_ceo_resumes(make_harness):
+    h = make_harness(cap_per_hour=2, ceo_email="ceo@u-tax.dev")
     h.to_sent()
     h.to_sent(h.new_case(sender="two@b.io"))
     third = h.to_qa_passed(h.new_case(sender="three@c.io"))
     result = h.do("send_memo", case_id=third)
-    assert result.status == "needs_approval"
+    assert result.status == "refused" and result.error["code"] == "paused"
     assert h.gw.state.trust["email"] == "PAUSED"
-    h.ok("approve", approval_id=result.approval_id, decision="allow")
+    assert h.events("ceo.notified")[-1].payload["reason"] == "paused"
+    assert h.do("send_memo", case_id=third).error["code"] == "paused"  # still held
+    h.ok("set_trust", action_type="email", state="AUTO")
     assert h.gw.state.trust["email"] == "AUTO"
-    assert h.events("touch.operating")[-1].payload["approval_id"] == result.approval_id
+    assert h.events("touch.operating")[-1].payload["note"] == "email \u2192 AUTO"
     assert h.ok("send_memo", case_id=third)["message_id"]
 
 
@@ -249,7 +252,7 @@ def test_ask_client_max_two_then_blocked(h):
     h.approve_pending(first)
     h.ok("ask_client", case_id=case_id, missing=[])
     body = h.events("client.asked")[0].payload["body"]
-    assert "No SSNs or EINs please." in body
+    assert "Please don't send SSNs, EINs" in body
     assert h.ok("ask_client", case_id=case_id)["already_asked"] is True  # no reply yet
     h.new_case(body="still not sure", sender="hello@team12.ai")
     h.ok("ask_client", case_id=case_id)
@@ -427,18 +430,14 @@ def test_tiny_costs_stay_fixed_point(h):
 def test_hr_flow_and_human_hire(h):
     h.ok("inject_email", **{"from": "ann@example.com", "subject": "gig", "inbox": "hiring",
                             "body": "EA, 6 years of startup tax"})
-    h.ok("hr_record", stage="shortlisted", candidate_id="cand_1", name_masked="ignored",
-         note="waiting on CEO")
+    h.ok("hr_record", stage="shortlisted", candidate_id="cand_1", note="waiting on CEO")
     assert h.events("hr.shortlisted")[0].payload["name_masked"] == "Candidate A"
-    assert h.do("hr_record", stage="screened", candidate_id="cand_9", name_masked="X",
+    assert h.do("hr_record", stage="screened", candidate_id="cand_9",
                 note="").error["code"] == "not_found"  # no invented ids
-    # a sourced applicant may be recorded, outside the inbox's cand_N ids
-    h.ok("hr_record", stage="applicant", candidate_id="src_lee", name_masked="Candidate S",
-         note="referred")
-    assert h.do("hr_record", stage="hired", candidate_id="cand_1", name_masked="A",
-                note="").status == "refused"  # agents can't hire
-    h.ok("hr_hire", candidate_id="cand_1")
-    assert h.gw.state.hiring == {"applicants": 2, "screened": 0, "shortlisted": 1, "hired": 1}
+    for stage in ("applicant", "declined", "hired"):  # v1.4: never an agent's call
+        assert h.do("hr_record", stage=stage, candidate_id="cand_1").error["code"] == "bad_input"
+    h.ok("candidate_decision", candidate_id="cand_1", decision="hire")
+    assert h.gw.state.hiring == {"applicants": 1, "screened": 0, "shortlisted": 1, "hired": 1}
     assert h.events("hr.hired")[0].actor == "ceo"
 
 

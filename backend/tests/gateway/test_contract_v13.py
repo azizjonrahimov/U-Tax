@@ -39,7 +39,7 @@ def test_every_tool_has_an_owner_and_book_cost_is_gone():
     assert set(TOOL_ACTORS) == {
         "list_open_cases", "get_case", "extract_facts", "ask_client", "mark_not_eligible",
         "law_search", "compute_tax", "qa_check", "send_memo", "book_call", "phone_check",
-        "post_social", "draft_dm", "hr_record", "firm_brief"}
+        "post_social", "draft_dm", "hr_record", "firm_brief", "get_candidate", "flag_case"}
 
 
 # ---------------------------------------------------------------- wake-ups (§6b)
@@ -103,7 +103,8 @@ def test_ceo_login_brief(h):
     h.do("send_memo", case_id=case_id)
     data = h.ok("ceo_brief", since_id=3)
     assert data["pending_approvals"][0]["action_type"] == "email"
-    assert "new events since you last looked" in data["text"]
+    assert data["text"].startswith("Welcome back. Since you were last here")
+    assert "1 approval waiting on you." in data["text"]
     assert data["last_event_id"] == h.gw.state.last_event_id
     assert h.events("ceo.notified")[-1].payload["channel"] == "login"
     assert h.events("brief.generated")[-1].id == data["brief_event_id"]
@@ -157,7 +158,7 @@ def test_applicant_mail_is_masked_and_gets_the_questionnaire(h):
     assert data["questionnaire"] == "sent"
     sent = json.loads(h.outbox()[0].read_text(encoding="utf-8"))
     assert sent["to"] == "ann@example.com"
-    assert "an AI agent runs this first screen, and a human makes the final call" in sent["body"]
+    assert "This screen is run by an AI agent. A human makes the final hiring decision." in sent["body"]
     # answers on the same thread join the same candidate, no second questionnaire
     again = h.ok("inject_email", **{"from": "ann@example.com", "subject": "Re: gig",
                                     "body": "1. EA, California. 4. $150", "inbox": "hiring"})

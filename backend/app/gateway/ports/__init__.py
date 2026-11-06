@@ -78,6 +78,7 @@ class InMail:
     sender: str
     subject: str
     body: str
+    auto_reply: bool = False  # Auto-Submitted / X-Autoreply / Precedence: auto_reply
 
 
 @dataclass(frozen=True)
@@ -209,8 +210,9 @@ class VoiceSession:
 class VoicePort(Protocol):
     provider: str
 
-    def create_session(self) -> VoiceSession:
-        """Ephemeral realtime session for the mic page. NotConfigured without a key."""
+    def create_session(self, instructions: str) -> VoiceSession:
+        """Ephemeral realtime session for /talk, with the instructions (and no tools) set
+        server-side when minting. NotConfigured without a key."""
 
     def speak(self, text: str) -> bytes:
         """TTS audio (audio/mpeg) for the morning brief. NotConfigured without a key."""

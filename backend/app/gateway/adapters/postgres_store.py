@@ -48,25 +48,45 @@ class PostgresEventStore:
         self._connect()
 
     WRITER_LOCK = 0x7574_6178  # "utax": one writing gateway per database
+    LOCK_WAIT_SECONDS = 30.0  # a restart's old process may still be letting go
 
     def _connect(self):
+        import time
+
         import psycopg
 
-        try:
-            conn = psycopg.connect(self._dsn, autocommit=False)
-            # Single writer (design): projections live in this process's memory, so a
-            # second instance (overlapping deploy, --workers 2) would fork case numbers.
-            with conn.cursor() as cur:
-                cur.execute("SELECT pg_try_advisory_lock(%s)", (self.WRITER_LOCK,))
-                (got,) = cur.fetchone()
-            conn.commit()
-        except psycopg.Error as exc:
-            raise EventWriteError(f"postgres unavailable: {exc}") from exc
-        if not got:
+        deadline = time.monotonic() + self.LOCK_WAIT_SECONDS
+        while True:
+            try:
+                conn = psycopg.connect(self._dsn, autocommit=False)
+                # Single writer (design): projections live in this process's memory, so a
+                # second instance (overlapping deploy, --workers 2) would fork case numbers.
+                # Deploy stop-then-start (no overlap), or the new instance waits here.
+                with conn.cursor() as cur:
+                    cur.execute("SELECT pg_try_advisory_lock(%s)", (self.WRITER_LOCK,))
+                    (got,) = cur.fetchone()
+                conn.commit()
+            except psycopg.Error as exc:
+                raise EventWriteError(f"postgres unavailable: {exc}") from exc
+            if got:
+                self._conn = conn
+                return self._conn
             conn.close()
-            raise EventWriteError("another U-Tax gateway holds the writer lock on this database")
-        self._conn = conn
-        return self._conn
+            if time.monotonic() >= deadline:
+                raise EventWriteError("another U-Tax gateway holds the writer lock on this "
+                                      "database (deploy stop-then-start)")
+            time.sleep(1.0)
+
+    def close(self) -> None:
+        """Release the writer lock and the connection (shutdown, tests)."""
+        if self._conn is not None and not self._conn.closed:
+            try:
+                with self._conn.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (self.WRITER_LOCK,))
+                self._conn.commit()
+            except Exception:  # noqa: BLE001 - closing anyway
+                pass
+        self._drop()
 
     def _drop(self) -> None:
         """Close a broken connection (don't leak it); the next call reconnects."""
