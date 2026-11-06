@@ -2,7 +2,8 @@
 // Apply with `naive up --dry-run` first, then `naive up`. Env vars: see .env.example.
 //
 // Design: docs/designs/u-tax.md (E1 one gateway, E5 U-Tax tools only, D17 MCP transport).
-// Shapes: contracts/api.md v1.3 §1 (one tool token per agent), §6 (tools), §6b (wake messages),
+// Shapes: contracts/api.md v1.4 §1 (one tool token per agent), §6 (tools, one MCP URL per seat),
+// §6b (wake messages),
 // §7 (memo template).
 
 import { readFileSync } from "node:fs";
@@ -37,7 +38,10 @@ function isPrivateHost(hostname: string): boolean {
   return !host.includes("."); // a single-label name only resolves on a private network
 }
 
-/** The gateway's public MCP endpoint (cloudflared tonight, Render Saturday). Fails closed. */
+/**
+ * The gateway's public MCP base, ending in /mcp (cloudflared tonight, Render Saturday). Each agent
+ * calls its own seat under it, `<base>/<actor>` (contract v1.4 §6). Fails closed.
+ */
 function mcpUrl(): string {
   const raw = (process.env.UTAX_MCP_URL ?? "").trim();
   const hint = "Point it at the gateway's public HTTPS /mcp endpoint, e.g. https://<tunnel>.trycloudflare.com/mcp";
@@ -52,17 +56,19 @@ function mcpUrl(): string {
   if (url.protocol !== "https:" || isPrivateHost(url.hostname)) {
     throw new Error(`UTAX_MCP_URL must be public HTTPS (Naïve refuses http, localhost and private hosts): ${raw}. ${hint}.`);
   }
-  // No query or fragment: a token in the URL would be stored in plain text on every agent.
-  if (url.search || url.hash) throw new Error(`UTAX_MCP_URL must not carry a query or fragment: ${raw}. ${hint}.`);
+  // No credentials, query or fragment: anything in the URL is stored in plain text on every agent.
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(`UTAX_MCP_URL must not carry credentials, a query or a fragment: ${raw}. ${hint}.`);
+  }
   // A bare tunnel host 404s, which Naïve only reports as session.degraded: agents would run with no tools.
   if (!url.pathname.replace(/\/$/, "").endsWith("/mcp")) {
     throw new Error(`UTAX_MCP_URL must end in /mcp (the gateway's MCP endpoint): ${raw}. ${hint}.`);
   }
-  return url.toString();
+  return url.toString().replace(/\/$/, "");
 }
 
 /**
- * Each agent's own gateway tool token (contract v1.3 §1): the token decides the actor and the
+ * Each agent's own gateway tool token (contract v1.4 §1): the token decides the actor and the
  * tools the gateway lets it call. Sealed into that agent's own vault from env at apply.
  * Refuse empty, short, padded or shared tokens: `naive up` matches a credential by kind/key/url,
  * never the value, so a bad value sealed once stays until it is deleted (README: rotation).
@@ -122,7 +128,9 @@ const MODELS: Record<AgentKey, string> = {
   hr: MODEL_TOOL_USE, // UNVERIFIED: check GET /v1/models
 };
 
-const GATEWAY_MCP_URL = mcpUrl();
+const GATEWAY_MCP_BASE = mcpUrl();
+/** One MCP endpoint per seat, so Naïve can never hand one agent's credential to another. */
+const seatUrl = (key: AgentKey) => `${GATEWAY_MCP_BASE}/${CREW[key].actor}`;
 requireToolTokens();
 
 /** One identity per agent, so its vault (and so its token) reaches that agent's sessions only. */
@@ -145,8 +153,8 @@ function agent(key: AgentKey) {
     system: system(key),
     identity: identityOf(key), // holds this agent's vault, so its own token is injected
     // X-UTax-Actor is optional and non-secret: the gateway accepts it only when it matches the
-    // token's actor (contract v1.3 §6). UNVERIFIED that Naïve forwards non-secret headers.
-    mcp_servers: [{ name: MCP_SERVER, url: GATEWAY_MCP_URL, headers: { "X-UTax-Actor": seat.actor } }],
+    // token's actor (contract v1.4 §6). UNVERIFIED that Naïve forwards non-secret headers.
+    mcp_servers: [{ name: MCP_SERVER, url: seatUrl(key), headers: { "X-UTax-Actor": seat.actor } }],
     tools: toolsetFor(key),
     metadata: { utax_actor: seat.actor },
   };
@@ -175,7 +183,7 @@ export default defineProject({
       {
         kind: "static_bearer" as const,
         key: `U-Tax tool token (${CREW[key].actor})`,
-        mcp_server_url: GATEWAY_MCP_URL,
+        mcp_server_url: seatUrl(key),
         value: { from_env: CREW[key].tokenEnv },
       },
     ],

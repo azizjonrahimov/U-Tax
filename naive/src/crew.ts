@@ -1,11 +1,11 @@
 // The U-Tax crew: who each agent is and exactly which gateway tools it may call.
-// Tool names and the Agent column come from contracts/api.md v1.3 §6. This file is the one place the
+// Tool names and the Agent column come from contracts/api.md v1.4 §6. This file is the one place the
 // agent → tool mapping lives; naive.config.ts and the prompts both follow it.
 
 /** The MCP server name. Naïve registers its tools as `utax.<tool>`. */
 export const MCP_SERVER = "utax";
 
-/** Every tool the gateway serves at /mcp (contract v1.3 §6). */
+/** Every tool the gateway serves at /mcp/<actor> (contract v1.4 §6). */
 export const GATEWAY_TOOLS = [
   "list_open_cases",
   "get_case",
@@ -20,7 +20,9 @@ export const GATEWAY_TOOLS = [
   "phone_check",
   "post_social",
   "draft_dm",
+  "get_candidate",
   "hr_record",
+  "flag_case",
   "firm_brief",
 ] as const;
 
@@ -73,7 +75,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_QA",
     prompt: "qa.md",
     description: "Re-runs the engine, re-matches every quote against the email, and checks the memo renders on a phone.",
-    tools: ["get_case", "qa_check", "phone_check"],
+    tools: ["get_case", "qa_check", "phone_check", "flag_case"],
   },
   acct: {
     name: "accounting",
@@ -96,8 +98,8 @@ export const CREW: Record<AgentKey, Seat> = {
     actor: "hr",
     tokenEnv: "UTAX_TOOL_TOKEN_HR",
     prompt: "hr.md",
-    description: "Runs the one paid gig hire: records applicants, a disclosed AI screen, a shortlist. The human hires.",
-    tools: ["hr_record"],
+    description: "Runs the one paid gig hire: a disclosed AI screen and a shortlist. The CEO hires or declines.",
+    tools: ["get_candidate", "hr_record"],
   },
 };
 
