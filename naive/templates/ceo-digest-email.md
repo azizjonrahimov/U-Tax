@@ -1,11 +1,9 @@
-Subject: U-Tax digest, {{period}}
-
 Here's what the firm did {{period}}.
 
 Clients: {{clients_new}} new, {{memos_sent}} memos sent, {{calls_booked}} review calls booked
 Clients saved (estimated): {{tax_saved}}
-The firm spent on agents and services: {{agent_spend}}
-Human touches: {{touches_training}} training, {{touches_operating}} operating
+The firm spent an estimated {{agent_spend}} on agents and services
+Human touches: {{touches_training}} training, {{touches_operating}} operating, {{touches_engineering}} engineering
 
 Waiting on you:
 {{pending_approvals}}
@@ -13,7 +11,8 @@ Waiting on you:
 Blocked:
 {{blocked_lines}}
 
-Hiring: {{hiring_line}}
+Hiring (shortlisted, and screened candidates waiting on your decision):
+{{hiring_line}}
 
 Flags from QA (possible prompt injection, unrealistic inputs):
 {{flags_lines}}

@@ -16,19 +16,27 @@ paid and escalation tools are denied by name.
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
 | `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts, every template's rules, bad-env guard tests |
 
-## Templates the gateway fills (values come from code and projections, never from an agent)
-| File | Sent | Placeholders |
+## Templates for the gateway (values come from code and projections, never from an agent)
+Status: the gateway loads `memo.md` today. The others are the agreed wording with these exact
+placeholders, for the backend to load the same strict way (unknown or missing placeholder → refuse,
+built-in fallback); until then it sends its own hard-coded text. Every file is sent as the body; the
+gateway sets the subject.
+
+| File | Sent when | Placeholders |
 |---|---|---|
 | `memo.md` | `send_memo` | contract §7 |
-| `ask-client.md` | `ask_client` | `masked_name`, `missing_list` (joined fact labels), `problems_line` (a line dropped when empty) |
+| `ask-client.md` | `ask_client` | `masked_name`, `missing_list` (joined fact labels, never `stated_par`), `problems_line` (the line is dropped when empty) |
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `masked_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
-| `ceo-update-email.md` | approval needed / case BLOCKED | `headline`, `lead`, `summary`, `console_url` |
-| `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |
+| `hr-hired.md` / `hr-declined.md` | the CEO's decision in `/ceo` | none |
+| `ceo-update-email.md` | approval needed, BLOCKED, flagged, shortlisted, paused | `headline`, `lead`, `summary`, `action_line` (per reason: "Approve or Deny it in the console", "Unblock or skip it", …), `console_url` |
+| `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `touches_engineering`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |
 | `login-brief.md` | `/ceo` login brief (spoken + shown) | `greeting`, `clients_new`, `memos_sent`, `tax_saved`, `agent_spend`, `approvals_line`, `blocked_line`, `hiring_line` |
 
-`sourcing-posts.md` and `job-post.md` are what Marketing posts (or the owner, by hand); they pass
-the post guard (dollar amounts only $85,165, $400, $450, $50; no links or @handles; X posts ≤ 280).
+`sourcing-posts.md` and `job-post.md`: Marketing posts the X and LinkedIn sections (`check.mjs` runs
+a port of the gateway's post guard over them: only $85,165 / $400 / $450 / $50, no links, @handles,
+emails, phone numbers or case names; X posts ≤ 255 characters so the appended link fits). The
+Discord/Slack sections are for the owner to post by hand.
 `demo-script.md` and `backup-slide.md` are for the presenter.
 
 ## Env vars (see `.env.example`)

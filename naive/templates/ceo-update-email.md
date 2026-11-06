@@ -1,12 +1,11 @@
-Subject: U-Tax needs you: {{headline}}
+U-Tax needs you: {{headline}}
 
 {{lead}}
 
 {{summary}}
 
-Open the CEO console to act on it: {{console_url}}
+{{action_line}}
 
-Nothing leaves the firm until you click Approve. Ignoring this keeps it waiting; it never goes
-out on its own.
+Open the CEO console: {{console_url}}
 
 U-Tax (sent by the gateway)

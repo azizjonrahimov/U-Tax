@@ -126,47 +126,74 @@ if (config.agents.length !== Object.keys(CREW).length) fail(`config declares ${c
 // 7. no hidden orchestrator
 if ((config.tasks ?? []).length > 0) fail("tasks[] is declared: the engine would create an org CEO agent outside the policy");
 
-// 6. memo template (contract §7)
+// 6. memo template (contract §7): placeholders, disclaimer and amounts are checked in 10; the
+// memo-only rule is that the gateway sets the subject and sends the whole file as the body.
 const memoPath = join(ROOT, "templates", "memo.md");
-if (!existsSync(memoPath)) {
-  fail("templates/memo.md is missing (contract §7)");
-} else {
-  const memo = readFileSync(memoPath, "utf8");
-  const allowed = ["masked_name", "authorized_method", "assumed_par_method", "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note"];
-  const used = [...memo.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]);
-  const extra = used.filter((p) => !allowed.includes(p));
-  const absent = allowed.filter((p) => !used.includes(p));
-  if (extra.length) fail(`templates/memo.md: placeholders outside contract §7: ${extra}`);
-  if (absent.length) fail(`templates/memo.md: missing contract §7 placeholders: ${absent}`);
-  if (/^\s*subject:/i.test(memo)) fail("templates/memo.md: starts with a Subject: line; the gateway sets the subject and sends the whole file as the body");
-  if (!memo.includes(`${DISCLAIMER}.`)) fail(`templates/memo.md: missing the line "${DISCLAIMER}."`);
-  if (/\$\s?\d/.test(memo.replace(/\{\{[^}]*\}\}/g, ""))) fail("templates/memo.md: contains a literal dollar amount; amounts come only from placeholders");
-}
+if (existsSync(memoPath) && /^\s*subject:/i.test(readFileSync(memoPath, "utf8")))
+  fail("templates/memo.md: starts with a Subject: line; the gateway sets the subject and sends the whole file as the body");
 
 // 10. every template has a rule: its placeholders, the disclaimer where a client reads it, the
 // disclosure line where an applicant reads it, and the post guard's limits on posts.
+const MEMO_PLACEHOLDERS = ["masked_name", "authorized_method", "assumed_par_method", "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note"];
+// body: the gateway sends the file as the body and sets the subject itself (no "Subject:" line).
+// client: a client reads it (disclaimer line, no literal dollar amounts). applicant: the AI-screen
+// disclosure line. posts: Marketing posts its X/LinkedIn sections (the gateway's post guard).
+// spend: every money-spent figure is called "estimated".
 const TEMPLATE_RULES = {
-  "memo.md": { client: true }, // placeholders checked in 6
-  "ask-client.md": { client: true, placeholders: ["masked_name", "missing_list", "problems_line"] },
-  "not-eligible-not_incorporated.md": { client: true, placeholders: ["masked_name"] },
-  "not-eligible-outside_delaware.md": { client: true, placeholders: ["masked_name"] },
-  "not-eligible-not_a_corporation.md": { client: true, placeholders: ["masked_name"] },
-  "hr-questionnaire.md": { applicant: true, placeholders: [] },
-  "ceo-update-email.md": { placeholders: ["headline", "lead", "summary", "console_url"] },
+  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS },
+  "ask-client.md": { body: true, client: true, placeholders: ["masked_name", "missing_list", "problems_line"] },
+  "not-eligible-not_incorporated.md": { body: true, client: true, placeholders: ["masked_name"] },
+  "not-eligible-outside_delaware.md": { body: true, client: true, placeholders: ["masked_name"] },
+  "not-eligible-not_a_corporation.md": { body: true, client: true, placeholders: ["masked_name"] },
+  "hr-questionnaire.md": { body: true, applicant: true, noAmounts: true, placeholders: [] },
+  "hr-hired.md": { body: true, noAmounts: true, placeholders: [] },
+  "hr-declined.md": { body: true, noAmounts: true, placeholders: [] },
+  "ceo-update-email.md": { body: true, placeholders: ["headline", "lead", "summary", "action_line", "console_url"] },
   "ceo-digest-email.md": {
+    body: true, spend: true,
     placeholders: ["period", "clients_new", "memos_sent", "calls_booked", "tax_saved", "agent_spend", "touches_training",
-      "touches_operating", "pending_approvals", "blocked_lines", "hiring_line", "flags_lines", "console_url"],
+      "touches_operating", "touches_engineering", "pending_approvals", "blocked_lines", "hiring_line", "flags_lines", "console_url"],
   },
   "login-brief.md": {
+    body: true, spend: true,
     placeholders: ["greeting", "clients_new", "memos_sent", "tax_saved", "agent_spend", "approvals_line", "blocked_line", "hiring_line"],
   },
   "sourcing-posts.md": { posts: true, placeholders: [] },
   "job-post.md": { posts: true, placeholders: [] },
-  "demo-script.md": { notes: true },
-  "backup-slide.md": { notes: true },
+  "demo-script.md": {}, // presenter notes
+  "backup-slide.md": {}, // presenter notes
 };
-const DISCLOSURE = "This screen is run by an AI agent. A human makes the final hiring decision.";
+
+// The gateway's post_social guard (lane/backend perform.post_problem + masking), ported so a
+// template that passes here is not refused live. No allowed URL: the gateway appends the only one.
+const POST_GUARD = [
+  [/(?<![\w@.])@[A-Za-z0-9_]{2,}/, "an @handle"],
+  [/\b(?:https?:\/\/|www\.)\S+|\b[a-z0-9-]+\.(?:com|io|ai|dev|co|net|org|app|xyz)\b\S*/i, "a link"],
+  [/\bcase[_ -]?\d+\b|\bteam\s*#?\s*\d+\b/i, "a case or Team #N"],
+  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/, "an email address"],
+  [/(?<![\w$])(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}(?!\d)|(?<!\d)\d{10,11}(?!\d)/, "a phone number"],
+  [/(?:\busd\s*\d[\d, ]*|\d[\d,]*(?:\.\d+)?\s*(?:k|m|mm|bn)?\s*(?:dollars|bucks|usd)\b)/i, "an amount in words"],
+];
 const POST_AMOUNTS = new Set(["$85,165", "$400", "$450", "$50"]);
+function postProblem(text) {
+  for (const [re, what] of POST_GUARD) if (re.test(text)) return `contains ${what}`;
+  for (const m of text.matchAll(/\$\s?\d[\d, ]*(?:\.\d+)?\s?(?:[kKmMbB]\b|mm\b|bn\b)?/g)) {
+    const amount = m[0].replace(/ /g, "").replace(/[,.]+$/, "");
+    if (!POST_AMOUNTS.has(amount)) return `names the amount ${amount}`;
+  }
+  return null;
+}
+// The ported guard must refuse what the live one refuses, and pass the firm's standard example.
+for (const bad of ["only $400k", "about 50 dollars", "see utax.ai", "Team #7 saved", "case_7 done", "(@utax)", "call 415 555 0123", "mail a@b.co", "$1,200 saved", "USD 400"])
+  if (!postProblem(bad)) fail(`post guard self-test: "${bad}" was not refused`);
+if (postProblem("$85,165, or $400 plus the $50 fee, $450 in all."))
+  fail("post guard self-test: the standard example was refused");
+
+/** Marketing's sections of a posts template: "## X…" and "## LinkedIn post…", up to the next heading. */
+const postSections = (text) =>
+  [...text.matchAll(/^## (X[^\n]*|LinkedIn post[^\n]*)\n([\s\S]*?)(?=^## |(?![\s\S]))/gm)].map((m) => ({ title: m[1], body: m[2].trim() }));
+
+const DISCLOSURE = "This screen is run by an AI agent. A human makes the final hiring decision.";
 const templatesDir = join(ROOT, "templates");
 for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).filter((f) => f.endsWith(".md")) : []) {
   const rule = TEMPLATE_RULES[file];
@@ -188,11 +215,19 @@ for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).filter((
     if (/\$\s?\d/.test(text.replace(/\{\{[^}]*\}\}/g, ""))) fail(`templates/${file}: literal dollar amount in a client template`);
   }
   if (rule.applicant && !text.includes(DISCLOSURE)) fail(`templates/${file}: missing the AI-screen disclosure line`);
+  if (rule.body && /^\s*subject:/i.test(text)) fail(`templates/${file}: starts with a Subject: line; the gateway sets the subject`);
+  if (rule.noAmounts && /\$\s?\d/.test(text)) fail(`templates/${file}: literal dollar amount`);
+  if (rule.spend && /(?<!estimated )\{\{\s*agent_spend\s*\}\}/.test(text.replace(/\s+/g, " ")))
+    fail(`templates/${file}: {{agent_spend}} must read "an estimated {{agent_spend}}" (spend is an estimate)`);
   if (rule.posts) {
-    for (const amount of text.match(/\$\s?\d+(,\d{3})*(\.\d+)?/g) ?? []) if (!POST_AMOUNTS.has(amount)) fail(`templates/${file}: dollar amount ${amount} would be refused by the post guard`);
-    if (/https?:\/\/|www\./i.test(text)) fail(`templates/${file}: contains a URL (the gateway adds the only allowed one)`);
-    if (/(^|\s)@\w/.test(text)) fail(`templates/${file}: contains an @handle`);
-    for (const m of text.matchAll(/^## X[^\n]*\n(.+)$/gm)) if (m[1].length > 280) fail(`templates/${file}: X post is ${m[1].length} characters`);
+    const sections = postSections(text);
+    if (sections.length === 0) fail(`templates/${file}: no "## X" or "## LinkedIn post" sections found`);
+    for (const { title, body } of sections) {
+      if (!body) fail(`templates/${file}: section "${title}" is empty`);
+      const problem = postProblem(body);
+      if (problem) fail(`templates/${file}: "${title}" ${problem}; the post guard would refuse it`);
+      if (title.startsWith("X") && [...body].length > 255) fail(`templates/${file}: "${title}" is ${[...body].length} characters (max 255 + appended link)`);
+    }
   }
 }
 for (const required of Object.keys(TEMPLATE_RULES)) if (!existsSync(join(templatesDir, required))) fail(`templates/${required} is missing`);
@@ -201,8 +236,10 @@ for (const required of Object.keys(TEMPLATE_RULES)) if (!existsSync(join(templat
 const voicePath = join(ROOT, "prompts", "voice-intake.md");
 if (!existsSync(voicePath)) fail("prompts/voice-intake.md is missing");
 else {
-  const voice = readFileSync(voicePath, "utf8");
-  for (const must of ["not tax advice", "SSN", "EIN", "AI", "Read everything back", "Never compute"]) if (!voice.includes(must)) fail(`prompts/voice-intake.md: must mention "${must}"`);
+  const voice = readFileSync(voicePath, "utf8").replace(/\s+/g, " ");
+  for (const must of ["not tax advice", "Never claim to be a person", "transcribed", "OK to continue?", "Read the numbers back",
+    "Never compute", "Never ask for, repeat or accept an SSN, EIN", "Never say an email address out loud"])
+    if (!voice.includes(must)) fail(`prompts/voice-intake.md: must keep the rule "${must}"`);
   if (/utax\.\w+/.test(voice)) fail("prompts/voice-intake.md: the voice agent has no gateway tools; it must not name any");
 }
 
