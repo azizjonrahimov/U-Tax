@@ -56,7 +56,8 @@
 .theater .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; min-width: 0; position: relative; transition: opacity calc(.5s * var(--t)); }
 .theater .ph { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: calc(11px * var(--k)); color: var(--dim); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
 .theater .ph b { color: var(--text); letter-spacing: 0; text-transform: none; font-size: calc(13px * var(--k)); overflow: hidden; text-overflow: ellipsis; }
-.theater .ph .tag { margin-left: auto; font-size: calc(11px * var(--k)); color: var(--faint); text-transform: none; letter-spacing: 0; }
+.theater .ph b { flex-shrink: 0; max-width: 75%; }
+.theater .ph .tag { min-width: 0; overflow: hidden; text-overflow: ellipsis; margin-left: auto; font-size: calc(11px * var(--k)); color: var(--faint); text-transform: none; letter-spacing: 0; }
 .theater .pb { padding: 12px; font-size: calc(13px * var(--k)); line-height: 1.5; flex: 1; min-height: 0; overflow: hidden; }
 .theater .empty { color: var(--faint); font-size: calc(12px * var(--k)); }
 .theater .failnote { position: absolute; right: 10px; bottom: 10px; background: rgba(255,77,61,.12); border: 1px solid var(--red); color: var(--red); font-size: calc(11px * var(--k)); padding: 3px 8px; border-radius: 6px; }
