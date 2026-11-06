@@ -90,6 +90,8 @@ class Case:
     qa_checks: list[dict] = field(default_factory=list)
     memo_message_id: str | None = None
     memo_version: int = 0
+    memo_ref: str | None = None  # v1.7: the latest memo's reference (UTX-...)
+    phone_attempts: dict[str, list[str]] = field(default_factory=dict)  # memo_ref -> statuses
     memo_ts: str | None = None
     call: dict[str, Any] | None = None
     blocked_reason: str | None = None
@@ -155,6 +157,7 @@ class State:
     last_login_brief: dict | None = None
     memo_log: dict[str, list[str]] = field(default_factory=dict)  # reply address -> ts
     flag_notice_log: list[str] = field(default_factory=list)
+    law_log: list[str] = field(default_factory=list)  # v1.7: law_search, 20/hour
     public_notice_log: list[str] = field(default_factory=list)
     crm_failed: set[str] = field(default_factory=set)
     posts: int = 0
@@ -350,6 +353,7 @@ class State:
             case.memo_message_id = e.payload["message_id"]
             case.memo_version = case.facts_version
             case.memo_ts = e.ts
+            case.memo_ref = e.payload.get("memo_ref")
 
     def _on_call_booked(self, e: Event) -> None:
         case = self._case(e)
@@ -360,6 +364,12 @@ class State:
         case = self._case(e)
         if case is not None:
             case.phone = dict(e.payload)
+            ref = (e.private or {}).get("memo_ref")
+            if ref:
+                case.phone_attempts.setdefault(ref, []).append(e.status)
+
+    def _on_law_searched(self, e: Event) -> None:
+        self.law_log.append(e.ts)
 
     def _on_crm_sync_requested(self, e: Event) -> None:
         key = (e.private or {}).get("sync_key") or f"{e.case_id}:{e.payload['stage']}"

@@ -57,10 +57,14 @@ def test_output_matches_sample_fields_per_type(h):
                 assert set(pub["payload"]["facts"]) == set(ref["payload"]["facts"])
             if e.type in ("tax.computed", "memo.sent"):
                 for key in ref["payload"]:
-                    if key not in ("message_id", "seconds_since_last_fact", "to_masked", "body"):
+                    if key not in ("message_id", "seconds_since_last_fact", "to_masked", "body",
+                                   "memo_ref"):  # memo_ref is per event log (v1.7)
                         assert pub["payload"][key] == ref["payload"][key], (e.type, key)
     memo = h.events("memo.sent")[0].payload["body"]
-    assert memo.endswith("Educational estimate — not tax advice.")
+    lines = [line for line in memo.splitlines() if line.strip()]
+    # v1.7: the reference is the memo's last line; the disclaimer stays in the memo
+    assert lines[-1] == f"Reference: {h.events('memo.sent')[0].payload['memo_ref']}"
+    assert "Educational estimate — not tax advice." in memo
     assert "$85,165 to $400 (+$50 annual report fee = $450)" in memo
 
 
@@ -306,7 +310,9 @@ def test_phone_check_failure_is_skipped_not_blocking(h):
     case_id = h.to_sent()
     h.ports.device.faults.add(Unavailable())
     data = h.ok("phone_check", case_id=case_id)
-    assert data["status"] == "skipped"
+    assert data["pending"] is True  # v1.7: the run happens outside the lock
+    checked = h.events("phone.checked")[-1]
+    assert checked.status == "skipped" and checked.payload["rendered_ok"] is False
     assert h.gw.state.cases[case_id].status == "SENT"
 
 

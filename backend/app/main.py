@@ -34,7 +34,7 @@ class Health(BaseModel):
 def tick(gw: Gateway) -> None:
     """Background upkeep: CRM mirror, failed wakes, the 6 h stall sweep, the CEO digest."""
     for job in (gw.drain_outbox, gw.retry_wakes, gw.retry_questionnaires,
-                gw.retry_decision_mails,
+                gw.retry_decision_mails, gw.advance_phone_jobs, gw.refresh_fee,
                 lambda: gw.perform("stall_sweep", {}),
                 lambda: gw.perform("ceo_digest", {})):
         try:
@@ -63,6 +63,8 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
         task = None
         if start_background:
             await asyncio.to_thread(gw.boot_wakes)  # wakes live in memory: re-derive them
+            # v1.7 §6f: warm the fee cache now, so compute_tax never fetches under the lock
+            await asyncio.to_thread(gw.refresh_fee, force=True)
 
             async def loop() -> None:
                 while True:
