@@ -11,7 +11,7 @@ access (D26).
   - Tools are deny-by-default: each agent gets exactly its §6 column plus the board.
   - Sunday 8 AM brief schedule, and a one-time first-run briefing.
   - The env check fails closed on a bad URL or bad tokens.
-- **Task 2 (READY at 0f837cc):** the prompts for all 7 agents, `voice-intake.md` for `/talk`, and
+- **Task 2 (READY on `lane/agents-t2`):** the prompts for all 7 agents, `voice-intake.md` for `/talk`, and
   the templates:
   - memo, re-ask, not-eligible ×3, HR questionnaire, hired and declined
   - CEO update, digest and login brief
@@ -41,7 +41,7 @@ the real org. Not one of these could be checked without a key.
 
 ## What merged
 - Task 1: `lane/agents` 090790157, merged as 4af1e70.
-- Task 2: pending (`lane/agents-t2` 0f837cc).
+- Task 2: pending (`lane/agents-t2`, see the READY message for the sha).
 
 ## Open items (from /review, owned elsewhere or live-only)
 1. Backend: serve `POST /mcp/<actor>` (no branch had it at review time). Without it, `naive up`
