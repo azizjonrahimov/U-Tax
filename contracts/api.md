@@ -84,6 +84,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `dm.drafted` / `dm.sent_by_human` | mkt / ceo | `{recipient_label, text}` |
 | `hr.applicant` / `hr.screened` / `hr.shortlisted` / `hr.hired` / `hr.declined` | hr (hired: ceo) | `{candidate_id, name_masked, note}` |
 | `hr.questionnaire_sent` | system | `{candidate_id, name_masked, note}` (the §6c auto-reply; counts against the `email` cap) |
+| `hr.decision_mailed` | system | `{candidate_id, name_masked, note}` (hire/decline mail sent; counts against the `email` cap) |
 | `screen.call` | hr | `{candidate_id, transcript_excerpt, seconds}` |
 | `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id}` (actor `intake` and `case_id` set for customer conversations) |
 | `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"flagged"\|"shortlisted"\|"paused"\|"digest"\|"login"}` |
@@ -126,6 +127,9 @@ Projections rebuilt from events (never stored by hand):
   "queue": {"waiting": 0, "blocked": 0}
 }
 ```
+`Under the theater token, `hiring` carries counts only; the per-candidate list (with stages)
+is admin-only, for `/ceo`.
+
 `tax_saved_cents` = Σ over sent cases of max(0, `authorized_method_cents` − (`total_cents` −
 `annual_report_fee_cents`)): franchise tax saved only. The fee is paid under either method,
 so it is never counted as a saving, and the sum never goes negative.
@@ -290,9 +294,13 @@ cannot replace them.
 
 ## 6e. Trust boundaries for `/talk` and mail volume
 
-- `/talk` posts **customer turns only**, speaker-labelled (`{turns: [{speaker: "customer",
-  text}]}` alongside `text`). Fact quotes must match customer lines only, never the AI's
-  read-back. `reply_email` comes from the typed field, never from the transcript.
+- `/talk` posts speaker-labelled turns (`{turns: [{speaker: "customer"|"agent", text}]}`).
+  Agent turns are kept as **labelled, non-quotable context** (so a bare "No." keeps its
+  question). Fact quotes must match customer lines only, never the AI's read-back.
+- Known risk, accepted for the hackathon: an ephemeral Realtime session may let the client
+  replace server-set instructions. The session has no tools, a per-response cap, and facts
+  come only from customer turns checked in code, so the worst case is odd speech to that
+  caller. Post-hackathon fix: a server-side relay. `reply_email` comes from the typed field, never from the transcript.
 - Memos per `reply_email`: at most 3 a day, on top of the per-IP limit.
 - A reply from a voice case's `reply_email` threads onto that case (the voice case's sender
   key is the reply address), never opening a new case.
@@ -329,6 +337,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.6.1 (2026-11-07, backend 6b): AI turns kept as non-quotable context; Realtime override
+  risk accepted and documented; `hr.decision_mailed`; candidate list admin-only.
 
 - v1.6 (2026-11-07, agents cross-lane QA): `get_case` body keeps names and facts (contact
   details and SSN/EIN redacted only); `Client replied case_N` wake and memo v2; ingress rules
