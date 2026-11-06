@@ -197,3 +197,12 @@ Add to task 9 (contract v1.7.1, from the frontend's slice 3 review):
    crm.objects.contacts.write, crm.objects.deals.write) plus a unique `utax_key` text property
    on Contacts and Deals; Monid key, dashboard run cap, MONID_TOOLS with max_usd.
 6. (From the e2e READY) the first CEO digest waits CEO_DIGEST_HOURS after boot.
+
+## Task 11: voice transcription (2026-11-07, contract v1.7.5; small, blocks /talk voice mode)
+- openai_voice.create_session: add `"input_audio_transcription": {"model": OPENAI_TRANSCRIBE_MODEL}`
+  (default `whisper-1`) to the mint body, server-side like the instructions.
+- Return `realtime_url` in the `/api/voice/session` response: the SDP endpoint matching the
+  endpoint you minted on (beta: `https://api.openai.com/v1/realtime?model=<model>`), in one
+  constant, so a later GA switch changes only the gateway.
+- Add `OPENAI_TRANSCRIBE_MODEL` to .env.example. Mocked test only; the real call is UNVERIFIED
+  until a key exists.
