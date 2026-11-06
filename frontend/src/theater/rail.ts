@@ -71,8 +71,8 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
   const reached = new Map<string, Set<string>>(); // candidate → stages reached
   const furthest = new Map<string, number>(); // candidate → furthest stage rank
   const seen = new Set<number>();
-  const lastTax = new Map<string, number>(); // case → franchise tax saved
-  const sent = new Set<string>();
+  const lastTax = new Map<string, number>(); // case → saving from its latest valid tax.computed
+  const sentSaving = new Map<string, number>(); // case → saving as of its latest memo.sent
   const status = new Map<string, string>();
   const costs: string[] = [];
 
@@ -110,13 +110,13 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
         const t = num(p.total_cents);
         const fee = num(p.annual_report_fee_cents);
         if (!c) break;
-        // The latest computation wins; a malformed one clears the case's saving instead of keeping a stale one.
+        // Gateway parity (contract v1.7.1): a malformed later computation keeps the last valid value.
         if (a !== null && t !== null && fee !== null && a >= 0 && t >= fee && fee >= 0) lastTax.set(c, Math.max(0, a - (t - fee)));
-        else lastTax.delete(c);
         break;
       }
       case "memo.sent":
-        if (c) sent.add(c);
+        // A case's saving is the tax.computed preceding its latest memo.sent.
+        if (c) sentSaving.set(c, lastTax.get(c) ?? 0);
         break;
       case "case.status":
         if (c && typeof p.to === "string") status.set(c, p.to);
@@ -137,8 +137,8 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
   hiring.awaiting = [...furthest.values()].filter((r) => r === STAGE_RANK.shortlisted).length;
 
   let saved = 0;
-  for (const c of sent) {
-    const next = saved + (lastTax.get(c) ?? 0);
+  for (const v of sentSaving.values()) {
+    const next = saved + v;
     if (Number.isSafeInteger(next)) saved = next; // an absurd value can never break the money panel
   }
   const blocked = [...status.values()].filter((s) => s === "BLOCKED").length;

@@ -440,15 +440,15 @@ describe("mapping details", () => {
         ev(2, "tool.bought", { tool: "free tool", provider: "local" }, { actor: "mkt", case_id: null }),
         ev(3, "cost.booked", { provider: "openrouter", model: "m", estimated: true }, { case_id: null, cost_usd: "1E-7" }),
         ev(4, "case.not_eligible", { reason: "not Delaware" }),
-        ev(5, "phone.checked", { screenshot_url: "local://s.png", rendered_ok: false }, { actor: "qa" }),
+        ev(5, "phone.checked", { rendered_ok: false, status_note: "blank screen" }, { actor: "qa" }),
       ],
       quiet,
     );
     expect(skipped).toMatchObject([{ eventId: 2, reason: "bad_payload", detail: "cost_usd: required" }]);
     const texts = content(steps).map((s) => s.text);
-    expect(texts).toEqual(["Apify actor · $1.50", "$0.0000001", "not eligible", "Memo failed to render on phone"]);
+    expect(texts).toEqual(["Apify actor · $1.50", "$0.0000001", "not eligible", "Memo failed to render on a cloud phone"]);
     expect(steps.find((s) => s.eventId === 3)?.meta?.cost_usd).toBe("0.0000001");
-    expect(steps.at(-1)).toMatchObject({ action: "circle", meta: { screenshot_url: "local://s.png" } });
+    expect(steps.at(-1)).toMatchObject({ action: "circle", meta: { status_note: "blank screen" } });
   });
 
   it("v1.4 case.flagged puts an amber chip on the case card (QA cursor); a case is required", () => {

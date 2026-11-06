@@ -120,15 +120,13 @@ const defaultLog = (s: SkippedEvent) =>
  * stream resumed mid-night still shows masked names, and `lastId` from
  * `last_event_id` when it does not want to replay history.
  */
-export function startScript(seed: { caseNames?: Record<string, string>; lastId?: number | string } = {}): ScriptCursor {
+export function startScript(seed: { caseNames?: Record<string, string>; lastId?: number } = {}): ScriptCursor {
   const caseNames: Record<string, string> = Object.create(null);
   for (const [id, name] of Object.entries(seed.caseNames ?? {})) caseNames[id] = name;
-  // A seed may come from localStorage as a string ("57"); anything else that isn't a
-  // non-negative integer starts from 0 and says so (it would replay history).
-  const raw = typeof seed.lastId === "string" && /^\d+$/.test(seed.lastId.trim()) ? Number(seed.lastId.trim()) : seed.lastId;
-  const valid = typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0;
+  // A seed that isn't a non-negative integer starts from 0 and says so (it would replay history).
+  const valid = seed.lastId !== undefined && Number.isSafeInteger(seed.lastId) && seed.lastId >= 0;
   if (seed.lastId !== undefined && !valid) console.warn(`[theater] ignoring invalid lastId seed ${JSON.stringify(seed.lastId)}; starting from 0`);
-  const lastId = valid ? raw : 0;
+  const lastId = valid ? (seed.lastId as number) : 0;
   return { state: { camera: null, caseNames, onScreen: {}, approvalTypes: Object.create(null) }, lastId };
 }
 
@@ -471,7 +469,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       push({ target: "mail.compose", agent, action: "appear", text: `To: ${to} · Subject: ${subject}` });
       push({ target: "mail.memo", agent, action: "type", text: body });
       push({ target: "mail.send", agent, action: "click" });
-      push({ target: "mail.sent", agent: null, action: "appear", text: `✓ Sent · ${secs} s after last fact`, meta: { message_id: str(p, "message_id") } });
+      push({ target: "mail.sent", agent: null, action: "appear", text: `✓ Sent · ${secs} s after last fact`, meta: { message_id: str(p, "message_id"), memo_ref: strOrNull(p, "memo_ref") } });
       break;
     }
     case "law.searched": {
@@ -562,14 +560,15 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       break;
     }
     case "phone.checked": {
+      // v1.7: the screenshot is private (it shows the real outgoing mail); the card says what was checked.
       const ok = bool(p, "rendered_ok");
-      const shot = safeUrl(strOrNull(p, "screenshot_url"));
+      const note = strOrNull(p, "status_note");
       push({
         target: "phone.check",
         agent,
         action: ok ? "tick" : "circle",
-        text: ok ? "Memo renders on phone" : "Memo failed to render on phone",
-        meta: { screenshot_url: shot.url, screenshot_rejected: shot.rejected },
+        text: ok ? "Memo checked on a cloud phone" : "Memo failed to render on a cloud phone",
+        meta: { status_note: note },
       });
       break;
     }

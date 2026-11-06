@@ -59,7 +59,7 @@ describe("screen fold over the fixture script", () => {
     ]);
     expect(end.calendar.blocks.map((b) => b.text)).toEqual(["Team #7 · 15-min review"]);
     expect(end.search.results).toHaveLength(1);
-    expect(upTo(19).phone.check).toEqual({ ok: true, text: "Memo renders on phone" });
+    expect(upTo(19).phone.check).toEqual({ ok: true, text: "Memo checked on a cloud phone" });
     // A later screen call replaces the phone pane (event 24).
     expect(end.phone).toEqual({ dial: "5 min" });
   });

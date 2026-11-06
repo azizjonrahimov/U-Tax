@@ -161,7 +161,8 @@
 .theater .pane-fallback { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: calc(22px * var(--k)); font-weight: 800; border: 1px dashed var(--line); border-radius: 10px; }
 .theater .pane-fallback small { font-size: calc(13px * var(--k)); color: var(--dim); font-weight: 500; margin-top: 6px; }
 .theater .hidden-body { color: var(--amber); font-style: italic; }
-.theater .banner { position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 45; pointer-events: none; text-align: center; font-size: calc(44px * var(--k)); font-weight: 800; text-shadow: 0 0 40px rgba(255,77,61,.35); }
+.theater .banner { opacity: 0; transition: opacity .6s ease-out; position: absolute; left: 50%; top: 45%; transform: translate(-50%, -50%); z-index: 45; pointer-events: none; text-align: center; font-size: calc(44px * var(--k)); font-weight: 800; text-shadow: 0 0 40px rgba(255,77,61,.35); }
+.theater .banner.show { opacity: 1; }
 .theater .banner small { display: block; font-size: calc(16px * var(--k)); color: var(--dim); font-weight: 500; margin-top: 8px; }
 .theater .overlay small { display: block; font-size: calc(14px * var(--k)); color: var(--dim); font-weight: 500; margin-top: 6px; }
 
@@ -193,7 +194,7 @@
 .theater .hiring b { color: var(--text); font-weight: 500; }
 
 @media (prefers-reduced-motion: reduce) {
-  .theater .cur, .theater main, .theater .col, .theater .low, .theater .pane, .theater .btn, .theater .bar i, .theater .ctl button { transition: none; }
+  .theater .cur, .theater main, .theater .col, .theater .low, .theater .pane, .theater .btn, .theater .bar i, .theater .ctl button, .theater .banner { transition: none; }
   .theater .dot, .theater .wave i { animation: none; }
 }
 @media (max-width: 900px) {

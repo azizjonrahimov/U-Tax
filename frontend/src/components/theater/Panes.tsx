@@ -76,7 +76,7 @@ export function MailPane({ screen, typed }: { screen: ScreenState; typed: Typed 
       ) : (
         <>
           <div className="from" data-target="mail.message">
-            From: {m.from} · “{m.subject}”{view?.name ? ` · ${view.name}` : ""}
+            From: {m.from} · “{m.hidden ? "hidden: flagged by QA" : m.subject}”{view?.name ? ` · ${view.name}` : ""}
           </div>
           {m.hidden ? (
             <div className="body hidden-body">hidden: flagged by QA</div>

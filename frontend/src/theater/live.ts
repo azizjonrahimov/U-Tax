@@ -24,23 +24,26 @@ const withToken = (url: URL, token: string) => {
   return url.toString();
 };
 
-export const stateUrl = (e: Endpoints) => withToken(new URL("/api/state", e.base), e.token);
+/** Join like lib/api.ts does, so a path prefix in the base (a reverse proxy) is kept. */
+const api = (e: Endpoints, path: string) => new URL(`${e.base.replace(/\/+$/, "")}/api${path}`);
+
+export const stateUrl = (e: Endpoints) => withToken(api(e, "/state"), e.token);
 
 export function eventsUrl(e: Endpoints, afterId: number, limit = 500): string {
-  const u = new URL("/api/events", e.base);
+  const u = api(e, "/events");
   u.searchParams.set("after_id", String(afterId));
   u.searchParams.set("limit", String(limit));
   return withToken(u, e.token);
 }
 
 export function streamUrl(e: Endpoints, afterId: number): string {
-  const u = new URL("/api/events/stream", e.base);
+  const u = api(e, "/events/stream");
   u.searchParams.set("after_id", String(afterId));
   return withToken(u, e.token);
 }
 
 export function briefAudioUrl(e: Endpoints, eventId: number): string {
-  const u = new URL("/api/brief/audio", e.base);
+  const u = api(e, "/brief/audio");
   u.searchParams.set("event_id", String(eventId));
   return withToken(u, e.token);
 }
@@ -59,19 +62,37 @@ function isPage(v: unknown): v is EventsPage {
   return Array.isArray(p.data) && typeof p.has_more === "boolean" && Number.isSafeInteger(p.next_after_id);
 }
 
-/** Page through GET /api/events (replay and catch-up). Stops on a malformed page or a page that doesn't advance. */
-export async function fetchAllEvents(e: Endpoints, getJson: FetchJson, afterId = 0, maxPages = 200): Promise<UTaxEvent[]> {
-  const out: UTaxEvent[] = [];
+/**
+ * Page through GET /api/events (replay and catch-up). Stops on a malformed page or a
+ * page that doesn't advance; `truncated` says the page cap was hit with more to come.
+ */
+export async function fetchAllEvents(
+  e: Endpoints,
+  getJson: FetchJson,
+  afterId = 0,
+  maxPages = 200,
+): Promise<{ events: UTaxEvent[]; truncated: boolean }> {
+  const events: UTaxEvent[] = [];
   let after = afterId;
   for (let i = 0; i < maxPages; i++) {
     const page = await getJson(eventsUrl(e, after));
     if (!isPage(page)) throw new Error("malformed /api/events page");
-    out.push(...page.data);
-    if (!page.has_more || page.next_after_id <= after) break;
+    for (const ev of page.data) events.push(ev); // no push(...spread): pages can be large
+    if (!page.has_more || page.next_after_id <= after) return { events, truncated: false };
     after = page.next_after_id;
   }
-  return out;
+  return { events, truncated: true };
 }
+
+/** An HTTP error with its status, so the caller can tell a bad token from an outage. */
+export class HttpError extends Error {
+  constructor(public readonly status: number) {
+    super(`HTTP ${status}`);
+  }
+}
+
+/** 401/403 means the theater token is wrong: retrying forever would just look like an outage. */
+export const isAuthError = (e: unknown) => e instanceof HttpError && (e.status === 401 || e.status === 403);
 
 const int = (v: unknown, fallback = 0) => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : fallback);
 
@@ -94,26 +115,70 @@ export function numbersFromState(raw: unknown): FirmNumbers | null {
       tax_saved_cents: int(money.tax_saved_cents),
       spent_usd: typeof money.spent_usd === "string" && /^\d+(\.\d+)?$/.test(money.spent_usd) ? money.spent_usd : "0",
     },
-    // Theater token: counts only. "Shortlist ready" while shortlisted candidates still await a decision.
-    hiring: { applicants: int(hiring.applicants), screened: int(hiring.screened), shortlisted, hired, declined, awaiting: Math.max(0, shortlisted - hired - declined) },
+    // Theater token: counts only. "Shortlist ready" while shortlisted candidates still await a decision:
+    // the gateway's own `awaiting` when it sends one; otherwise an estimate from the cumulative counts.
+    hiring: {
+      applicants: int(hiring.applicants),
+      screened: int(hiring.screened),
+      shortlisted,
+      hired,
+      declined,
+      awaiting: typeof hiring.awaiting === "number" ? int(hiring.awaiting) : Math.max(0, shortlisted - hired - declined),
+    },
     queue: { waiting: int(queue.waiting), blocked: int(queue.blocked) },
   };
 }
 
-/** GET /api/state → script seed: masked names for known cases, and where the stream should resume. */
-export function seedFromState(raw: unknown): { caseNames: Record<string, string>; lastId: number } {
+export interface StateSeed {
+  caseNames: Record<string, string>;
+  /** Where the stream should resume; null when the gateway didn't say (never read as 0). */
+  lastId: number | null;
+  /** Case rows for the rail, so a reload shows cards that match the numbers. */
+  cases: { caseId: string; name: string; status?: string; flagged?: boolean }[];
+}
+
+/** GET /api/state → script and screen seed. */
+export function seedFromState(raw: unknown): StateSeed {
   const caseNames: Record<string, string> = Object.create(null);
-  if (typeof raw !== "object" || raw === null) return { caseNames, lastId: 0 };
+  const cases: StateSeed["cases"] = [];
+  if (typeof raw !== "object" || raw === null) return { caseNames, lastId: null, cases };
   const s = raw as { last_event_id?: unknown; cases?: unknown };
   if (Array.isArray(s.cases)) {
     for (const c of s.cases) {
       if (typeof c === "object" && c !== null) {
-        const { case_id, masked_name } = c as Record<string, unknown>;
-        if (typeof case_id === "string" && typeof masked_name === "string") caseNames[case_id] = masked_name;
+        const { case_id, masked_name, status, flagged } = c as Record<string, unknown>;
+        if (typeof case_id === "string" && typeof masked_name === "string") {
+          caseNames[case_id] = masked_name;
+          cases.push({ caseId: case_id, name: masked_name, status: typeof status === "string" ? status : undefined, flagged: flagged === true || undefined });
+        }
       }
     }
   }
-  return { caseNames, lastId: int(s.last_event_id) };
+  const id = s.last_event_id;
+  return { caseNames, lastId: typeof id === "number" && Number.isSafeInteger(id) && id >= 0 ? id : null, cases };
+}
+
+/** How often live mode checks /api/state, independent of events (liveness + store resets). */
+export const WATCHDOG_MS = 15_000;
+
+export type LiveVerdict = "ok" | "resync" | "reconnect";
+
+/**
+ * The live watchdog's decision on each /api/state poll.
+ * - The gateway's log went backwards (a reset or new data dir): resync from scratch.
+ *   The stream can't tell us: after a reset it drops every id at or below our old one.
+ * - The gateway is ahead of us and nothing arrived since the last poll, twice in a row:
+ *   the connection is half-open (a ": ping" comment fires no event), so reconnect.
+ */
+export function liveVerdict(input: { stateLastId: number | null; cursorLastId: number; messagesSinceLastPoll: number; stalledPolls: number }): {
+  verdict: LiveVerdict;
+  stalledPolls: number;
+} {
+  const { stateLastId, cursorLastId, messagesSinceLastPoll } = input;
+  if (stateLastId === null) return { verdict: "ok", stalledPolls: 0 };
+  if (stateLastId < cursorLastId) return { verdict: "resync", stalledPolls: 0 };
+  const stalled = stateLastId > cursorLastId && messagesSinceLastPoll === 0 ? input.stalledPolls + 1 : 0;
+  return stalled >= 2 ? { verdict: "reconnect", stalledPolls: 0 } : { verdict: "ok", stalledPolls: stalled };
 }
 
 /**
