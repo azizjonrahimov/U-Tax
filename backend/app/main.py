@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from app import __version__
 from app.api import HEARTBEAT_SECONDS, build_router
+from app.mcp import build_mcp_router
 from app.errors import install_error_handlers
 from app.gateway.perform import Gateway
 
@@ -93,6 +94,7 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
         return Health(status="ok", version=__version__)
 
     app.include_router(build_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]
+    app.include_router(build_mcp_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]
     app.state.utax = state
     return app
 
