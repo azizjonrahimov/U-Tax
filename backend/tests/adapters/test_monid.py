@@ -418,3 +418,35 @@ def test_validation_answers_do_not_leave_the_key_unsure(status):
         with pytest.raises(Rejected):
             buy.buy("enrichment", {}, key="k")
     assert len(calls) == 2
+
+
+def test_implausible_amounts_are_refused_before_anything_changes():
+    with pytest.raises(NotConfigured, match="1000"):
+        MonidToolBuy(KEY, tools={"e": {"provider": "exa", "endpoint": "s", "max_usd": "1e30"}})
+    calls, handler = counting(lambda r, n: (_ for _ in ()).throw(httpx.ReadTimeout("slow", request=r)))
+    buy = make(handler)
+    with pytest.raises(Unavailable):
+        buy.buy("enrichment", {}, key="k")
+    with pytest.raises(NotConfigured):
+        buy.resolve("k", "1e30", {})
+    assert "k" in buy._unsure and buy._spent[1] == 0
+
+
+def test_deep_input_is_rejected():
+    deep: dict = {}
+    node = deep
+    for _ in range(5000):
+        node["a"] = {}
+        node = node["a"]
+    with pytest.raises(Rejected):
+        make(lambda r: httpx.Response(200, json=completed())).buy("enrichment", deep, key="k")
+
+
+def test_ctrl_c_during_a_buy_is_not_swallowed():
+    def handler(request):
+        raise KeyboardInterrupt
+
+    buy = make(handler)
+    with pytest.raises(KeyboardInterrupt):
+        buy.buy("enrichment", {}, key="k")
+    assert "k" in buy._unsure and not buy._inflight

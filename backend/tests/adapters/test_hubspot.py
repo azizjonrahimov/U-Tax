@@ -248,3 +248,21 @@ def test_an_odd_record_id_is_unavailable(record_id):
     body = {"results": [{"id": record_id}]}
     with pytest.raises(Unavailable):
         make(lambda r: httpx.Response(200, json=body)).upsert_contact(CrmContact(key="case_7", label="Team #7"))
+
+
+def test_a_lost_reply_still_counts_as_the_furthest_stage():
+    seen: list[httpx.Request] = []
+    inner = store_handler([])
+
+    def handler(request):
+        seen.append(request)
+        if len(seen) == 1:
+            raise httpx.ReadTimeout("lost", request=request)
+        return inner(request)
+
+    crm = make(handler)
+    with pytest.raises(Unavailable):
+        crm.set_stage("deal:case_7", "call_booked")
+    crm.set_stage("deal:case_7", "memo_sent")  # late earlier stage: skipped
+    crm.set_stage("deal:case_7", "call_booked")  # the outbox retry still goes out
+    assert len(seen) == 2

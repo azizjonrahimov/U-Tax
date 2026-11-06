@@ -130,6 +130,8 @@ def _tools(raw: object) -> dict[str, dict]:
         ceiling = _money(spec["max_usd"], f"max_usd of '{name}'")
         if ceiling <= 0:
             raise NotConfigured(f"monid: max_usd of '{name}' must be above 0 (it is what the cap reserves)")
+        if ceiling > 1000:
+            raise NotConfigured(f"monid: max_usd of '{name}' is over $1000; that is not a data call")
         fields = spec.get("fields")
         if fields is not None and not (isinstance(fields, list) and all(isinstance(f, str) for f in fields)):
             raise NotConfigured(f"monid: fields of '{name}' must be a list of names")
@@ -204,13 +206,16 @@ class MonidToolBuy:
         the key and its reserved ceiling. Charged: resolve(key, "0.0400", output) books the cost
         and remembers the purchase, so the same key returns it instead of paying again."""
         amount = _money(cost_usd, "cost_usd") if cost_usd is not None else None  # parse before forgetting
+        if amount is not None and amount > 1000:
+            raise NotConfigured("monid: a data call costing over $1000 is not plausible; check the run")
+        formatted = _usd(amount) if amount is not None else None
         with self._lock:
             entry = self._unsure.pop(key, None)
             if entry is None:
                 return
             if amount is not None and amount > 0:
                 self._book(amount)
-                self._remember(key, entry[0], Purchase(result=result, cost_usd=_usd(amount), bought=True))
+                self._remember(key, entry[0], Purchase(result=result, cost_usd=formatted, bought=True))
 
     # ------------------------------------------------------------------ buying
 
@@ -224,7 +229,7 @@ class MonidToolBuy:
             raise Rejected(f"monid: '{tool}' takes only {sorted(spec['fields'])}")
         try:
             canonical = json.dumps(input, sort_keys=True, allow_nan=False)
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, RecursionError) as exc:
             raise Rejected("monid: input must be plain JSON (objects, lists, strings, finite numbers)") from exc
         input = json.loads(canonical)  # what is fingerprinted, checked and sent is the same JSON
         if _has_email(input):
@@ -260,6 +265,8 @@ class MonidToolBuy:
             with self._lock:
                 self._unsure[key] = (fp, ceiling)
                 self._inflight.pop(key, None)
+            if not isinstance(exc, Exception):
+                raise  # Ctrl-C / shutdown stays what it is
             raise Unsure(f"monid: unexpected {type(exc).__name__} after sending; it may be charged") from exc
         try:
             cost = cost_usd(run)

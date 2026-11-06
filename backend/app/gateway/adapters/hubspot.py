@@ -161,6 +161,6 @@ class HubSpotCRM:
         with self._lock:  # held across the call, so two drains can't send one deal backwards
             if rank >= 0 and self._reached.get(key, -1) > rank:
                 return  # a late retry of an earlier stage: the deal is already further along
-            self._upsert(DEALS, key, {"dealname": f"U-Tax {key}", "pipeline": self.pipeline, "dealstage": stage_id})
-            if rank >= 0:
+            if rank >= 0:  # recorded on attempt: a lost reply may still have landed at HubSpot
                 self._reached[key] = max(self._reached.get(key, -1), rank)
+            self._upsert(DEALS, key, {"dealname": f"U-Tax {key}", "pipeline": self.pipeline, "dealstage": stage_id})
