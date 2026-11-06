@@ -13,6 +13,7 @@ from app.gateway.templates import DISCLAIMER
 
 KEY = "dr_sk_test_0123456789"
 REF = "UTX-7F3A9C21"
+TASK = "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e"
 MEMO = (
     "Hi Acme,\n\nThanks for asking U-Tax for a checkup. Delaware lets a corporation compute its franchise tax\n"
     "- Authorized shares method: $85,165\n- Assumed par value capital method: $400\n"
@@ -50,8 +51,8 @@ def happy(seen: list[httpx.Request], *, statuses=("running", "completed"), outpu
         if request.method == "GET" and path == "/v1/devices":
             return httpx.Response(200, json={"items": list(devices), "pagination": {}})
         if request.method == "POST" and path == "/v1/tasks":
-            return httpx.Response(201, json={"id": "task-1", "status": "queued", "streamUrl": None})
-        if path == "/v1/tasks/task-1/status":
+            return httpx.Response(201, json={"id": TASK, "status": "queued", "streamUrl": None})
+        if path == f"/v1/tasks/{TASK}/status":
             if poll_error:
                 return httpx.Response(poll_error, json={"detail": "x"})
             status = next(polls, statuses[-1])
@@ -59,9 +60,9 @@ def happy(seen: list[httpx.Request], *, statuses=("running", "completed"), outpu
             if status in ("completed", "failed", "cancelled"):
                 body |= {"succeeded": succeeded, "output": output, "message": "done"}
             return httpx.Response(200, json=body)
-        if path == "/v1/tasks/task-1/screenshots":
+        if path == f"/v1/tasks/{TASK}/screenshots":
             return httpx.Response(200, json={"urls": list(urls)})
-        if path == "/v1/tasks/task-1/cancel":
+        if path == f"/v1/tasks/{TASK}/cancel":
             return httpx.Response(200, json={"status": "cancelling"})
         return httpx.Response(404, json={"title": "Not Found", "status": 404, "detail": path, "errors": []})
 
@@ -86,17 +87,32 @@ def test_success_opens_the_one_memo_and_returns_last_screenshot():
     assert set(body["outputSchema"]["required"]) == {"matches", "found_email", "text_readable", "disclaimer_visible"}
     assert post.headers["idempotency-key"] == f"phone:{REF}"
     assert REF in body["task"] and "$85,165" not in body["task"], "only the reference goes to Mobilerun"
-    assert ("POST", "/v1/tasks/task-1/cancel") not in paths(seen)
+    assert ("POST", f"/v1/tasks/{TASK}/cancel") not in paths(seen)
 
 
-def test_memo_without_a_single_reference_is_refused_before_any_call():
-    for body in ("Hi Acme,\nno reference here", f"Reference: {REF}\nReference: UTX-00000000"):
+def test_reference_comes_from_the_gateway_or_the_memo_footer_only():
+    # a token anywhere else in the body (client text could carry one) never counts
+    for body in ("Hi Acme,\nno reference here", f"Hi {REF},\nour company is {REF}\nthanks",
+                 f"Reference: {REF}\nmore text after it"):
         seen: list[httpx.Request] = []
         device, _ = make(happy(seen))
-        with pytest.raises(Rejected, match="reference"):
+        with pytest.raises(Rejected, match="Reference"):
             device.open_and_capture("m1", body)
         assert seen == []
     assert memo_reference(MEMO) == REF
+    assert memo_reference("no footer", reference="UTX-ABCDEF12") == "UTX-ABCDEF12"
+    with pytest.raises(Rejected):
+        memo_reference(MEMO, reference="utx-lowercase")
+
+
+def test_explicit_reference_is_what_the_phone_searches_for():
+    seen: list[httpx.Request] = []
+    device, _ = make(happy(seen))
+    device.open_and_capture("m1", "a memo without a footer", reference="UTX-ABCDEF12", key="phone:case_7:v2")
+    post = next(r for r in seen if r.method == "POST")
+    body = json.loads(post.content)
+    assert "UTX-ABCDEF12" in body["task"] and body["reasoning"] is False
+    assert post.headers["idempotency-key"] == "phone:case_7:v2"
 
 
 def test_gateway_key_is_used_when_given_and_sender_filter_reaches_the_prompt():
@@ -132,14 +148,15 @@ def test_found_but_unreadable_or_missing_disclaimer_is_not_rendered():
     ("completed", None, True),
     ("completed", GOOD_OUTPUT | {"found_email": False}, True),
     ("completed", GOOD_OUTPUT | {"matches": 3}, True),
+    ("completed", GOOD_OUTPUT | {"matches": True}, True),
 ])
 def test_any_other_ending_fails_closed_without_a_screenshot(final, output, succeeded):
     seen: list[httpx.Request] = []
     device, _ = make(happy(seen, statuses=(final,), output=output, succeeded=succeeded))
     with pytest.raises(TaskEnded):
         device.open_and_capture("m1", MEMO)
-    assert ("GET", "/v1/tasks/task-1/screenshots") not in paths(seen), "a failed run never returns a frame"
-    assert ("POST", "/v1/tasks/task-1/cancel") not in paths(seen), "an ended task is not cancelled"
+    assert ("GET", f"/v1/tasks/{TASK}/screenshots") not in paths(seen), "a failed run never returns a frame"
+    assert ("POST", f"/v1/tasks/{TASK}/cancel") not in paths(seen), "an ended task is not cancelled"
 
 
 def test_no_screenshot_fails_closed():
@@ -183,7 +200,7 @@ def test_poll_failure_after_start_cancels_the_task():
     device, _ = make(happy(seen, poll_error=503))
     with pytest.raises(Unavailable):
         device.open_and_capture("m1", MEMO)
-    assert ("POST", "/v1/tasks/task-1/cancel") in paths(seen)
+    assert ("POST", f"/v1/tasks/{TASK}/cancel") in paths(seen)
 
 
 def test_slow_task_times_out_and_is_cancelled():
@@ -192,14 +209,14 @@ def test_slow_task_times_out_and_is_cancelled():
     with pytest.raises(Unavailable, match="still running"):
         device.open_and_capture("m1", MEMO)
     assert clock.now >= 12
-    assert ("POST", "/v1/tasks/task-1/cancel") in paths(seen)
+    assert ("POST", f"/v1/tasks/{TASK}/cancel") in paths(seen)
 
 
 def test_two_phase_start_then_finish():
     seen: list[httpx.Request] = []
     device, _ = make(happy(seen, statuses=("running", "completed")))
     task_id = device.start("m1", MEMO)
-    assert task_id == "task-1"
+    assert task_id == TASK
     assert device.finish(task_id) is None  # still running
     assert device.finish(task_id).rendered_ok is True
 
@@ -238,4 +255,48 @@ def test_contract_style_device_check(tmp_path):
     assert isinstance(check.screenshot_url, str) and isinstance(check.rendered_ok, bool)
     faults.add(Unavailable())
     with pytest.raises(Unavailable):
-        port.open_and_capture("local-msg-1", f"x {REF}")
+        port.open_and_capture("local-msg-1", f"x\nReference: {REF}")
+
+
+def test_post_timeout_recovers_the_task_by_key_and_cancels_it():
+    seen: list[httpx.Request] = []
+    inner = happy(seen)
+    posts = {"n": 0}
+
+    def handler(request):
+        if request.method == "POST" and request.url.path == "/v1/tasks":
+            posts["n"] += 1
+            if posts["n"] == 1:
+                raise httpx.ReadTimeout("slow", request=request)
+        return inner(request)
+
+    device, _ = make(handler)
+    with pytest.raises(Unavailable, match="timed out"):
+        device.open_and_capture("m1", MEMO)
+    keys = [r.headers["idempotency-key"] for r in seen if r.method == "POST" and r.url.path == "/v1/tasks"]
+    assert len(set(keys)) == 1, "the recovery POST reuses the same Idempotency-Key"
+    assert ("POST", f"/v1/tasks/{TASK}/cancel") in paths(seen)
+
+
+def test_screenshot_failure_after_completion_does_not_cancel():
+    seen: list[httpx.Request] = []
+    inner = happy(seen)
+
+    def handler(request):
+        if request.url.path.endswith("/screenshots"):
+            seen.append(request)
+            return httpx.Response(503, json={"detail": "x"})
+        return inner(request)
+
+    device, _ = make(handler)
+    with pytest.raises(TaskEnded, match="screenshots unavailable"):
+        device.open_and_capture("m1", MEMO)
+    assert ("POST", f"/v1/tasks/{TASK}/cancel") not in paths(seen)
+
+
+@pytest.mark.parametrize("bad", ["task-1", "../devices", "182bd5e5-6e1a-4fe4-a799-aa6d9a6ab26e\x00"])
+def test_task_ids_must_be_uuids(bad):
+    device, _ = make(happy([]))
+    with pytest.raises(Unavailable, match="task id"):
+        device.finish(bad)
+    device.cancel(bad)  # best effort: never raises

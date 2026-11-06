@@ -13,8 +13,8 @@ items, 408 after 300 s; https://docs.apify.com/api/v2):
   to Delaware's own domains (Google doesn't strictly honour `site:`). Results are cached for
   6 h by normalized query, so Tax's near-identical queries don't start a paid run each time.
 
-Spend bounds per run: `timeout`, `memory` and `maxItems`; `maxTotalChargeUsd` is sent too but
-only binds pay-per-event actors (cheerio-scraper bills compute units: timeout x memory bounds it).
+Spend bounds per run: `timeout`, `memory`, `maxItems` (binds pay-per-result actors) and
+`maxTotalChargeUsd` (caps all pricing models, per the run-sync reference).
 Input fields are from each actor's published input schema (default build), the organicResults
 shape from its readme, read on 2026-11-07.
 
@@ -59,8 +59,9 @@ PAGE_FUNCTION = (
     "  return { url: request.loadedUrl || request.url, html: String(body) };\n"
     "}"
 )
-_OPERATORS = re.compile(r"(?i)\b(?:site|inurl|intitle|intext|filetype|related|cache):\S*|\bOR\b|\bAND\b|[\"'()|]|(?<!\w)-\w*")
-_NOISE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\$?\d[\d,.]{3,}")  # emails, client figures
+_OPERATORS = re.compile(
+    r"(?i)\b(?:all)?(?:site|inurl|intitle|intext|inanchor|filetype|related|cache|before|after|define|info):\S*"
+    r"|\bAROUND\(\d*\)|\bOR\b|\bAND\b|[\"'()|*~]|(?<!\w)-\w*")
 
 
 def _retry_after(response: httpx.Response) -> float | None:
@@ -91,17 +92,27 @@ def _map_error(response: httpx.Response) -> PortError:
     return Rejected(f"apify {status} ({what})")  # 400 bad input, 402 out of credits, 404 no actor
 
 
+def _keep(word: str) -> bool:
+    """Drop anything that could be a client detail: emails, money, long or dashed numbers."""
+    return not ("@" in word or "$" in word or re.search(r"\d{4,}|\d[-.,/]\d|\d-", word))
+
+
 def clean_query(query: str) -> str:
-    """The agent's words only: no search operators, no emails or client figures, at most
-    MAX_QUERY_WORDS words."""
-    text = _NOISE.sub(" ", _OPERATORS.sub(" ", query or ""))
-    return " ".join(text.split()[:MAX_QUERY_WORDS])
+    """The agent's words only: no search operators, no emails, amounts or ID-like numbers
+    (section numbers like "503" stay), at most MAX_QUERY_WORDS words."""
+    words = [w for w in _OPERATORS.sub(" ", query or "").split() if _keep(w)]
+    return " ".join(words[:MAX_QUERY_WORDS])
 
 
 def _is_law_host(url: str) -> bool:
+    if "\\" in url or any(ch.isspace() for ch in url):  # browsers read "\" as "/": host confusion
+        return False
     try:
         parts = urlsplit(url)
+        port = parts.port
     except ValueError:
+        return False
+    if parts.username or parts.password or "@" in parts.netloc or port not in (None, 443):
         return False
     host = (parts.hostname or "").lower()
     return parts.scheme == "https" and (host == LAW_DOMAIN or host.endswith("." + LAW_DOMAIN))
