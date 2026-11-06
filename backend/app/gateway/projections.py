@@ -33,6 +33,8 @@ TRANSITIONS: dict[str, set[str]] = {
     "BLOCKED": {"INTAKE_PENDING", "READY", "NOT_ELIGIBLE"},
 }
 
+_STAGE_RANK = {"applicant": 0, "screened": 1, "shortlisted": 2, "declined": 3, "hired": 3}
+
 # Event types that count against an action type's hourly cap.
 CAP_EVENTS = {
     "email": ("memo.sent", "client.asked", "case.not_eligible"),
@@ -66,12 +68,14 @@ class Case:
     unrealistic: list[str] = field(default_factory=list)
     asks: int = 0
     asked_after_text: int = 0  # len(texts) when the last ask went out
+    last_ask_ts: str | None = None
     result: dict[str, Any] | None = None
     result_version: int = 0
     qa_version: int = 0
     qa_checks: list[dict] = field(default_factory=list)
     memo_message_id: str | None = None
     memo_version: int = 0
+    memo_ts: str | None = None
     call: dict[str, Any] | None = None
     blocked_reason: str | None = None
     not_eligible_reason: str | None = None
@@ -136,6 +140,8 @@ class State:
 
     @property
     def tax_saved_cents(self) -> int:
+        """Contract §4: Σ over sent cases of (authorized_method_cents − total_cents).
+        (Proposed to the controller: exclude the fee and clamp at 0; see READY notes.)"""
         return sum(c.result["authorized_method_cents"] - c.result["total_cents"]
                    for c in self.cases.values()
                    if c.result and c.memo_message_id is not None)
@@ -175,6 +181,8 @@ class State:
         for action_type, types in CAP_EVENTS.items():
             if e.type in types and e.status == "ok":
                 self.cap_log[action_type].append(e.ts)
+        if e.type == "hr.applicant" and (e.private or {}).get("questionnaire"):
+            self.cap_log["email"].append(e.ts)  # the questionnaire auto-reply is outbound mail
         handler = getattr(self, "_on_" + e.type.replace(".", "_"), None)
         if handler is not None:
             handler(e)
@@ -229,6 +237,7 @@ class State:
         if case is not None:
             case.asks += 1
             case.asked_after_text = len(case.texts)
+            case.last_ask_ts = e.ts
 
     def _on_case_status(self, e: Event) -> None:
         case = self._case(e)
@@ -271,6 +280,7 @@ class State:
         if case is not None and e.status == "ok":
             case.memo_message_id = e.payload["message_id"]
             case.memo_version = case.facts_version
+            case.memo_ts = e.ts
 
     def _on_call_booked(self, e: Event) -> None:
         case = self._case(e)
@@ -326,6 +336,10 @@ class State:
         if to == "AUTO":
             self.trust_auto_since[action_type] = e.ts
             self.trusted_once.add(action_type)
+            # requests still waiting for this type are moot once it runs on its own
+            for approval in self.approvals.values():
+                if approval.action_type == action_type and approval.decision is None:
+                    approval.decision = "superseded"
 
     def _hr(self, e: Event, stage: str) -> None:
         cid = e.payload["candidate_id"]
@@ -335,7 +349,9 @@ class State:
         if private.get("sender_key"):  # applicant mail: gateway-only contact details
             cand["sender_key"] = private["sender_key"]
             cand["reply_to"] = private.get("reply_to")
-        cand["stage"] = stage
+        # stages only move forward: a questionnaire reply never demotes a shortlisted person
+        if _STAGE_RANK.get(stage, 0) >= _STAGE_RANK.get(cand.get("stage"), -1):
+            cand["stage"] = stage
         if stage not in cand["stages"]:
             cand["stages"].add(stage)
             key = {"applicant": "applicants", "screened": "screened",

@@ -65,8 +65,23 @@ def _squash(text: str) -> str:
 
 
 def quote_found(quote: str, texts: list[str]) -> bool:
+    """The quote appears verbatim as whole tokens: "1" is not found in "10,000,000",
+    "$500" is not found in "$500,000" (case and whitespace aside)."""
     q = _squash(quote)
-    return bool(q) and any(q in _squash(t) for t in texts)
+    if not q:
+        return False
+    pattern = re.compile(r"(?<!\w)(?<!\d[,.])" + re.escape(q) + r"(?!\w)(?![,.]\d)")
+    return any(pattern.search(_squash(t)) for t in texts)
+
+
+def matches_mentions(fact: str, value: Decimal, texts: list[str]) -> bool:
+    """The parsed value is a number the client actually wrote for this fact: one of the
+    numbers labelled with it, or (when nothing is labelled) one of the numbers present."""
+    all_mentions = [m for t in texts for m in mentions(t)]
+    labelled = {m.value for m in all_mentions if m.label == fact}
+    if labelled:
+        return value in labelled
+    return value in {m.value for m in all_mentions}
 
 
 @dataclass(frozen=True)
@@ -163,21 +178,28 @@ def check_facts(
             if fact not in OPTIONAL:
                 out.missing.append(fact)
             continue
+        # Problems are fixed wording per fact: the agent's quote never reaches the client.
         if not quote_found(quote, texts):
             out.missing.append(fact)
-            out.problems.append(f"we couldn't find \"{quote}\" for {labels[fact]} in your email")
+            out.problems.append(f"we couldn't find your {labels[fact]} in your email")
             continue
         try:
             value = _parse_fact(fact, quote)
         except ParseError:
             out.missing.append(fact)
-            out.problems.append(f"\"{quote}\" for {labels[fact]} isn't one clear number")
+            out.problems.append(f"your {labels[fact]} isn't one clear number")
             continue
+        natural = Decimal(value) / (100 if fact in ("gross_assets", "gross_receipts") else 1)
         if fact in ("authorized_shares", "issued_shares", "gross_assets") and _conflict(
-            fact, Decimal(value) / (100 if fact == "gross_assets" else 1), texts
+            fact, natural, texts
         ):
             out.missing.append(fact)
             out.problems.append(f"your email gives more than one number for {labels[fact]}")
+            continue
+        if fact in ("authorized_shares", "issued_shares", "gross_assets") and \
+                not matches_mentions(fact, natural, texts):
+            out.missing.append(fact)
+            out.problems.append(f"we couldn't match your {labels[fact]} to your email")
             continue
         values[fact] = value
         out.quotes[fact] = quote
@@ -191,8 +213,7 @@ def check_facts(
         if quote:
             if not quote_found(quote, texts):
                 out.missing.append(fact)
-                out.problems.append(f"we couldn't find \"{quote}\" in your email")
-                continue
+                continue  # a yes/no fact is simply re-asked; no agent text goes back
             out.quotes[fact] = quote
         values[fact] = given
 
@@ -211,9 +232,8 @@ def check_facts(
                 annual_report_fee=FeeQuote(0, "precheck"),
             )
         except ValidationError as exc:
-            field_name = "gross_assets" if exc.field == "gross_assets" else exc.field
-            if field_name not in out.missing:
-                out.missing.append(field_name)
+            if exc.field not in out.missing:
+                out.missing.append(exc.field)
             out.problems.append(exc.message)
         if values["authorized_shares"] > MAX_SHARES or values["issued_shares"] > MAX_SHARES:
             out.unrealistic.append("shares over 1 billion")

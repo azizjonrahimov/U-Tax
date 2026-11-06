@@ -39,5 +39,6 @@ class EventStorePort(Protocol):
 
     def last_id(self) -> int: ...
 
-    def export_jsonl(self, path: str) -> int:
-        """Write every event's full record, one JSON object per line. Returns the count."""
+    def export_jsonl(self, path: str, *, include_private: bool = False) -> int:
+        """One JSON object per line: public envelopes, or full records for a private
+        backup. Returns the count."""

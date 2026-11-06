@@ -35,19 +35,39 @@ class JsonlEventStore:
             return
         raw = self.path.read_bytes()
         self._needs_newline = bool(raw) and not raw.endswith(b"\n")
-        for n, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
+        lines = raw.decode("utf-8", errors="replace").splitlines()
+        last_real = max((i for i, line in enumerate(lines) if line.strip()), default=-1)
+        for n, line in enumerate(lines, start=1):
             if not line.strip():
                 continue
             try:
                 event = Event.from_record(json.loads(line))
-            except (ValueError, KeyError, TypeError):
-                log.warning("skipping unreadable event line %d in %s", n, self.path)
-                continue
+            except (ValueError, KeyError, TypeError) as exc:
+                if n - 1 == last_real:  # a torn final line from a crash mid-write
+                    log.warning("cutting torn last line %d from %s", n, self.path)
+                    self._cut_torn_tail(raw)
+                    continue
+                # corruption in the middle would silently change every projection
+                raise EventWriteError(f"{self.path}: unreadable event at line {n}") from exc
             if self._events and event.id <= self._events[-1].id:
                 raise EventWriteError(f"{self.path}: ids not increasing at line {n}")
             self._events.append(event)
             if event.idempotency_key:
                 self._by_key[event.idempotency_key] = event
+
+    def _cut_torn_tail(self, raw: bytes) -> None:
+        """Truncate the file to the end of the last complete line, so the torn fragment
+        never ends up in the middle of the log once new events are appended."""
+        body = raw.rstrip(b"\n")
+        keep = body.rfind(b"\n") + 1  # 0 when the torn line is the only line
+        try:
+            with self.path.open("r+b") as fh:
+                fh.truncate(keep)
+                fh.flush()
+                os.fsync(fh.fileno())
+        except OSError as exc:
+            raise EventWriteError(f"cannot repair torn tail of {self.path}: {exc}") from exc
+        self._needs_newline = False
 
     def ensure_writable(self) -> None:
         try:
@@ -87,13 +107,24 @@ class JsonlEventStore:
                        for e in events)
         if self._needs_newline:
             data = "\n" + data
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        size = self.path.stat().st_size if self.path.exists() else 0
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8", newline="\n") as fh:
                 fh.write(data)
                 fh.flush()
                 os.fsync(fh.fileno())
         except OSError as exc:
+            # All or nothing: cut back to the old end so a torn or unsynced batch can't
+            # merge with the next one or come back to life with reused ids.
+            try:
+                with self.path.open("r+b") as fh:
+                    fh.truncate(size)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+            except OSError:
+                log.error("could not roll back %s after a failed write", self.path)
+                self._needs_newline = True  # never glue the next batch onto a torn line
             raise EventWriteError(f"event write failed: {exc}") from exc
         self._needs_newline = False
 
@@ -108,11 +139,14 @@ class JsonlEventStore:
     def last_id(self) -> int:
         return self._events[-1].id if self._events else 0
 
-    def export_jsonl(self, path: str) -> int:
+    def export_jsonl(self, path: str, *, include_private: bool = False) -> int:
+        """Replay export. Public envelopes by default (safe for the repo's replay/ folder);
+        `include_private=True` only for a full backup that stays off git."""
         events = list(self.since(0))
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("w", encoding="utf-8", newline="\n") as fh:
             for e in events:
-                fh.write(json.dumps(e.record(), ensure_ascii=False, separators=(",", ":")) + "\n")
+                rec = e.record() if include_private else e.public()
+                fh.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
         return len(events)

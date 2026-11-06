@@ -148,7 +148,8 @@ def test_applicant_mail_is_masked_and_gets_the_questionnaire(h):
     public = json.dumps(applicant.public())
     for leak in ("ann@example.com", "555-0100", "123-45-6789"):
         assert leak not in public
-    assert "EA with 6 years" in applicant.payload["note"]
+    assert applicant.payload["note"] == "EA · 6 yrs"  # credentials only, no free text
+    assert "EA with 6 years" in applicant.private["text"]
     assert wakes == ["New applicant cand_1"]
     # the CEO approves: the gateway itself sends the questionnaire
     approval = h.events("approval.requested")[0].payload["approval_id"]

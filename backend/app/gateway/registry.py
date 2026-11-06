@@ -44,10 +44,6 @@ def build_port(name: str, settings: Settings):
     choice = settings.adapters.get(name, "local")
     if choice in ("local", "none"):
         return _local(name, settings)
-    if name == "voice" and choice == "openai":
-        from app.gateway.adapters.openai_voice import OpenAIVoice  # task 6
-
-        return OpenAIVoice(settings.openai_api_key)
     if choice in SPONSORS.get(name, ()):
         raise AdapterNotReady(f"ADAPTER_{name.upper()}={choice}: the sponsor adapter isn't "
                               "built yet (Saturday); use local")

@@ -47,14 +47,35 @@ class PostgresEventStore:
         self._conn = None
         self._connect()
 
+    WRITER_LOCK = 0x7574_6178  # "utax": one writing gateway per database
+
     def _connect(self):
         import psycopg
 
         try:
-            self._conn = psycopg.connect(self._dsn, autocommit=False)
+            conn = psycopg.connect(self._dsn, autocommit=False)
+            # Single writer (design): projections live in this process's memory, so a
+            # second instance (overlapping deploy, --workers 2) would fork case numbers.
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_try_advisory_lock(%s)", (self.WRITER_LOCK,))
+                (got,) = cur.fetchone()
+            conn.commit()
         except psycopg.Error as exc:
             raise EventWriteError(f"postgres unavailable: {exc}") from exc
+        if not got:
+            conn.close()
+            raise EventWriteError("another U-Tax gateway holds the writer lock on this database")
+        self._conn = conn
         return self._conn
+
+    def _drop(self) -> None:
+        """Close a broken connection (don't leak it); the next call reconnects."""
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:  # noqa: BLE001 - it is already broken
+                pass
+        self._conn = None
 
     def _cursor(self):
         if self._conn is None or self._conn.closed:
@@ -70,7 +91,7 @@ class PostgresEventStore:
                     cur.execute("SELECT 1")
                 self._conn.rollback()
             except psycopg.Error as exc:
-                self._conn = None
+                self._drop()
                 raise EventWriteError(f"postgres unavailable: {exc}") from exc
 
     def append_batch(self, events: list[NewEvent], *, ts: str) -> list[Appended]:
@@ -104,7 +125,7 @@ class PostgresEventStore:
                 try:
                     self._conn.rollback()
                 except Exception:  # noqa: BLE001 - connection may already be gone
-                    self._conn = None
+                    self._drop()
                 raise EventWriteError(f"event write failed: {exc}") from exc
             return results
 
@@ -118,7 +139,7 @@ class PostgresEventStore:
                     rows = cur.fetchall()
                 self._conn.rollback()
             except psycopg.Error as exc:
-                self._conn = None
+                self._drop()
                 raise EventWriteError(f"postgres read failed: {exc}") from exc
         return [_row_to_event(r) for r in rows]
 
@@ -145,13 +166,14 @@ class PostgresEventStore:
                     (value,) = cur.fetchone()
                 self._conn.rollback()
             except psycopg.Error as exc:
-                self._conn = None
+                self._drop()
                 raise EventWriteError(f"postgres read failed: {exc}") from exc
         return int(value)
 
-    def export_jsonl(self, path: str) -> int:
+    def export_jsonl(self, path: str, *, include_private: bool = False) -> int:
         events = list(self.since(0))
         with open(path, "w", encoding="utf-8", newline="\n") as fh:
             for e in events:
-                fh.write(json.dumps(e.record(), ensure_ascii=False, separators=(",", ":")) + "\n")
+                rec = e.record() if include_private else e.public()
+                fh.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":")) + "\n")
         return len(events)

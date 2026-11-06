@@ -327,6 +327,7 @@ def test_scrape_failure_falls_back_to_the_snapshot(h):
 
 
 def test_crm_failure_never_blocks_and_retries_later(h):
+    h.gw.OUTBOX_BACKOFF = (0, 0, 0, 0)  # retry at once in the test
     h.ports.crm.faults.add(Unavailable())
     case_id = h.to_sent()
     assert h.gw.state.cases[case_id].status == "SENT"
@@ -403,7 +404,13 @@ def test_gateway_books_spend(h):
                              "estimated": True}
     assert event.cost_usd == data["cost_usd"]
     h.ok("book_spend", provider="openrouter", model="x", cost_usd="0.0100")
-    h.ok("book_spend", provider="naive", model="vetta/auto", consumed_micro_usd=2023)
+    assert h.do("book_spend", provider="naive", model="vetta/auto",
+                consumed_micro_usd=2023).error["code"] == "bad_input"  # needs the usage id
+    h.ok("book_spend", provider="naive", model="vetta/auto", consumed_micro_usd=2023,
+         idempotency_key="naive-usage-evt-1")
+    h.ok("book_spend", provider="naive", model="vetta/auto", consumed_micro_usd=2023,
+         idempotency_key="naive-usage-evt-1")  # redelivered: booked once
+    assert len([e for e in h.events("cost.booked") if e.provider == "naive"]) == 1
     assert h.events("cost.booked")[-1].cost_usd == "0.0020"  # micro-USD converted in code
     money = h.gw.state.public()["money"]
     assert set(money["spent_by_provider"]) == {"openrouter", "naive"}
@@ -418,14 +425,20 @@ def test_tiny_costs_stay_fixed_point(h):
 
 
 def test_hr_flow_and_human_hire(h):
-    h.ok("hr_record", stage="applicant", candidate_id="cand_1", name_masked="Candidate A",
-         note="EA, 6 yrs")
-    h.ok("hr_record", stage="shortlisted", candidate_id="cand_1", name_masked="Candidate A",
+    h.ok("inject_email", **{"from": "ann@example.com", "subject": "gig", "inbox": "hiring",
+                            "body": "EA, 6 years of startup tax"})
+    h.ok("hr_record", stage="shortlisted", candidate_id="cand_1", name_masked="ignored",
          note="waiting on CEO")
+    assert h.events("hr.shortlisted")[0].payload["name_masked"] == "Candidate A"
+    assert h.do("hr_record", stage="screened", candidate_id="cand_9", name_masked="X",
+                note="").error["code"] == "not_found"  # no invented ids
+    # a sourced applicant may be recorded, outside the inbox's cand_N ids
+    h.ok("hr_record", stage="applicant", candidate_id="src_lee", name_masked="Candidate S",
+         note="referred")
     assert h.do("hr_record", stage="hired", candidate_id="cand_1", name_masked="A",
                 note="").status == "refused"  # agents can't hire
     h.ok("hr_hire", candidate_id="cand_1")
-    assert h.gw.state.hiring == {"applicants": 1, "screened": 0, "shortlisted": 1, "hired": 1}
+    assert h.gw.state.hiring == {"applicants": 2, "screened": 0, "shortlisted": 1, "hired": 1}
     assert h.events("hr.hired")[0].actor == "ceo"
 
 

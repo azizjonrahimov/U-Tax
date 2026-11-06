@@ -12,7 +12,9 @@ REDACTED = "[redacted]"
 DOT = "•"
 
 # 123-45-6789, 123 45 6789 (SSN) and 12-3456789 (EIN): always redacted.
-_FORMATTED_IDS = re.compile(r"(?<!\d)(?:\d{3}[- ]\d{2}[- ]\d{4}|\d{2}-\d{7})(?!\d)")
+_FORMATTED_IDS = re.compile(
+    r"(?<![\d.,])(?:\d{3}([- .–])\d{2}\1\d{4}|\d{2}[-– ]\d{7})(?![\d,]|\.\d)"
+)
 # A bare 9-digit run is only an id when a keyword says so: "100000000" alone is a
 # share count and must survive.
 _KEYWORD_ID = re.compile(
@@ -55,15 +57,41 @@ def mask_email(address: str) -> str:
     return f"{local[:1]}{DOT * 3}@{masked_domain}"
 
 
+_SECOND_LEVEL = {"co", "com", "org", "net", "ac", "gov", "edu"}  # acme.co.uk -> acme
+
+
 def company_label(address: str) -> str | None:
-    """The sender's company word from their domain (team7.dev -> team7); None for webmail."""
-    domain = address.partition("@")[2].lower()
-    if not domain:
+    """The sender's company word from their domain: team7.dev -> team7,
+    eng.acme.com -> acme, acme.co.uk -> acme; None for webmail."""
+    domain = address.partition("@")[2].lower().strip(".")
+    labels = [p for p in domain.split(".") if p]
+    if len(labels) < 2:
         return None
-    name = domain.split(".")[0]
+    labels = labels[:-1]  # drop the TLD
+    if len(labels) >= 2 and labels[-1] in _SECOND_LEVEL:
+        labels = labels[:-1]
+    name = labels[-1]
     if name in _FREE_MAIL or len(name) < 3:
         return None
     return name
+
+
+_GENERIC_LOCAL = {"founder", "founders", "hello", "info", "team", "admin", "contact", "ceo",
+                  "cfo", "cto", "finance", "accounts", "billing", "support", "mail", "office"}
+
+
+def sender_words(address: str) -> list[str]:
+    """Name-like words from the local part (jane.doe@ -> ["jane", "doe"]) to hide."""
+    local = address.partition("@")[0].lower()
+    return [w for w in re.split(r"[._+-]+", local)
+            if len(w) >= 3 and w.isalpha() and w not in _GENERIC_LOCAL]
+
+
+# "Acme Robotics Inc", "Acme Labs": capitalised words before a company suffix.
+_COMPANY_PHRASE = re.compile(
+    r"\b(?:[A-Z][\w&'-]*\s+){0,3}[A-Z][\w&'-]*,?\s+"
+    r"(?:Inc\.?|LLC|L\.L\.C\.|Corp\.?|Corporation|Co\.|Ltd\.?|Labs|Technologies|PBC)(?!\w)"
+)
 
 
 # optional country code, then 3-3-4: (415) 555-0100, 415.555.0100, +1 415 555 0100
@@ -85,10 +113,23 @@ def strip_contacts(text: str) -> str:
     return _PHONE.sub("[phone removed]", text)
 
 
-def mask_text(text: str, *, masked_name: str, company: str | None) -> str:
-    """Redact ids, mask email addresses, and replace the company word with the mask."""
+def mask_text(text: str, *, masked_name: str, company: str | None,
+              hide_words: list[str] | None = None) -> str:
+    """Redact ids, mask emails and phone numbers, and replace company and sender names.
+
+    Best effort against the design's #1 threat: numbers stay, names go. Company phrases
+    with a suffix ("Acme Robotics Inc") and the sender's own name words are replaced too.
+    """
     text, _ = redact_ids(text)
     text = _EMAIL.sub(lambda m: mask_email(m.group(0)), text)
+    text = _PHONE.sub("[phone hidden]", text)
+    replacement = masked_name or "[company]"
+    # "a Delaware Corp." describes the entity type, not a name: keep it (intake quotes it)
+    text = _COMPANY_PHRASE.sub(
+        lambda m: m.group(0) if re.fullmatch(r"(?i)delaware,?\s+\S+", m.group(0).strip())
+        else replacement, text)
     if company:
-        text = re.sub(rf"(?i)\b{re.escape(company)}\b", masked_name, text)
+        text = re.sub(rf"(?i)\b{re.escape(company)}\b", replacement, text)
+    for word in hide_words or []:
+        text = re.sub(rf"(?i)\b{re.escape(word)}\b", "[name]", text)
     return text
