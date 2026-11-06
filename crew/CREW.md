@@ -26,6 +26,7 @@ session start. Add rules at the end; never renumber.
 | stack | 2026-11-06 | chose "Next.js + FastAPI (recommended)" | Next.js/React/TypeScript/Tailwind in `frontend/`, Python FastAPI in `backend/` |
 | process | 2026-11-06 | chose "Hackathon-lite (recommended)" | the rules below in place of full trains |
 | repo | 2026-11-06 | chose "New standalone repo (recommended)" | this folder is its own git repo |
+| auto-decide | 2026-11-06 | "for the next times if I need to make a choice, do it yourself with recommended ones and continue building it and also use gstack skills and instructions to build the best version of this product" | the controller takes the recommended option on every decision and logs it in NOTES and the design doc; lanes send choices to the controller with a recommendation and keep building on that recommendation unless told otherwise |
 
 ## Rules
 
@@ -89,3 +90,14 @@ Number from 12, each with its date and the owner's words where there are any.
 14. **Owner instructions go in chat, with exact commands** (2026-11-06, `U-TAX-CLAUDE.md`:
     "The user doesn't read generated README files"). Anything the owner must do goes to the
     controller as numbered steps with exact commands.
+15. **gstack skills are the default toolset** (2026-11-06, owner: "use gstack skills and
+    instructions to build the best version of this product"). Before every READY, run
+    `/review` on your diff and fix what it finds; say "review: clean" or list what you
+    left and why. Use `/investigate` for any failing test or wrong output (root cause
+    first). frontend: run `/design-review` and `/qa` on the running theater (via the
+    gstack browser) before the screen and live slices' READYs. backend: `/qa` on the HTTP
+    surface once task 6 runs. agents: `/review` on prompts and config. Skills that push,
+    open PRs or deploy (`/ship`, `/land-and-deploy`) are the controller's, not lanes'.
+16. **Don't wait on the controller for choices.** Send the choice with your
+    recommendation, then keep building on the recommendation. The controller replies
+    only to change it.
