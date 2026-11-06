@@ -56,6 +56,7 @@ from app.gateway.ports import (
     PortError,
     Ports,
     Post,
+    RateLimited,
     Rejected,
     Slot,
     Unavailable,
@@ -96,6 +97,7 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "book_call": ("intake",), "phone_check": ("qa",), "post_social": ("mkt",),
     "draft_dm": ("mkt",), "hr_record": ("hr",), "firm_brief": ("cos",),
     "get_candidate": ("hr",), "flag_case": ("qa",),  # v1.4
+    "buy_tool": ("mkt",),  # v1.7.3: Monid data calls, allowlisted and capped
 }
 POST_MAX_CHARS = 255
 X_MAX_CHARS = 280
@@ -282,7 +284,10 @@ class Gateway:
         self._jobs_lock = threading.Lock()
         self._fee_refresh_lock = threading.Lock()
         self._epoch: str | None = None
-        self._law_inflight = 0  # law searches reserved but not yet recorded (cap, §6f)
+        self._booted_at = self._now()  # the first CEO digest waits a full period from here
+        self._law_inflight = 0
+        self._outbox_paused_until = 0.0  # a CRM rate limit pauses the whole outbox
+        self._outbox_limited: dict[str, int] = {}  # rate limits per job (then it backs off)
         self._fee_tried_at = 0.0
         self.state: State = rebuild(store.since(0))
         self.templates = Templates(settings.templates_dir, settings.memo_template_path)
@@ -304,6 +309,8 @@ class Gateway:
             "hr_record": self._hr_record,
             "get_candidate": self._get_candidate,
             "flag_case": self._flag_case,
+            "buy_tool": self._buy_tool,
+            "resolve_purchase": self._resolve_purchase,  # control: the CEO, not an agent
             "firm_brief": self._firm_brief,
             # gateway / control actions (contract §5, §6a-c): never callable by an agent token
             "inject_email": self._inject_email,
@@ -324,7 +331,12 @@ class Gateway:
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
         # reads that touch a slow port run before the lock is taken (contract §6f)
-        self._slow_reads: dict[str, Callable[[dict], dict]] = {"law_search": self._law_fetch}
+        self._slow_reads: dict[str, Callable[[dict], dict]] = {"law_search": self._law_fetch,
+                                                               "buy_tool": self._buy_fetch}
+        from app.gateway.adapters.local import _KeyedJson
+
+        self._buy_intents = _KeyedJson(settings.data_dir / "toolbuy-intents.json")
+        self._restore_toolbuy()
         self._outbox_tries: dict[str, tuple[int, float]] = {}
         self._outbox_inflight: set[str] = set()
         self._digest_backoff_until = 0.0
@@ -486,11 +498,6 @@ class Gateway:
                 log.exception("phone job failed to advance")
         # Outside the lock: a slow Naïve call or CRM mirror never blocks the next write.
         self._deliver_wakes(wakes)
-        if result.status == "done" and name not in self.READ_ONLY:
-            try:
-                self.drain_outbox()
-            except Exception:  # noqa: BLE001 - the action already landed
-                log.exception("outbox drain failed after %s", name)
         return result
 
     def _perform_locked(self, name: str, handler: Callable[[dict], dict],
@@ -1288,7 +1295,11 @@ class Gateway:
         last = next((e for e in reversed(list(self.store.since(0)))
                      if e.type == "ceo.notified" and e.payload["reason"] == "digest"), None)
         due = timedelta(hours=self.settings.ceo_digest_hours)
-        if last is not None and self._now() - parse_ts(last.ts) < due:
+        # the first digest is due CEO_DIGEST_HOURS after boot, never right after it (a demo
+        # restart must not mail the CEO)
+        anchor = max(parse_ts(last.ts), self._booted_at) if last is not None \
+            else self._booted_at
+        if self._now() - anchor < due:
             return {"sent": False, "reason": "not due"}
         text, counts = self._brief_text()
         since = last.id if last is not None else 0
@@ -1309,7 +1320,8 @@ class Gateway:
 
     def _period(self, since_id: int) -> dict[str, Any]:
         events = list(self.store.since(since_id))
-        spend = sum((Decimal(e.cost_usd) for e in events if e.cost_usd), Decimal(0))
+        spend = sum((Decimal(e.cost_usd) for e in events
+                     if e.cost_usd and e.type != "tool.bought"), Decimal(0))  # once, via cost.booked
         return {
             "clients_new": sum(1 for e in events if e.type == "case.status"
                                and e.payload["from"] == "NEW"),
@@ -1530,6 +1542,209 @@ class Gateway:
         return {"status": "NOT_ELIGIBLE", "message_id": sent.message_id}
 
     # ------------------------------------------------------------ tax tools
+
+    # ------------------------------------------------------------ buy_tool (v1.7.3)
+
+    _BUY_KEY = re.compile(r"[A-Za-z0-9_.:-]{1,120}")
+    BUY_INPUT_MAX = 2000  # characters of JSON: a data call needs a query, not a document
+    BUY_RESULT_KEPT = 20_000  # a result up to this size is kept (private) for repeats
+
+    @staticmethod
+    def _buy_fingerprint(tool: str, data: dict) -> str:
+        from app.gateway.adapters import _http
+
+        return _http.fingerprint(tool, json.dumps(data, sort_keys=True, allow_nan=False))
+
+    def _buy_problem(self, tool: Any, data: Any, key: Any) -> str | None:
+        if not isinstance(tool, str) or not tool or len(tool) > 80:
+            return "tool must be a tool name from MONID_TOOLS"
+        if not isinstance(data, dict):
+            return "input must be an object"
+        if not isinstance(key, str) or not self._BUY_KEY.fullmatch(key):
+            return "key must be 1-120 of A-Z a-z 0-9 _ . : -"
+        try:
+            text = json.dumps(data, sort_keys=True, allow_nan=False, ensure_ascii=False)
+        except (TypeError, ValueError, RecursionError):
+            return "input must be plain JSON"
+        if len(text) > self.BUY_INPUT_MAX:
+            return f"input is over {self.BUY_INPUT_MAX} characters"
+        import unicodedata
+
+        folded = unicodedata.normalize("NFKC", text)  # fullwidth digits and @ fold to ASCII
+        if has_email(folded) or has_phone(folded) or _CASE_REF.search(folded) \
+                or redact_ids(folded)[1]:
+            return ("input must not carry an email, a phone number, an SSN/EIN or a case id "
+                    "(public startup data only)")
+        return None
+
+    def _buy_fetch(self, args: dict) -> dict:
+        """buy_tool's slow half, before the lock. Fail closed before paying: the log must be
+        writable, the key's history is checked on the log, and an intent is written down
+        first, so a crash between Monid's charge and our event replays as 'unsure'."""
+        tool, data, key = args.get("tool"), args.get("input"), args.get("key")
+        problem = self._buy_problem(tool, data, key)
+        if problem:
+            return {"refused": problem}
+        port_key, fp = f"buy:{key}", self._buy_fingerprint(tool, data)
+        with self._lock:
+            self.store.ensure_writable()  # never pay for what can't be recorded
+            cap = self.settings.spend_cap_usd
+            if cap is not None and self.state.spent_usd() >= cap:
+                return {"refused": f"the firm's budget (SPEND_CAP_USD {cap}) is spent"}
+            known = self._done_from(f"tool:{port_key}")
+            unsure = self._done_from(f"tool:unsure:{port_key}")
+            resolved = self._done_from(f"tool:resolved:{port_key}")
+        if known is None and resolved is not None and resolved.status == "ok":
+            known = resolved  # the CEO found it charged: it is a purchase like any other
+        if known is not None:  # the log is the memory: a repeat never reaches Monid
+            if (known.private or {}).get("fingerprint") != fp:
+                return {"refused": "this key was used for a different purchase"}
+            return {"known": known, "port_key": port_key, "fingerprint": fp}
+        if unsure is not None and resolved is None:
+            return {"refused": f"purchase {key} may already be charged; the CEO resolves it "
+                               "(resolve_purchase) before it can run again"}
+        spec = getattr(self.ports.toolbuy, "tools", {}).get(tool) or {}
+        ceiling = str(spec.get("max_usd")) if spec.get("max_usd") is not None else None
+        self._buy_intents.put(port_key, {"tool": tool, "fingerprint": fp, "ceiling": ceiling,
+                                         "ts": iso_ts(self._now())})
+        try:
+            purchase = self.ports.toolbuy.buy(tool, data, port_key)
+        except PortError as err:
+            unsure_now = type(err).__name__ == "Unsure"
+            if not unsure_now:
+                self._buy_intents.put(port_key, None)  # proved not charged
+            return {"error": err.code, "message": str(err)[:200], "unsure": unsure_now,
+                    "fingerprint": fp, "port_key": port_key, "ceiling": ceiling,
+                    "retryable": err.retryable}
+        return {"purchase": purchase, "fingerprint": fp, "port_key": port_key}
+
+    def _buy_tool(self, args: dict) -> dict:
+        tool = _str(args, "tool", max_len=80)
+        key = _str(args, "key", max_len=120)
+        fetched = args.get("_prefetch") or {}
+        if fetched.get("refused"):
+            raise Refused("bad_input", fetched["refused"])
+        provider = self.ports.toolbuy.provider
+        if "known" in fetched:
+            known = fetched["known"]
+            return {"tool": tool, "key": key, "bought": (known.private or {}).get("bought", True),
+                    "cost_usd": known.cost_usd, "result": (known.private or {}).get("result"),
+                    "duplicate": True}
+        private = {"key": fetched.get("port_key"), "fingerprint": fetched.get("fingerprint")}
+        if "error" in fetched:
+            if fetched.get("unsure"):  # it may be charged: remembered across restarts
+                self._emit([NewEvent(type="tool.bought", actor="mkt", provider=provider,
+                                     status="failed", payload={"tool": tool, "provider": provider},
+                                     idempotency_key=f"tool:unsure:{fetched['port_key']}",
+                                     private={**private, "unsure": True,
+                                              "ceiling": fetched.get("ceiling")})])
+                self._buy_intents.put(fetched["port_key"], None)
+            raise (ToolError if fetched.get("retryable") and not fetched.get("unsure")
+                   else Refused)(fetched["error"], f"buy_tool: {fetched['message']}")
+        purchase = fetched["purchase"]
+        kept = None
+        try:
+            if len(json.dumps(purchase.result, ensure_ascii=False)) <= self.BUY_RESULT_KEPT:
+                kept = purchase.result
+        except (TypeError, ValueError):
+            kept = None
+        events = [NewEvent(type="tool.bought", actor="mkt", provider=provider,
+                           payload={"tool": tool, "provider": provider},
+                           cost_usd=purchase.cost_usd,
+                           idempotency_key=f"tool:{fetched['port_key']}",
+                           private={**private, "bought": purchase.bought, "result": kept})]
+        if purchase.bought:
+            events.append(NewEvent(type="cost.booked", actor="system", provider=provider,
+                                   payload={"provider": provider, "model": f"tool:{tool}",
+                                            "estimated": False},
+                                   cost_usd=purchase.cost_usd,
+                                   idempotency_key=f"cost:tool:{fetched['port_key']}"))
+        self._emit(events)
+        self._buy_intents.put(fetched["port_key"], None)
+        return {"tool": tool, "key": key, "bought": purchase.bought,
+                "cost_usd": purchase.cost_usd, "result": purchase.result}
+
+    def _resolve_purchase(self, args: dict) -> dict:
+        """POST /api/dev/... or the CEO console: an unsure purchase checked in Monid's
+        GET /v1/runs. `cost_usd` null = never charged (frees the key and its reservation);
+        a decimal = charged (booked once, remembered)."""
+        key = _str(args, "key", max_len=120)
+        port_key = key if key.startswith("buy:") else f"buy:{key}"
+        unsure = self._done_from(f"tool:unsure:{port_key}")
+        if unsure is None:
+            raise Refused("not_found", f"no unsure purchase {key}")
+        raw = args.get("cost_usd")
+        try:
+            cost = parse_usd(raw) if raw not in (None, "") else None
+        except (TypeError, ValueError, InvalidOperation) as err:
+            raise Refused("bad_input", f"bad cost: {err}") from err
+        provider = unsure.provider or self.ports.toolbuy.provider
+        tool = unsure.payload.get("tool", "?")
+        private = {"key": port_key, "fingerprint": (unsure.private or {}).get("fingerprint"),
+                   "resolved": True}
+        events = [NewEvent(type="tool.bought", actor="system", provider=provider,
+                           status="ok" if cost else "skipped",
+                           payload={"tool": tool, "provider": provider},
+                           cost_usd=usd_string(cost) if cost else None,
+                           idempotency_key=f"tool:resolved:{port_key}",
+                           private={**private, "bought": bool(cost)})]
+        if cost:
+            events.append(NewEvent(type="cost.booked", actor="system", provider=provider,
+                                   payload={"provider": provider, "model": f"tool:{tool}",
+                                            "estimated": False},
+                                   cost_usd=usd_string(cost),
+                                   idempotency_key=f"cost:tool:{port_key}"))
+        self._emit(events)
+        resolve = getattr(self.ports.toolbuy, "resolve", None)
+        if callable(resolve):
+            resolve(port_key, usd_string(cost) if cost else None)
+        return {"key": key, "charged": bool(cost)}
+
+    def _restore_toolbuy(self) -> None:
+        """Monid keeps purchases, unsure keys and today's spend in memory; replay them from
+        the log (and from intents a crash left behind) at boot, so a restart never re-buys a
+        key or forgets today's spend. Unsure ceilings count on their own day only."""
+        port = self.ports.toolbuy
+        needed = ("_remember", "_book", "_unsure", "_lock", "_spent_today")
+        if port.provider == "local":
+            return
+        if not all(hasattr(port, name) for name in needed):
+            log.error("toolbuy %s can't be restored (adapter changed?): today's spend and "
+                      "past purchases are not replayed", port.provider)
+            return
+        from app.gateway.ports import Purchase
+
+        today = self._now().date().isoformat()
+        try:
+            done: set[str] = set()
+            with port._lock:
+                for e in self.store.since(0):
+                    if e.type != "tool.bought":
+                        continue
+                    private = e.private or {}
+                    key, fp = private.get("key"), private.get("fingerprint")
+                    if not key or not fp:
+                        continue
+                    if e.status in ("ok", "skipped"):
+                        done.add(key)
+                        port._unsure.pop(key, None)
+                        if e.status != "ok" or not private.get("bought", True):
+                            continue
+                        port._remember(key, fp, Purchase(result=private.get("result"),
+                                                         cost_usd=e.cost_usd or "0", bought=True))
+                        if e.ts[:10] == today and e.cost_usd:
+                            port._spent_today()
+                            port._book(Decimal(e.cost_usd))
+                    elif private.get("unsure") and key not in done and e.ts[:10] == today:
+                        port._unsure[key] = (fp, Decimal(private.get("ceiling") or "0"))
+                for key, intent in (self._buy_intents.load() or {}).items():
+                    if not intent or key in done or key in port._unsure:
+                        continue
+                    if str(intent.get("ts", ""))[:10] == today:  # crashed mid-purchase
+                        port._unsure[key] = (intent["fingerprint"],
+                                             Decimal(intent.get("ceiling") or "0"))
+        except Exception:  # noqa: BLE001 - a bad record never stops the server
+            log.exception("toolbuy replay failed; today's Monid spend may be under-counted")
 
     def _law_searches_last_hour(self) -> int:
         hour_ago = self._now() - timedelta(hours=1)
@@ -2253,46 +2468,91 @@ class Gateway:
     def drain_outbox(self) -> None:
         """Mirror jobs (HubSpot): `crm.sync_requested` without `crm.synced`.
 
-        Runs outside the lock (CRM latency never blocks an agent), with per-job backoff,
-        and never blocks a client. Call it after actions and from a timer.
+        Runs from the tick only, outside the lock (CRM latency never touches a request or an
+        agent), with per-job backoff, and never blocks a client (task 10):
+        - a case's stage jobs go in order: a later stage waits while an earlier one of the
+          same case is still pending (in flight, backing off, or failed);
+        - a rate limit stops the whole batch and pauses the outbox for its Retry-After.
         """
+        now = time.monotonic()
+        if now < self._outbox_paused_until:
+            return
         with self._lock:
             jobs = []
-            now = time.monotonic()
+            held: set[str] = set()  # cases with an earlier stage still pending
             for sync_key, job in self.state.crm_pending.items():
                 case = self.state.cases.get(job["case_id"])
+                if case is None:
+                    continue
+                if case.case_id in held:
+                    continue
                 tries, last = self._outbox_tries.get(sync_key, (0, 0.0))
                 wait = self.OUTBOX_BACKOFF[min(tries, len(self.OUTBOX_BACKOFF) - 1)]
-                if case is not None and now - last >= wait and \
-                        sync_key not in self._outbox_inflight:
+                if tries < 3:  # a stage that keeps failing stops holding the later ones
+                    held.add(case.case_id)  # later stages of this case wait for this one
+                if now - last >= wait and sync_key not in self._outbox_inflight:
                     self._outbox_inflight.add(sync_key)  # claimed: no double mirror
                     jobs.append((sync_key, dict(job), case.case_id, case.masked_name))
-        for sync_key, job, case_id, masked_name in jobs:
-            try:
-                self.ports.crm.upsert_contact(CrmContact(key=case_id, label=masked_name))
-                self.ports.crm.set_stage(f"deal:{case_id}", job["stage"])
-                ok = True
-            except Exception as err:  # noqa: BLE001 - a mirror never fails the firm
-                log.warning("crm sync %s failed: %s", sync_key, err)
-                ok = False
+        done = 0
+        try:
+            for index, (sync_key, job, case_id, masked_name) in enumerate(jobs):
+                done = index
+                if not self._drain_one(sync_key, job, case_id, masked_name):
+                    return  # rate limited, the CRM is down, or the log is: stop the batch
+            done = len(jobs)
+        finally:  # every claimed job not processed is released, whatever happened
             with self._lock:
-                self._outbox_inflight.discard(sync_key)
+                for rest_key, *_ in jobs[done:]:
+                    self._outbox_inflight.discard(rest_key)
+
+    def _drain_one(self, sync_key: str, job: dict, case_id: str, masked_name: str) -> bool:
+        """One CRM job; False stops the batch."""
+        limited: RateLimited | None = None
+        down = False
+        try:
+            self.ports.crm.upsert_contact(CrmContact(key=case_id, label=masked_name))
+            self.ports.crm.set_stage(f"deal:{case_id}", job["stage"])
+            ok = True
+        except RateLimited as err:
+            limited, ok = err, False
+            log.warning("crm sync %s rate limited; outbox paused", sync_key)
+        except Exception as err:  # noqa: BLE001 - a mirror never fails the firm
+            log.warning("crm sync %s failed: %s", sync_key, err)
+            ok = False
+            down = isinstance(err, Unavailable)  # one timeout: don't wait on every job
+        with self._lock:
+            self._outbox_inflight.discard(sync_key)
+            if limited is not None:
+                self._outbox_paused_until = time.monotonic() + \
+                    min(max(limited.retry_after or 30.0, 1.0), 600.0)
+                hits = self._outbox_limited.get(sync_key, 0) + 1
+                self._outbox_limited[sync_key] = hits
+                if hits < 3:  # not this job's fault yet: no backoff step, no failure event
+                    return False
+                # the same job keeps hitting a limit: it backs off like a failure, so it
+                # can't stall every other case forever
+                self._outbox_limited.pop(sync_key, None)
                 tries, _ = self._outbox_tries.get(sync_key, (0, 0.0))
                 self._outbox_tries[sync_key] = (tries + 1, time.monotonic())
-                if not ok and sync_key in self.state.crm_failed:
-                    continue  # the failure is already on the log; just retry later
-                try:
-                    self._emit([NewEvent(
-                        type="crm.synced", actor="system", case_id=case_id,
-                        provider=self.ports.crm.provider, status="ok" if ok else "failed",
-                        payload={"object": job["object"], "stage": job["stage"]},
-                        idempotency_key=f"{'crmok' if ok else 'crmfail'}:{sync_key}",
-                        private={"sync_key": sync_key})])
-                except EventWriteError as err:
-                    log.error("outbox result not logged: %s", err)
-                    return
-                if ok:
-                    self._outbox_tries.pop(sync_key, None)
+                return False
+            tries, _ = self._outbox_tries.get(sync_key, (0, 0.0))
+            self._outbox_tries[sync_key] = (tries + 1, time.monotonic())
+            if not ok and sync_key in self.state.crm_failed:
+                return not down  # the failure is already on the log; retry later
+            try:
+                self._emit([NewEvent(
+                    type="crm.synced", actor="system", case_id=case_id,
+                    provider=self.ports.crm.provider, status="ok" if ok else "failed",
+                    payload={"object": job["object"], "stage": job["stage"]},
+                    idempotency_key=f"{'crmok' if ok else 'crmfail'}:{sync_key}",
+                    private={"sync_key": sync_key})])
+            except EventWriteError as err:
+                log.error("outbox result not logged: %s", err)
+                return False
+            if ok:
+                self._outbox_tries.pop(sync_key, None)
+                self._outbox_limited.pop(sync_key, None)
+            return not down
 
 
 _CREDENTIALS = re.compile(

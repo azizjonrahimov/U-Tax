@@ -331,3 +331,16 @@ def test_tax_saved_comes_from_the_result_the_latest_memo_carried(h):
          incorporated_delaware=True, foreign_owner_25=False)
     h.ok("compute_tax", case_id=case_id)
     assert h.gw.state.tax_saved_cents == saved
+
+
+def test_a_restart_never_mails_a_digest_right_away(make_harness):
+    # decided after the e2e run: a fresh log's first digest waits CEO_DIGEST_HOURS from boot
+    h = make_harness(ceo_email="ceo@u-tax.dev", ceo_digest_hours=3)
+    h.new_case()
+    assert h.ok("ceo_digest")["sent"] is False
+    h.clock.advance(hours=2, minutes=59)
+    assert h.ok("ceo_digest")["sent"] is False
+    h.clock.advance(minutes=2)
+    assert h.ok("ceo_digest")["sent"] is True
+    restarted = h.restart()  # an existing log keeps the schedule of its last digest
+    assert restarted.perform("ceo_digest", {}).data["sent"] is False

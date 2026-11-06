@@ -40,6 +40,8 @@ def test_happy_fixture_runs_to_call_booked(h, crew):
     case_id = deliver(h, crew, "01-team7-happy.eml")
     approve_all(h, crew)
     assert h.gw.state.cases[case_id].status == "CALL_BOOKED"
+    h.gw.drain_outbox()  # task 10: the CRM mirror runs from the tick
+    h.gw.drain_outbox()
     sample = {json.loads(line)["type"]: json.loads(line)
               for line in SAMPLE.read_text(encoding="utf-8").splitlines() if line.strip()}
     for e in h.store.since(0):

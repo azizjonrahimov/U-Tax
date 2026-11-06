@@ -300,6 +300,13 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         # `inbox` is a dev-only extra ("hiring" plays the second inbox, §6c)
         return act("inject_email", _pick(body, "from", "subject", "body", "message_id", "inbox"))
 
+    @router.post("/api/dev/resolve-purchase")
+    def resolve_purchase(body: dict = Body(...), authorization: str | None = Header(None)):
+        """Admin: an unsure Monid purchase checked in Monid's runs list. cost_usd null =
+        never charged (frees the key); a decimal = charged (booked once)."""
+        require_admin(authorization)
+        return act("resolve_purchase", _pick(body, "key", "cost_usd"))
+
     @router.post("/hooks/agentmail")
     async def agentmail_hook(request: Request,
                              x_utax_hook_token: str | None = Header(None)):

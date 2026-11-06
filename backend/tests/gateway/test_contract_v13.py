@@ -39,7 +39,8 @@ def test_every_tool_has_an_owner_and_book_cost_is_gone():
     assert set(TOOL_ACTORS) == {
         "list_open_cases", "get_case", "extract_facts", "ask_client", "mark_not_eligible",
         "law_search", "compute_tax", "qa_check", "send_memo", "book_call", "phone_check",
-        "post_social", "draft_dm", "hr_record", "firm_brief", "get_candidate", "flag_case"}
+        "post_social", "draft_dm", "hr_record", "firm_brief", "get_candidate", "flag_case",
+        "buy_tool"}  # v1.7.3
 
 
 # ---------------------------------------------------------------- wake-ups (§6b)
@@ -112,6 +113,9 @@ def test_ceo_login_brief(h):
 
 def test_ceo_digest_waits_for_the_interval(make_harness):
     h = make_harness(ceo_email="ceo@u-tax.dev", ceo_digest_hours=3)
+    # decided: the first digest waits a full period from boot (no mail per demo restart)
+    assert h.ok("ceo_digest")["sent"] is False
+    h.clock.advance(hours=3, minutes=1)
     assert h.ok("ceo_digest")["sent"] is True
     assert h.ok("ceo_digest")["sent"] is False
     h.clock.advance(hours=3, minutes=1)

@@ -134,6 +134,7 @@ def test_flag_mails_are_throttled_to_one_an_hour(make_harness):
     h.ok("flag_case", case_id=b, kind="possible_injection")
     flagged = [e for e in h.events("ceo.notified") if e.payload["reason"] == "flagged"]
     assert len(flagged) == 1  # the second goes into the digest
+    h.clock.advance(hours=3, minutes=1)  # the first digest is due a period after boot
     h.ok("ceo_digest")
     digest = [json.loads(p.read_text(encoding="utf-8")) for p in h.outbox()][-1]
     assert "2 flag(s)" in digest["body"]
