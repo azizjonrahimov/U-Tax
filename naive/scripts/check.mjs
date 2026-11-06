@@ -184,8 +184,15 @@ function postProblem(text) {
   return null;
 }
 // The ported guard must refuse what the live one refuses, and pass the firm's standard example.
-for (const bad of ["only $400k", "about 50 dollars", "see utax.ai", "Team #7 saved", "case_7 done", "(@utax)", "call 415 555 0123", "mail a@b.co", "$1,200 saved", "USD 400"])
-  if (!postProblem(bad)) fail(`post guard self-test: "${bad}" was not refused`);
+const GUARD_SELF_TEST = {
+  "only $400k": "amount", "about 50 dollars": "in words", "USD 400": "in words", "$1,200 saved": "amount",
+  "see utax.ai": "link", "Team #7 saved": "Team", "case_7 done": "case", "(@utax)": "@handle",
+  "mail a@b.ly": "email", "call 415 555 0123": "phone", "call 4155550123": "phone",
+};
+for (const [bad, why] of Object.entries(GUARD_SELF_TEST)) {
+  const problem = postProblem(bad);
+  if (!problem?.includes(why)) fail(`post guard self-test: "${bad}" should be refused for ${why}, got ${problem}`);
+}
 if (postProblem("$85,165, or $400 plus the $50 fee, $450 in all."))
   fail("post guard self-test: the standard example was refused");
 
@@ -237,7 +244,7 @@ const voicePath = join(ROOT, "prompts", "voice-intake.md");
 if (!existsSync(voicePath)) fail("prompts/voice-intake.md is missing");
 else {
   const voice = readFileSync(voicePath, "utf8").replace(/\s+/g, " ");
-  for (const must of ["not tax advice", "Never claim to be a person", "transcribed", "OK to continue?", "Read the numbers back",
+  for (const must of ["not tax advice", "Never claim to be a person", "transcribed", "OK to continue?", "Read the facts back",
     "Never compute", "Never ask for, repeat or accept an SSN, EIN", "Never say an email address out loud"])
     if (!voice.includes(must)) fail(`prompts/voice-intake.md: must keep the rule "${must}"`);
   if (/utax\.\w+/.test(voice)) fail("prompts/voice-intake.md: the voice agent has no gateway tools; it must not name any");
@@ -258,6 +265,7 @@ const badEnvs = {
   "token with spaces": { UTAX_TOOL_TOKEN_INTAKE: ` ${DUMMY.UTAX_TOOL_TOKEN_INTAKE} ` },
   "URL with query": { UTAX_MCP_URL: "https://utax.example.com/mcp?token=abc" },
   "single-label host": { UTAX_MCP_URL: "https://gateway/mcp" },
+  "URL with credentials": { UTAX_MCP_URL: "https://user:pass@utax.example.com/mcp" },
   "shared token": { UTAX_TOOL_TOKEN_MKT: DUMMY.UTAX_TOOL_TOKEN_ACCT },
 };
 const control = spawnSync(process.execPath, ["-e", LOADER, ROOT], { cwd: ROOT, env: good, encoding: "utf8" });

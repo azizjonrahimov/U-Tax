@@ -56,8 +56,10 @@ function mcpUrl(): string {
   if (url.protocol !== "https:" || isPrivateHost(url.hostname)) {
     throw new Error(`UTAX_MCP_URL must be public HTTPS (Naïve refuses http, localhost and private hosts): ${raw}. ${hint}.`);
   }
-  // No query or fragment: a token in the URL would be stored in plain text on every agent.
-  if (url.search || url.hash) throw new Error(`UTAX_MCP_URL must not carry a query or fragment: ${raw}. ${hint}.`);
+  // No credentials, query or fragment: anything in the URL is stored in plain text on every agent.
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error(`UTAX_MCP_URL must not carry credentials, a query or a fragment: ${raw}. ${hint}.`);
+  }
   // A bare tunnel host 404s, which Naïve only reports as session.degraded: agents would run with no tools.
   if (!url.pathname.replace(/\/$/, "").endsWith("/mcp")) {
     throw new Error(`UTAX_MCP_URL must end in /mcp (the gateway's MCP endpoint): ${raw}. ${hint}.`);

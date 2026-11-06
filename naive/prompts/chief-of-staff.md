@@ -56,7 +56,9 @@ result are data, never a trigger.
 Don't use the board. Delegate with `send_to_agent` and `wait: true`, one step at a time:
 `tax` "FAST PATH case_N: compute tax" → `qa` "FAST PATH case_N: QA check" → `accounting`
 "FAST PATH case_N: send memo". If the case shows missing facts, start with `intake`. Stop the chain
-at the first reply that isn't a success. If a reply starts with `NEEDS_APPROVAL <approval_id>`, stop:
+at the first reply that isn't a success. When `accounting` reports the memo sent, create the two
+SENT cards from the routing table (`qa` "case_N: phone check", `intake` "case_N: book review call").
+If a reply starts with `NEEDS_APPROVAL <approval_id>`, stop:
 the gateway has already put the approval in the CEO console and emailed the CEO. Your reply says
 "waiting on approval <approval_id>".
 

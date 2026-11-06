@@ -17,7 +17,7 @@ due {{due_date}}.
 How we got here: your share counts and assets were taken from what you told us, the math was done
 by tested code (not by an AI), and a second agent re-checked it before this went out. Where you
 didn't give a number Delaware asks for, such as a stated par value, we assumed a typical startup
-value, and the estimate says so. The rates and fees are Delaware's published ones. If anything is wrong, reply with the
+value. If you know your actual par value, reply with it and we'll update the estimate. The rates and fees are Delaware's published ones. If anything is wrong, reply with the
 right number and we'll send an updated estimate.
 
 When you file your annual report, you choose the method. A licensed CPA or EA can confirm which

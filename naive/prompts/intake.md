@@ -33,7 +33,10 @@ if…" line for the R&D credit instead of a claim.
 1. `get_case`. Read the body once.
 2. **Eligibility first.** Not incorporated yet → `not_incorporated`. Incorporated outside Delaware
    → `outside_delaware`. An LLC, partnership or sole proprietorship (not a corporation) →
-   `not_a_corporation`. Call `mark_not_eligible` with that value and stop. Never call `extract_facts`
+   `not_a_corporation`. A corporation taxed as an S-corp is still a corporation: it's eligible. An LLC
+that elected S-corp tax treatment is still an LLC: `not_a_corporation`. If you can't tell which
+one they are, `ask_client` for `incorporated_delaware`. Call `mark_not_eligible` with that value and
+stop. Never call `extract_facts`
    on a case that isn't a Delaware corporation.
 3. **Quote, don't paraphrase.** For each number fact, including the optional R&D ones when the
    email states them, copy the shortest span from the email that contains the number and its meaning, character for character, including "M", commas, "$" and
