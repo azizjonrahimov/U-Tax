@@ -197,7 +197,7 @@
 .theater .hiring b { color: var(--text); font-weight: 500; }
 
 @media (prefers-reduced-motion: reduce) {
-  .theater .cur, .theater main, .theater .col, .theater .low, .theater .pane, .theater .btn, .theater .bar i, .theater .ctl button, .theater .banner { transition: none; }
+  .theater .cur, .theater main, .theater .col, .theater .low, .theater .pane, .theater .btn, .theater .bar i, .theater .ctl button, .theater .banner, .theater .cur span { transition: none; }
   .theater .dot, .theater .wave i { animation: none; }
 }
 @media (max-width: 900px) {

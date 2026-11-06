@@ -604,7 +604,9 @@ export function Theater() {
       setFinale({ banner, saved: 0 });
       const W = window.innerWidth;
       const H = window.innerHeight;
-      for (let round = 0; round < SWARM_ROUNDS && alive; round++) {
+      // Reduced motion: no swarm, no count-up; the cursors line up and the total shows at once.
+      const calm = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+      for (let round = 0; round < (calm ? 0 : SWARM_ROUNDS) && alive; round++) {
         AGENTS.forEach(([id], k) => {
           const p = swarmPos(k, round, W, H);
           place(id, p.x, p.y);
@@ -630,7 +632,7 @@ export function Theater() {
         setFinale((f) => (f ? { ...f, lined: true } : f));
       }
       await realSleep(MOVE_MS);
-      const ticks = 30;
+      const ticks = calm ? 1 : 30;
       for (let k = 1; k <= ticks && alive; k++) {
         setFinale((f) => (f ? { ...f, saved: Math.round((total * k) / ticks) } : f));
         await realSleep(40);
