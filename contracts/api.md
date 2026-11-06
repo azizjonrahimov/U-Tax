@@ -127,9 +127,14 @@ Projections rebuilt from events (never stored by hand):
   "queue": {"waiting": 0, "blocked": 0}
 }
 ```
-`Under the theater token, `hiring` carries counts only; the per-candidate list (with stages)
+`Each `cases[]` entry carries `flagged: true|false` (any `case.flagged`). `hiring` carries
+`applicants, screened, shortlisted, awaiting, hired, declined` (`awaiting` = shortlisted with no
+hire/decline yet). Under the theater token, `hiring` carries counts only; the per-candidate list (with stages)
 is admin-only, for `/ceo`.
 
+Per case, the saving comes from the `tax.computed` that preceded that case's **latest**
+`memo.sent`; the theater's replay projection follows the same rule and keeps the last valid
+value (never drops a case's saving on a malformed later event).
 `tax_saved_cents` = Σ over sent cases of max(0, `authorized_method_cents` − (`total_cents` −
 `annual_report_fee_cents`)): franchise tax saved only. The fee is paid under either method,
 so it is never counted as a saving, and the sum never goes negative.
@@ -336,8 +341,10 @@ falls back to a built-in template if the file is missing.
 
 ## 8. Theater flags and the two voice/console pages
 
-- The theater never shows the mail body of a case with a `case.flagged` (`possible_injection`)
-  event; it shows "hidden: flagged by QA" instead. It renders images only from hosts in
+- Once a case has a `case.flagged` (`possible_injection`) event, the gateway serves **every**
+  event of that case (earlier ones included) to theater-token readers with `subject` and `body`
+  replaced by `"[hidden: flagged by QA]"` (`/api/events`, the stream, `/api/state`); the admin
+  token still sees them. The theater never shows the mail body of a flagged case either; it shows "hidden: flagged by QA" instead. It renders images only from hosts in
   `NEXT_PUBLIC_ASSET_HOSTS`.
 - Theater env: `NEXT_PUBLIC_SHOW_BLOCKED` and `NEXT_PUBLIC_SHOW_QUEUE`, both default `1`
   (design D22): red BLOCKED card from `case.blocked` only (a `qa.failed` the firm resolves by
@@ -356,6 +363,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.1 (2026-11-07, frontend slice 3 review): `cases[].flagged`; hiring `awaiting` and `declined`;
+  gateway hides flagged cases' subject/body from theater-token readers, retroactively; tax-saved parity rule.
 
 - v1.7 (2026-11-07, agents task 4 review): `{{memo_ref}}` last line and `memo_ref` on memo.sent;
   phone.checked public payload without the screenshot URL; async phone check with per-attempt keys;
