@@ -322,15 +322,19 @@ export function Theater() {
         </div>
       </footer>
 
+      {/* Always mounted, so screen readers announce each caption as it changes. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {caption ? `${caption.label}: ${caption.text}` : ""}
+      </div>
       {caption && (
-        <div className="caption" role="status" aria-live="polite">
+        <div className="caption" aria-hidden>
           <small>{caption.label}</small>
           {caption.text}
         </div>
       )}
 
       {(loadError || !script || empty) && (
-        <div className="overlay">
+        <div className="overlay" role="status">
           <div>
             {loadError ? "Couldn’t load the action log" : !script ? "Firm opening…" : "No clients yet"}
             <small>{loadError ? loadError : !script ? "Agents at their desks" : "Marketing is posting"}</small>
