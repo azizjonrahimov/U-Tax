@@ -285,7 +285,7 @@ def test_post_guard_closes_the_gaps(text):
 def test_post_social_checks_channel_and_image(h):
     assert h.do("post_social", channel="tiktok", text="hi").error["code"] == "bad_input"
     bad = h.do("post_social", channel="x", text="hi", image_url="http://x.io/a@b.com.png")
-    assert bad.error["code"] == "content_guard"
+    assert bad.error["code"] == "bad_input"  # v1.6.4: not https on an asset host
 
 
 @pytest.mark.parametrize("html, cents", [
