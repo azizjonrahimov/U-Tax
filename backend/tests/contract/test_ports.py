@@ -203,7 +203,16 @@ def test_pay_has_no_adapter_yet():
 
 # ---------------------------------------------------------------- calendar
 
-CALENDAR = {"local": lambda tmp, faults: local.LocalCalendar(tmp, faults)}
+def _agentmail_calendar(tmp: Path, faults: FaultPlan):
+    from app.gateway.adapters.agentmail import AgentMailCalendar
+    from tests.adapters.fakes import FakeAgentMail
+
+    return AgentMailCalendar("am_test", inbox="checkup@u-tax.test", data_dir=tmp,
+                             transport=FakeAgentMail(faults).transport())
+
+
+CALENDAR = {"local": lambda tmp, faults: local.LocalCalendar(tmp, faults),
+            "agentmail": _agentmail_calendar}
 
 
 @pytest.mark.parametrize("name", _ids(CALENDAR))
@@ -221,7 +230,16 @@ def test_calendar_book_is_idempotent(name, tmp_path):
 
 # ---------------------------------------------------------------- social
 
-SOCIAL = {"local": lambda tmp, faults: local.LocalSocial(tmp, faults)}
+def _naive_social(tmp: Path, faults: FaultPlan):
+    from app.gateway.adapters.naive_social import NaiveSocial
+    from tests.adapters.fakes import FakeNaive
+
+    fake = FakeNaive(faults)
+    return NaiveSocial("sk_test", identity=fake.identity, data_dir=tmp,
+                       transport=fake.transport())
+
+
+SOCIAL = {"local": lambda tmp, faults: local.LocalSocial(tmp, faults), "naive": _naive_social}
 
 
 @pytest.mark.parametrize("name", _ids(SOCIAL))

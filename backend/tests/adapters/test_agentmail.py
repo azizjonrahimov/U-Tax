@@ -292,3 +292,89 @@ def test_live_send_once(tmp_path):
     key = f"smoke-{int(time.time())}"
     first = port.send(mail, key)
     assert first.message_id and port.send(mail, key) == first
+
+
+# ---------------------------------------------------------------- calendar (design D27)
+
+
+def calendar(tmp_path, fake=None):
+    from app.gateway.adapters.agentmail import AgentMailCalendar
+
+    fake = fake or FakeAgentMail()
+    return AgentMailCalendar("am_test", inbox=CLIENTS, data_dir=tmp_path,
+                             transport=fake.transport()), fake
+
+
+def test_booking_creates_an_event_with_an_invitation(tmp_path):
+    from app.gateway.ports import Slot
+
+    port, fake = calendar(tmp_path)
+    booking = port.book(Slot(start="2026-11-08T17:30:00.000Z", minutes=15),
+                        "founder@team7.dev", "U-Tax review", key="call:case_1:v1:slot")
+    request = fake.requests[-1]
+    assert request.url.path == "/v0/inboxes/checkup@u-tax.test/calendar/events"
+    body = json.loads(request.content)
+    assert (body["start"], body["end"], body["timezone"]) == ("2026-11-08T17:30:00",
+                                                              "2026-11-08T17:45:00", "UTC")
+    assert body["attendees"] == [{"email": "founder@team7.dev", "role": "required"}]
+    assert body["send_invites"] is True and "not tax advice" in body["description"]
+    assert body["client_id"] == _http.safe_key("call:case_1:v1:slot") and "@" not in \
+        body["client_id"]
+    assert booking.event_id == "evt-1"
+
+
+def test_a_retried_booking_sends_no_second_invitation(tmp_path):
+    from app.gateway.ports import Slot
+
+    fake = FakeAgentMail()
+    first, _ = calendar(tmp_path, fake)
+    slot = Slot(start="2026-11-08T17:30:00Z")
+    a = first.book(slot, "founder@team7.dev", "U-Tax review", key="k")
+    again, _ = calendar(tmp_path / "fresh", fake)  # lost answer, no local index
+    assert again.book(slot, "founder@team7.dev", "U-Tax review", key="k") == a
+    assert len(fake.events) == 1
+
+
+def test_calendar_409s_split_into_retry_and_refuse(tmp_path):
+    from app.gateway.adapters.agentmail import AgentMailCalendar
+    from app.gateway.ports import Slot
+
+    for code, error in (("race_condition", Unavailable), ("idempotency_conflict", Rejected)):
+        transport = httpx.MockTransport(lambda r, c=code: httpx.Response(
+            409, json={"name": "ConflictError", "code": c, "message": c}))
+        port = AgentMailCalendar("am_test", inbox=CLIENTS, data_dir=tmp_path / code,
+                                 transport=transport)
+        with pytest.raises(error):
+            port.book(Slot(start="2026-11-08T17:30:00Z"), "a@b.co", "t", key="k")
+    with pytest.raises(Rejected):
+        port.book(Slot(start="2026-11-08T17:30:00Z"), "nobody", "t", key="k2")
+
+
+def test_book_call_through_the_gateway_keeps_the_approval_gate(h, tmp_path):
+    from app.gateway.adapters.agentmail import AgentMailCalendar
+
+    fake = FakeAgentMail()
+    h.gw.ports.calendar = AgentMailCalendar("am_test", inbox=CLIENTS, data_dir=tmp_path / "c",
+                                            transport=fake.transport())
+    case_id = h.to_sent()
+    slot = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    pending = h.do("book_call", case_id=case_id, start=slot)
+    assert pending.status == "needs_approval" and fake.events == []  # nothing sent yet
+    h.ok("approve", approval_id=pending.approval_id, decision="allow")
+    h.ok("book_call", case_id=case_id, start=slot)
+    booked = h.events("call.booked")[0]
+    assert booked.provider == "agentmail" and len(fake.events) == 1
+    assert fake.events[0]["attendees"][0]["email"] == "founder@team7.dev"
+
+
+def test_registry_builds_the_agentmail_calendar(tmp_path):
+    from dataclasses import replace
+
+    from app.gateway.registry import AdapterNotReady, build_port
+    from app.gateway.settings import Settings
+
+    base = replace(Settings(), data_dir=tmp_path, adapters={"calendar": "agentmail"})
+    with pytest.raises(AdapterNotReady, match="AGENTMAIL_API_KEY"):
+        build_port("calendar", base)
+    port = build_port("calendar", replace(base, agentmail_api_key="am_x", inbox_clients=CLIENTS))
+    assert port.provider == "agentmail"

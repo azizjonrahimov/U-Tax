@@ -53,6 +53,9 @@ class Settings:
     agentmail_base_url: str = "https://api.agentmail.to"
     hook_token: str = ""  # fallback for /hooks/*: ?token=<this> when no signing secret
     public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
+    naive_api_key: str = ""
+    naive_api_base: str = "https://api.vetta.sh"
+    naive_social_identity: str = ""  # idn_...: the identity whose social workspace posts
 
     @property
     def events_file(self) -> Path:
@@ -101,6 +104,9 @@ class Settings:
             agentmail_webhook_secret=_env("AGENTMAIL_WEBHOOK_SECRET"),
             agentmail_base_url=_env("AGENTMAIL_BASE_URL") or "https://api.agentmail.to",
             hook_token=_env("UTAX_HOOK_TOKEN"),
+            naive_api_key=_env("NAIVE_API_KEY"),
+            naive_api_base=_env("NAIVE_API_BASE") or "https://api.vetta.sh",
+            naive_social_identity=_env("NAIVE_SOCIAL_IDENTITY"),
             public_asset_hosts=frozenset(h.strip().lower() for h in
                                          _env("PUBLIC_ASSET_HOSTS").split(",") if h.strip()),
         )

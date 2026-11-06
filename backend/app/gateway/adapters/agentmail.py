@@ -19,6 +19,7 @@ import base64
 import hashlib
 import hmac
 import time
+from datetime import datetime, timedelta, timezone
 from email.utils import parseaddr
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,16 @@ import httpx
 
 from app.gateway.adapters import _http
 from app.gateway.adapters.local import LocalMail, _KeyedJson
-from app.gateway.ports import InMail, NotConfigured, OutMail, Rejected, SentMail
+from app.gateway.ports import (
+    Booking,
+    InMail,
+    NotConfigured,
+    OutMail,
+    Rejected,
+    SentMail,
+    Slot,
+    Unavailable,
+)
 
 BASE_URL = "https://api.agentmail.to"
 RECEIVED = "message.received"
@@ -136,3 +146,57 @@ class AgentMailMail:
             f"/v0/inboxes/{quote(inbox_id, safe='@')}/messages/{quote(message_id, safe='')}"))
         data = response.json() or {}
         return {k: data.get(k) for k in ("text", "html", "headers", "subject") if k in data}
+
+
+class AgentMailCalendar:
+    """ADAPTER_CALENDAR=agentmail (design D27). The review call is an event on the clients
+    inbox's own calendar, and AgentMail emails the client a standard iCalendar invitation
+    (`send_invites: true`; Google, Outlook and Apple show it as a meeting). Documented
+    route: `POST /v0/inboxes/{inbox_id}/calendar/events` with `{title, start, end,
+    timezone, attendees, send_invites, client_id}`; a retry with the same `client_id` and
+    body returns the original event (200, no second invitation, not charged again).
+    409 `race_condition` is retryable; 409 `idempotency_conflict` is not. US region only.
+    The CEO's approval gate stays in perform() (calendar_invite trust)."""
+
+    provider = "agentmail"
+
+    def __init__(self, api_key: str, *, inbox: str, data_dir: Path, base_url: str = BASE_URL,
+                 transport: httpx.BaseTransport | None = None, timeout: float = 10.0) -> None:
+        if not api_key:
+            raise NotConfigured("AGENTMAIL_API_KEY is not set")
+        if not inbox:
+            raise NotConfigured("MAIL_INBOX_CLIENTS is not set (the calendar's inbox)")
+        self.inbox = inbox.strip()
+        self._client = httpx.Client(base_url=base_url.rstrip("/"), transport=transport,
+                                    timeout=timeout,
+                                    headers={"Authorization": f"Bearer {api_key}",
+                                             "User-Agent": "u-tax-gateway"})
+        self._index = _KeyedJson(data_dir / "agentmail" / "calendar.json")
+
+    def book(self, slot: Slot, invitee: str, title: str, key: str) -> Booking:
+        known = self._index.get(key)
+        if known:
+            return Booking(event_id=known)
+        if "@" not in invitee:
+            raise Rejected(f"bad invitee {invitee!r}")
+        start = datetime.fromisoformat(slot.start.replace("Z", "+00:00")).astimezone(timezone.utc)
+        end = start + timedelta(minutes=slot.minutes)
+        fmt = "%Y-%m-%dT%H:%M:%S"
+        body = {"title": title, "start": start.strftime(fmt), "end": end.strftime(fmt),
+                "timezone": "UTC", "attendees": [{"email": invitee, "role": "required"}],
+                "send_invites": True, "client_id": _http.safe_key(key),
+                "description": "Your 15-minute U-Tax review of the franchise tax estimate. "
+                               "Educational estimate, not tax advice."}
+        try:
+            response = _http.call(self.provider, lambda: self._client.post(
+                f"/v0/inboxes/{quote(self.inbox, safe='@')}/calendar/events", json=body))
+        except Rejected as err:
+            if "race_condition" in str(err):  # a concurrent change: the docs say retry
+                raise Unavailable(str(err)) from err
+            raise
+        event = (response.json() or {}).get("event") or {}
+        event_id = event.get("event_id")
+        if not event_id:
+            raise Rejected("agentmail answered without an event_id")
+        self._index.put(key, event_id)
+        return Booking(event_id=event_id)
