@@ -52,14 +52,14 @@ class Settings:
     agentmail_webhook_secret: str = ""  # whsec_... (Svix); verifies /hooks/agentmail
     agentmail_base_url: str = "https://api.agentmail.to"
     hook_token: str = ""  # fallback for /hooks/*: X-UTax-Hook-Token when no signing secret
-    call_location: str = ""
+    call_location: str = ""  # the review call's meeting link or phone (calendar invites)
     mail_qa_bcc: str = ""  # v1.7: the QA phone's mailbox; every memo is BCC'd to it
     mobilerun_api_key: str = ""
     mobilerun_device_id: str = ""
     mobilerun_mail_app: str = ""
     mobilerun_memo_sender: str = ""
     mobilerun_model: str = ""
-    apify_token: str = ""  # the review call's meeting link or phone (calendar invites)
+    apify_token: str = ""
     public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"

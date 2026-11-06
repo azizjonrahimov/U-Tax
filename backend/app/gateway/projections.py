@@ -374,10 +374,11 @@ class State:
     def _on_phone_checked(self, e: Event) -> None:
         case = self._case(e)
         if case is not None:
-            case.phone = dict(e.payload)
             ref = (e.private or {}).get("memo_ref")
             if ref:
                 case.phone_attempts.setdefault(ref, []).append(e.status)
+            if ref is None or ref == case.memo_ref:  # a late result for an old memo: no
+                case.phone = dict(e.payload)
 
     def _on_law_searched(self, e: Event) -> None:
         self.law_log.append(e.ts)

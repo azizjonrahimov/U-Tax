@@ -64,7 +64,10 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
         if start_background:
             await asyncio.to_thread(gw.boot_wakes)  # wakes live in memory: re-derive them
             # v1.7 §6f: warm the fee cache now, so compute_tax never fetches under the lock
-            await asyncio.to_thread(gw.refresh_fee, force=True)
+            try:
+                await asyncio.to_thread(gw.refresh_fee, force=True)
+            except Exception:  # noqa: BLE001 - the snapshot serves until the tick retries
+                log.exception("fee warm-up failed at boot")
 
             async def loop() -> None:
                 while True:

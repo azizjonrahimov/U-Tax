@@ -56,7 +56,9 @@ from app.gateway.ports import (
     PortError,
     Ports,
     Post,
+    Rejected,
     Slot,
+    Unavailable,
 )
 from app.gateway.ports.store import EventStorePort, EventWriteError
 from app.gateway.pricing import estimate_usd, parse_usd, usd_string
@@ -280,6 +282,8 @@ class Gateway:
         self._jobs_lock = threading.Lock()
         self._fee_refresh_lock = threading.Lock()
         self._epoch: str | None = None
+        self._law_inflight = 0  # law searches reserved but not yet recorded (cap, §6f)
+        self._fee_tried_at = 0.0
         self.state: State = rebuild(store.since(0))
         self.templates = Templates(settings.templates_dir, settings.memo_template_path)
         self._handlers: dict[str, Callable[[dict], dict]] = {
@@ -430,6 +434,11 @@ class Gateway:
         for key in ("subject", "body"):
             if key in payload:
                 payload[key] = self.HIDDEN
+        # the same rule for every other field that carries the client's words
+        if event.type == "voice.command" and "text" in payload:
+            payload["text"] = self.HIDDEN
+        if isinstance(payload.get("quotes"), dict):
+            payload["quotes"] = {k: self.HIDDEN for k in payload["quotes"]}
         return {**out, "payload": payload}
 
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
@@ -464,7 +473,12 @@ class Gateway:
                 log.exception("%s failed unexpectedly before the lock", name)
                 return ToolResult("error", error={"code": "internal_error",
                                                   "message": f"{name} failed unexpectedly"})
-        result, wakes = self._perform_locked(name, handler, args)
+        try:
+            result, wakes = self._perform_locked(name, handler, args)
+        finally:
+            if args.get("_law_reserved"):
+                with self._lock:
+                    self._law_inflight -= 1
         if name == "phone_check" and result.status == "done" and result.data.get("pending"):
             try:
                 self.advance_phone_jobs()  # outside the lock: a local device is done now
@@ -731,14 +745,21 @@ class Gateway:
             cached = self._fee_cache
             if cached and not force and time.monotonic() - cached[0] < FEE_REFRESH_SECONDS:
                 return
+            if not force and time.monotonic() - self._fee_tried_at < 600:
+                return  # a failed refresh retries every 10 minutes, not every tick
+            self._fee_tried_at = time.monotonic()
             snapshot = self._snapshot_fee_cents()
-            live, source = None, "snapshot"
+            live, source, ran = None, "snapshot", False
             try:
                 page = self.ports.scrape.fetch_page(DELAWARE_FEE_URL)
-                live, source = parse_fee_cents(page.html), page.source
-            except PortError as err:
-                log.warning("fee page fetch failed (%s); the snapshot stays", err)
-            self._book_run(self.ports.scrape.provider, "page", None)
+                live, source, ran = parse_fee_cents(page.html), page.source, True
+            except (Unavailable, Rejected) as err:  # the run may have started: it is paid
+                ran = True
+                log.warning("fee page fetch failed (%s); the snapshot stays", err.code)
+            except PortError as err:  # not configured, rate limited: nothing ran
+                log.warning("fee page fetch failed (%s); the snapshot stays", err.code)
+            if ran:
+                self._book_run(self.ports.scrape.provider, "page", None)
             if live is not None and (snapshot is None or live == snapshot):
                 quote = FeeQuote(live, source)
             elif snapshot is not None:
@@ -1513,12 +1534,20 @@ class Gateway:
         from app.gateway.adapters.apify import clean_query
 
         raw = args.get("query")
-        query = clean_query(raw)[:300] if isinstance(raw, str) else ""
+        case_id = args.get("case_id")
+        # the handler's own checks first: nothing paid runs for a call it would refuse
+        if not isinstance(raw, str) or not raw.strip() or len(raw.strip()) > 300 \
+                or not isinstance(case_id, str):
+            return {"query": "", "skipped": True}
+        query = clean_query(raw)[:300]
         with self._lock:
-            known = args.get("case_id") in self.state.cases
-            capped = self._law_searches_last_hour() >= LAW_SEARCHES_PER_HOUR
+            known = case_id.strip() in self.state.cases
+            capped = self._law_searches_last_hour() + self._law_inflight >= LAW_SEARCHES_PER_HOUR
+            if query and known and not capped:
+                self._law_inflight += 1  # reserved: released after the handler ran
+                args["_law_reserved"] = True
         if not query or not known or capped:
-            return {"query": query, "skipped": True}
+            return {"query": query, "skipped": True, "capped": capped}
         try:
             hits = self.ports.scrape.search(query)
             out = {"query": query, "status": "ok",
@@ -1537,8 +1566,11 @@ class Gateway:
         if not query:
             raise Refused("bad_input", "the query has no searchable words left after cleaning "
                                        "(no emails, amounts or ID numbers)")
-        if self._law_searches_last_hour() >= LAW_SEARCHES_PER_HOUR or fetched.get("skipped"):
-            raise Refused("law_cap", f"law_search is limited to {LAW_SEARCHES_PER_HOUR} an hour")
+        if fetched.get("skipped"):
+            if fetched.get("capped"):
+                raise Refused("law_cap",
+                              f"law_search is limited to {LAW_SEARCHES_PER_HOUR} an hour")
+            raise Refused("bad_input", "law_search needs a known case_id and a query")
         status, results = fetched.get("status", "failed"), fetched.get("results", [])
         self._emit([NewEvent(type="law.searched", actor="tax", case_id=case.case_id,
                              provider=self.ports.scrape.provider, status=status,
@@ -1692,7 +1724,7 @@ class Gateway:
         (the log's first event is in the hash: a reset never repeats an old reference, so a
         rehearsal memo in the QA mailbox can't be mistaken for a real one)."""
         if self._epoch is None:
-            first = next(iter(self.store.since(0)), None)
+            first = next(iter(self.store.since(0, limit=1)), None)
             self._epoch = f"{first.id}:{first.ts}" if first is not None else ""
         return "UTX-" + hashlib.sha256(f"{self._epoch}|{key}".encode()).hexdigest()[:12].upper()
 
@@ -1812,6 +1844,15 @@ class Gateway:
         for job in jobs:
             try:
                 self._advance_phone(job)
+                job["crashes"] = 0
+            except Exception as err:  # noqa: BLE001 - an adapter bug must not stall the rest
+                job["crashes"] = job.get("crashes", 0) + 1
+                log.exception("phone job %s failed unexpectedly", job["key"])
+                if job["crashes"] >= 3:  # retire it: the attempt counts as skipped
+                    try:
+                        self._record_phone(job, None, Unavailable(f"crashed: {type(err).__name__}"))
+                    except Exception:  # noqa: BLE001
+                        log.exception("phone job %s could not be retired", job["key"])
             finally:
                 job["busy"] = False
 
