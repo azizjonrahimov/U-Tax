@@ -222,7 +222,7 @@ class Templates:
 
 
 def _tidy(text: str) -> str:
-    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = "\n".join(line.rstrip(" \t") for line in text.split("\n"))  # linear
     return re.sub(r"\n{3,}", "\n\n", text)
 
 

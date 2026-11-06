@@ -47,7 +47,7 @@ _NUMBER = re.compile(
     # Linear: "a"/"an" only first, "and" only between number words, so a run of filler
     # words ("a a a ...", 50 kB) can't make every start position rescan the line.
     r"|\b(?:(?:a|an)[\s-]+)?{w}(?:[\s-]+(?:and[\s-]+)?{w})*\b".replace("{w}", (
-        r"(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+        r"(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
         r"fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|"
         r"seventy|eighty|ninety|hundred|thousand|million|billion)"))
 )
@@ -63,18 +63,18 @@ _BOUNDARY = re.compile(r"[.;!?\n]|\d")
 # Engine wording -> what the client reads in the re-ask (no engine jargon, no "> 0")
 PLAIN_PROBLEMS = {
     "assumed par needs issued shares > 0":
-        "your email says no shares have been issued; how many shares does the company "
-        "have issued (held by founders and investors) today?",
+        "your email says no shares have been issued: how many shares does the company have "
+        "issued today (held by founders and investors)",
     "issued shares can't exceed authorized shares":
-        "the issued shares are more than the authorized shares; could you check both numbers?",
+        "the issued shares are more than the authorized shares, so could you check both numbers",
     "assumed par needs gross assets above $0":
-        "the method that usually saves the most needs your total assets; what were the "
-        "company's total assets at the end of last year (even a rough number)?",
+        "the method that usually saves the most needs your total assets: roughly what were "
+        "the company's total assets at the end of last year",
 }
 PLAIN_BY_FIELD = {
-    "issued_shares": "could you check your issued shares?",
-    "authorized_shares": "could you check your authorized shares?",
-    "gross_assets": "could you check your total assets?",
+    "issued_shares": "could you check your issued shares",
+    "authorized_shares": "could you check your authorized shares",
+    "gross_assets": "could you check your total assets",
 }
 
 
@@ -276,6 +276,9 @@ def check_facts(
         except ValidationError as exc:
             if exc.field not in out.missing:
                 out.missing.append(exc.field)
+            if exc.field == "issued_shares" and "authorized" in exc.message \
+                    and "authorized_shares" not in out.missing:
+                out.missing.append("authorized_shares")  # the client checks both
             out.problems.append(PLAIN_PROBLEMS.get(exc.message, PLAIN_BY_FIELD.get(
                 exc.field, "one of your numbers doesn't fit with the others")))
         if values["authorized_shares"] > MAX_SHARES or values["issued_shares"] > MAX_SHARES:

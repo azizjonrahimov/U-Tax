@@ -182,6 +182,8 @@ def clip(text: str, limit: int) -> str:
     text = text.strip()
     if len(text) <= limit:
         return text
+    if limit < 2:
+        return text[:max(limit, 0)]
     cut = text[:limit - 1]
     space = cut.rfind(" ")
     if space >= limit // 2:
@@ -191,7 +193,7 @@ def clip(text: str, limit: int) -> str:
 
 def tidy_lines(text: str) -> str:
     """Three or more newlines become one blank line; trailing spaces go."""
-    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = "\n".join(line.rstrip(" \t") for line in text.split("\n"))  # linear
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
@@ -1679,8 +1681,9 @@ class Gateway:
         approved = [k[len(key) + 1:] for k, apr in self.state.approval_by_key.items()
                     if k.startswith(f"{key}:") and k != slot_key
                     and self.state.approvals[apr].decision == "allow"]
-        still_open = [s for s in approved if s in offered]
-        if still_open:
+        still_open = sorted(s for s in approved if s in offered)
+        own = self.state.approval_by_key.get(slot_key)
+        if still_open and not (own and self.state.approvals[own].decision == "allow"):
             # the CEO approved that time; the AUTO it earned never moves the call elsewhere
             raise Refused("slot_not_approved", f"the CEO approved {still_open[0]}; book that slot",
                           {"approved_start": still_open[0], "offered_slots": offered})

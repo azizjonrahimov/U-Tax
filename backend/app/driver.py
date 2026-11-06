@@ -41,29 +41,41 @@ _STATES = ("Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Flor
            "New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|"
            "Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|"
            "Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming")
-# "a Wyoming corporation", "incorporated in Nevada", "a Texas C-corp"
+# Only the client's own company: "we're a Wyoming corporation", "our company was
+# incorporated in Nevada". A customer, parent or subsidiary in another state is no evidence,
+# and a wrong not-eligible mail can't be taken back, so anything less clear is re-asked.
+_WE = (r"(?:we(?:'re|\s+are|\s+were)|i(?:'m|\s+am)|our\s+(?:company|startup|business|entity)"
+       r"\s+(?:is|was)|the\s+company\s+(?:is|was))")
 _OTHER_STATE = re.compile(
-    rf"(?i)\b(?:(?:{_STATES})\s+{_CORP_WORD}|incorporated\s+in\s+(?:the\s+state\s+of\s+)?"
-    rf"(?:{_STATES}))\b")
-_FOREIGN_WHO = (r"(?:foreign|non-?U\.?S\.?|overseas|offshore|international|UK|U\.K\.|British|"
+    rf"(?i)\b{_WE}\s+(?:(?:a|an)\s+(?:{_STATES})\s+{_CORP_WORD}|incorporated\s+in\s+"
+    rf"(?:the\s+state\s+of\s+)?(?!delaware\b)\w+)")
+_FOREIGN_WHO = (r"(?:foreign|non-?U\.?S\.?|overseas|offshore|UK|U\.K\.|British|"
                 r"English|German|French|Canadian|Chinese|Indian|Japanese|Korean|Singapore(?:an)?|"
                 r"Israeli|Dutch|Swiss|Swedish|Irish|Australian|Brazilian|Mexican|Spanish|"
                 r"Italian|Emirati|Hong Kong|Cayman|European)")
 # "a UK company owns 40%", "our German parent holds 30% of the shares", "40% is owned by
 # a Canadian fund"
+_HOLDER = (rf"{_FOREIGN_WHO}\s+(?:\w+\s+){{0,2}}?(?:company|parent|fund|investor|entity|"
+           rf"corporation|citizen|person|founder|shareholder|owner|holding\s+company|vc)s?")
+_PCT = r"(\d{1,3}(?:\.\d+)?)\s?(?:%|percent)"
+# An ownership verb right next to the percent: "a UK company owns 40%", "our German parent
+# holds 30%", "40% (of the shares) is owned by a Canadian fund". Every pattern is bounded
+# per start position, so it stays linear on a 50 kB line.
 _FOREIGN_PCT = re.compile(
-    rf"(?i)\b{_FOREIGN_WHO}\s+(?:\w+\s+){{0,3}}?(?:company|parent|fund|investor|"
-    rf"entity|firm|corporation|citizen|person|founder|shareholder|owner|holding|vc)s?\b"
-    rf"[^.\n%]{{0,40}}?\b(\d{{1,3}}(?:\.\d+)?)\s?(?:%|percent)"
-    rf"|\b(\d{{1,3}}(?:\.\d+)?)\s?(?:%|percent)[^.\n]{{0,40}}?\b(?:owned|held)\s+by\s+"
-    rf"(?:a|an|our|one)?\s*{_FOREIGN_WHO}\b")
-SENTENCE_MAX = 400
+    rf"(?i)\b{_HOLDER}\s+(?:owns|holds|controls)\s+(?:about\s+|around\s+|roughly\s+|over\s+)?"
+    rf"{_PCT}"
+    rf"|\b{_PCT}\s+(?:of\s+(?:us|the\s+(?:company|shares|stock|equity))\s+)?(?:is|are)\s+"
+    rf"(?:owned|held)\s+by\s+(?:a|an|our|one)?\s*{_HOLDER}\b")
+# Sentence ends: "!", "?", a newline, or a "." before whitespace that isn't a decimal point,
+# an initial ("U.K.") or a title/suffix ("Mr.", "Inc.")
+_SENTENCE_END = re.compile(
+    r"[!?\n]|(?<![A-Z])(?<!\bMr)(?<!\bMs)(?<!\bDr)(?<!\bMrs)(?<!\bInc)(?<!\bCo)(?<!\bLtd)"
+    r"(?<!\bCorp)(?<!\bDel)(?<!\bSt)\.(?=\s|$)")
 
 
 def _sentences(text: str) -> list[str]:
-    """Verbatim pieces split at . ! ? and newlines, each cut to SENTENCE_MAX characters, so
-    every pattern runs on a bounded string (a 50 kB line can't make a regex quadratic)."""
-    return [piece[:SENTENCE_MAX] for piece in re.split(r"[.!?\n]", text) if piece.strip()]
+    """Verbatim pieces of the client's text, one per sentence (quotes must match whole)."""
+    return [piece for piece in _SENTENCE_END.split(text) if piece.strip()]
 
 
 def _sentence_with(pattern: re.Pattern[str] | str, text: str) -> str | None:
@@ -101,16 +113,18 @@ def read_facts(texts: list[str]) -> dict[str, Any]:
     elif yes_foreign:
         foreign, quotes["foreign_owner_25"] = True, yes_foreign.group(0)
     else:
-        named = next((m for m in map(_FOREIGN_PCT.search, _sentences(text)) if m), None)
-        if named:  # D2: "a UK company owns 40%" (25% or more is the Form 5472 line)
-            pct = float(named.group(1) or named.group(2))
-            foreign, quotes["foreign_owner_25"] = pct >= 25, named.group(0).strip()
+        # D2: "a UK company owns 40%". 25% or more is the Form 5472 line; with several
+        # foreign holders any one at 25%+ counts, and its own words are the quote.
+        named = [m for m in _FOREIGN_PCT.finditer(text)]
+        if named:
+            top = max(named, key=lambda m: float(m.group(1) or m.group(2)))
+            pct = float(top.group(1) or top.group(2))
+            foreign, quotes["foreign_owner_25"] = pct >= 25, top.group(0).strip()
     reason = None
     if inc is False:
         reason = "not_a_corporation" if re.search(r"(?i)\b(llc|partnership)\b", text) \
             else "not_incorporated"
-    elif delaware is None and (re.search(r"(?i)incorporated in (?!delaware)\w+", text)
-                               or _sentence_with(_OTHER_STATE, text)):
+    elif delaware is None and _OTHER_STATE.search(text):
         inc, reason = False, "outside_delaware"  # D2: "a Wyoming corporation"
     return {"quotes": quotes, "incorporated_delaware": inc, "foreign_owner_25": foreign,
             "not_eligible_reason": reason, "suspicious": bool(_INJECTION.search(text))}

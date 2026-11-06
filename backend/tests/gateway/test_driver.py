@@ -157,3 +157,32 @@ def test_read_facts_is_bounded_on_hostile_lines():
                  "a " * 25_000):
         read_facts([text[:50_000]])
     assert time.perf_counter() - start < 5.0
+
+
+@pytest.mark.parametrize("text", [
+    "We are a C-corp. Our biggest customer is a California corporation.",
+    "We are a DE C-corp. We have a Nevada inc subsidiary.",
+    "We're a Del. corp, offices in Washington corp campus.",
+])
+def test_another_state_is_only_evidence_about_our_own_company(text):
+    # review: a customer or subsidiary in another state sent an irreversible not-eligible mail
+    assert read_facts([text])["not_eligible_reason"] is None
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Our Indian engineering firm handles 80% of the work.", None),
+    ("French investor fund returned 30% last year.", None),
+    ("30% is owned by a US fund; 20% is held by a foreign investor.", False),
+    ("A UK company owns 10% and a Canadian fund owns 30%.", True),
+    ("A U.K. company owns 40%.", True),
+    ("Our foreign shareholder holds 25.5%.", True),
+])
+def test_foreign_owners_need_an_ownership_verb(text, expected):
+    assert read_facts([f"We're a Delaware C-corp. {text}"])["foreign_owner_25"] is expected
+
+
+def test_a_long_sentence_is_quoted_whole():
+    text = "We are a Delaware C-corp and we build robots " + "very " * 120 + "for warehouses."
+    out = read_facts([text])
+    assert out["incorporated_delaware"] is True
+    assert out["quotes"]["incorporated_delaware"] == text.rstrip(".")

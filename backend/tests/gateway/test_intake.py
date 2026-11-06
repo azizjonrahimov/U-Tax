@@ -78,8 +78,8 @@ def test_zero_issued_is_reasked():
     out = check(body, {"authorized_shares": "10,000,000", "issued_shares": "0",
                        "gross_assets": "$500k"})
     assert "issued_shares" in out.missing
-    assert out.problems == ["your email says no shares have been issued; how many shares does "
-                            "the company have issued (held by founders and investors) today?"]
+    assert out.problems == ["your email says no shares have been issued: how many shares does "
+                            "the company have issued today (held by founders and investors)"]
     assert not any("> 0" in p or "assumed par" in p for p in out.problems)
 
 
@@ -124,3 +124,23 @@ def test_filler_words_cannot_make_number_reading_quadratic():
     assert time.perf_counter() - start < 2.0
     assert [str(m.value) for m in mentions("one hundred and twenty issued, a million authorized")] \
         == ["120", "1000000"]
+
+
+def test_zero_is_not_a_number_word():
+    # review: "8,000,000 issued, zero debt" read "zero" as a second issued count
+    body = ("We're a Delaware C-corp. 10,000,000 authorized shares and 8,000,000 issued, "
+            "zero debt, zero foreign owners. Gross assets $500k.")
+    out = check(body, {**HAPPY_QUOTES, "incorporated_delaware": "We're a Delaware C-corp"})
+    assert "issued_shares" not in out.missing and out.problems == []
+    assert out.facts["issued_shares"] == 8_000_000
+
+
+def test_issued_over_authorized_reasks_both_in_one_question():
+    from app.gateway.templates import ask_values
+
+    body = "1,000,000 authorized shares, 2,000,000 issued, $500k assets"
+    out = check(body, {"authorized_shares": "1,000,000", "issued_shares": "2,000,000",
+                       "gross_assets": "$500k"})
+    assert {"authorized_shares", "issued_shares"} <= set(out.missing)
+    line = ask_values("Team #1", out.missing, out.problems)["problems_line"]
+    assert line.count("?") == 1 and "??" not in line and "?;" not in line
