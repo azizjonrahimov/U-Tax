@@ -50,3 +50,13 @@ card with the QA cursor circling the bad number, and "waiting" queue chips.
 
 Check your work in a real browser with gstack `/browse` (never the claude-in-chrome
 tools). Screenshots of each slice in your READY are welcome.
+
+## Contract v1.1 additions (2026-11-06, design D21 and D22)
+- **Slice 4: mic page** `/mic` (contract §8): CEO / Judge toggle, reply-email field,
+  OpenAI Realtime via `POST /api/voice/session`, falling back to typed text + browser
+  speech on 503; posts transcripts to `POST /api/voice`; reads back the numbers heard;
+  follows the judge's case live. This is the demo finale, so make it big and calm.
+- The 8 AM morning brief plays as audio on the theater from `GET /api/brief/audio`
+  (fallback: browser `speechSynthesis`).
+- The BLOCKED card and queue chips are decided: build both, flags default on
+  (`NEXT_PUBLIC_SHOW_BLOCKED`, `NEXT_PUBLIC_SHOW_QUEUE`).

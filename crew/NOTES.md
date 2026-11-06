@@ -32,3 +32,7 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-06 18:22Z OWNER chose "FastAPI + Next.js (recommended)", "Add agents lane (recommended)", "Start now (recommended)" (direct)
 - 2026-11-06 18:22Z MERGED lane/backend 07a8c25080c3 (Naive REST client) as d08ce40
 - 2026-11-06 18:40Z CONTRACT v1 + events.sample.jsonl; design doc D16-D20; CREW rules 12-14, agents lane, SPEND $5 Naive spikes; briefs rewritten for U-Tax
+- 2026-11-06 18:50Z LANE agents started: gstack ok, Task 1 naive/ project, owns naive/. Address uds:\.\pipe\LOCAL\cc-msg-48bc0d666bd4751fb67b2ea15d975318
+- 2026-11-06 19:05Z FINDING agents: Naive phone numbers have no voice ("`voice` is always `false`", docs/api/messaging.md; outbound SMS 501, docs/identity/phone.md). Controller verified both pages.
+- 2026-11-06 19:05Z DECISION applied owner's pre-decided fallback (design E2): no number purchase; CEO voice = OpenAI Realtime mic page -> /api/voice; finale = judge emails the firm. Real phone line outside Naive asked as owner decision.
+- 2026-11-06 19:15Z OWNER chose "Mic page, judge speaks (recommended)" and "Both, on by default (recommended)" (direct). Design D21-D22; contract v1.1; briefs updated

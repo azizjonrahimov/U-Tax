@@ -49,3 +49,10 @@ Report exactly what worked, with the commands, request ids and costs. If voice f
 say so plainly; the decided fallback is the OpenAI Realtime mic page and "judge emails the
 firm". Then `naive up --dry-run` against the real org. Google Calendar, X and LinkedIn
 Connect need the owner's OAuth: write the exact steps for the owner, don't attempt them.
+
+## Update 2026-11-06 (design D21): no Naïve voice
+Don't buy a number and skip the voice spike. The CEO's orders reach the Chief of Staff as
+`voice.command` text relayed by the gateway from the mic page. The morning brief is a
+`firm_brief` the theater plays as audio. The HR screen is an email questionnaire, never a
+live phone screen, still disclosed as AI-run, and the human makes the final call. Task 3
+becomes: `naive up --dry-run` once the key exists, plus written Connect steps for the owner.

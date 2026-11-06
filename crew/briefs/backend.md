@@ -58,3 +58,10 @@ Then test it through a tunnel: `npx cloudflared tunnel --url http://localhost:80
 ## After task 7
 Tell the controller you're free. Saturday is the sponsor-adapter swap (AgentMail,
 OpenRouter, HubSpot, Mobilerun, Apify, Monid, Render), keys permitting.
+
+## Contract v1.1 additions (2026-11-06, design D21)
+Naïve has no voice, so voice runs through a mic page. Add to task 6: `POST /api/voice`
+with `speaker` and judge fast-path cases (priority, memo to `reply_email`),
+`POST /api/voice/session` (ephemeral OpenAI Realtime session, `503 voice_unavailable`
+without `OPENAI_API_KEY`), and `GET /api/brief/audio` (TTS of a `brief.generated`
+event, 503 without a key). Stand-ins work with no key. See contract §5 and §8.

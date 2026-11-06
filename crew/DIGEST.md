@@ -21,4 +21,4 @@ Captain (naive-yc-hackathon-99)
 |---|---|---|---|
 | backend | `backend/`, `fixtures/`, `db/` | building: task 4 engine | 25m |
 | frontend | `frontend/` | building: scaffold, then theater | 2h (check its tab) |
-| agents | `naive/` | starting: task 1 naive.config.ts | none yet |
+| agents | `naive/` | building: task 1 naive.config.ts (gstack ok) | 0m |
