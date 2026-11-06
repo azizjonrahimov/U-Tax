@@ -90,8 +90,8 @@ every key out of git.
 | `ADAPTER_MAIL=agentmail` | **built** (task 8), never run against the real API | `AGENTMAIL_API_KEY`; `MAIL_INBOX_CLIENTS` (required) and `MAIL_INBOX_HIRING`, the inbox addresses; a `message.received` webhook scoped to those two inboxes, pointed at `https://<public-host>/hooks/agentmail`, with its secret in `AGENTMAIL_WEBHOOK_SECRET` (whsec_..., checked at boot) | the mail suite against the AgentMail fake (`tests/adapters/fakes.py`), plus `tests/adapters/test_agentmail.py` and `test_task8_review.py`; live: `test_live_send_once` with `AGENTMAIL_TEST_TO` set |
 | `ADAPTER_LLM=openrouter` / `openai` | not built (no gateway step needs an LLM tonight) | `OPENROUTER_API_KEY` or `OPENAI_API_KEY` | `test_llm_reports_tokens_and_maps_errors` |
 | `ADAPTER_CRM=hubspot` | not built | *proposed* `HUBSPOT_ACCESS_TOKEN` (private app token) | `test_crm_upsert_is_idempotent_and_maps_errors` |
-| `ADAPTER_DEVICE=mobilerun` | not built | `MOBILERUN_API_KEY` | `test_device_capture` |
-| `ADAPTER_SCRAPE=apify` | not built | `APIFY_TOKEN` | `test_scrape_fee_page_and_search` (fee page against `fixtures/snapshots/delaware-fees.html`) |
+| `ADAPTER_DEVICE=mobilerun` | **built** (agents lane, wired in task 9), never run against the real API | `MOBILERUN_API_KEY`; `MOBILERUN_MEMO_SENDER` (required: the clients inbox address); `MAIL_QA_BCC` (the mailbox the cloud phone's mail app is signed in to; every memo is BCC'd there); `ADAPTER_MAIL=agentmail` (refuses to boot otherwise); optional `MOBILERUN_DEVICE_ID`, `MOBILERUN_MAIL_APP`, `MOBILERUN_MODEL`. Runs outside the gateway lock (§6f); about $0.25 a run (placeholder step price) | `test_device_capture` against the Mobilerun fake, `tests/adapters/test_mobilerun.py`, and the phone tests in `tests/gateway/test_contract_v17.py` |
+| `ADAPTER_SCRAPE=apify` | **built** (agents lane, wired in task 9), never run against the real API | `APIFY_TOKEN`. Each run is capped at $0.10; law_search at 20 an hour; the fee page is fetched at boot and every 5 h, and a fee that differs from the snapshot keeps the snapshot and tells the CEO | `test_scrape_fee_page_and_search` against the Apify fake, `tests/adapters/test_apify.py`, and the law/fee tests in `test_contract_v17.py` |
 | `ADAPTER_TOOLBUY=monid` | not built | *proposed* `MONID_API_KEY` | `test_toolbuy_reports_decimal_cost` (cost must be a Decimal, booked as `cost.booked`) |
 | `ADAPTER_CALENDAR=agentmail` (design D27; replaces google) | **built** (task 8), never run against the real API | the AgentMail mail env above, and `ADAPTER_MAIL=agentmail` too (refuses to boot otherwise); optional `UTAX_CALL_LOCATION` (the meeting link shown on the invitation); US region only | `test_calendar_book_is_idempotent` against the fake, plus the calendar tests in `test_agentmail.py` and `test_task8_review.py`. Deferred item 7 still stands: an approved slot the calendar keeps rejecting holds the other slots. |
 | `ADAPTER_SOCIAL=naive` | **built** (task 8), never run against the real API | `NAIVE_API_KEY` (scope `sessions:write`); `NAIVE_SOCIAL_IDENTITY=utax-mkt`; if Naïve refuses the name in the path (a post answers 404, reported as not configured), the owner sets it to the `idn_...` id from `naive identity list`, with its social workspace activated and X/LinkedIn connected; `PUBLIC_TALK_URL`; `PUBLIC_ASSET_HOSTS` for images | `test_social_post_is_idempotent` against the Naïve fake, plus `tests/adapters/test_naive_social.py`; live: `test_live_post_once` with `NAIVE_SOCIAL_TEST_POST=yes` (it posts publicly) |
@@ -124,6 +124,16 @@ Accepted for the hackathon by the controller (task 8 review), to fix afterwards:
   even when outbound checks refuse the invitation mail, so `call.booked` is written but the
   client got nothing. Fix: subscribe to message.sent / message.rejected for the invitation
   and flag the case.
+- **Pending phone checks live in memory** (task 9 review 5). A restart drops them: a
+  Mobilerun task already started keeps running (paid) and is never polled. The case never
+  blocks, and the next phone_check starts a fresh attempt. Fix: record a `phone.started`
+  event with the task id and resume polling at boot.
+- **The QA mailbox can be spoofed** (task 9 review 9). The memo reference is public, so
+  anyone who knows `MAIL_QA_BCC` can mail a "Reference: UTX-..." decoy that makes the phone
+  see two matches and burns the 3 attempts (a forged sender could even be screenshotted).
+  Tonight: keep that address private and set `MOBILERUN_MEMO_SENDER`. Every memo is also BCC'd
+  to a mailbox a third-party cloud phone reads. Fix: a per-memo secret token in the BCC copy
+  only, and check SPF/DKIM on the phone side.
 - **Deferred since 6c LOW, item 7**: an approved slot the real calendar keeps rejecting
   holds the other slots until it passes.
 

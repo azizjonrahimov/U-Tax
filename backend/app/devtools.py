@@ -34,10 +34,15 @@ def _client() -> httpx.Client:
 
 def _eml(path: Path) -> dict:
     msg = email.message_from_bytes(path.read_bytes(), policy=email.policy.default)
-    part = msg.get_body(preferencelist=("plain",))
+    part = msg.get_body(preferencelist=("plain", "html"))  # HTML-only mail too
+    body = part.get_content() if part else ""
+    if part is not None and part.get_content_subtype() == "html":
+        from app.gateway.masking import html_to_text
+
+        body = html_to_text(body)
     return {"from": email.utils.parseaddr(str(msg.get("From", "")))[1],
             "subject": str(msg.get("Subject", "")),
-            "body": (part.get_content() if part else "").strip(),
+            "body": body.strip(),
             "message_id": str(msg.get("Message-ID", "")).strip("<> ") or None}
 
 

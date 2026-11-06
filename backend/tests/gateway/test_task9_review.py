@@ -153,3 +153,18 @@ def test_a_phone_run_that_never_ends_is_cancelled_and_skipped(h):
     checked = h.events("phone.checked")[0]
     assert checked.status == "skipped" and "unavailable" in checked.payload["status_note"]
     assert Stuck.cancelled == ["task-1"] and h.gw._phone_jobs == {}
+
+
+def test_a_slot_waiting_on_the_ceo_is_not_offered_to_another_case(h):
+    # e2e run: case_4 and case_1 were both offered and approved 17:00; case_4 got 17:15
+    first = h.to_sent()
+    second = h.to_sent(h.new_case(sender="two@team8.dev"))
+    slot = h.ok("get_case", case_id=first)["offered_slots"][0]
+    assert slot in h.ok("get_case", case_id=second)["offered_slots"]
+    pending = h.do("book_call", case_id=first, start=slot)
+    assert pending.status == "needs_approval"
+    assert slot not in h.ok("get_case", case_id=second)["offered_slots"]  # held
+    assert slot in h.ok("get_case", case_id=first)["offered_slots"]  # still first's
+    h.approve_pending(pending)
+    h.ok("book_call", case_id=first, start=slot)
+    assert slot not in h.ok("get_case", case_id=second)["offered_slots"]
