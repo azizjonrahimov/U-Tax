@@ -207,6 +207,7 @@ class VoiceSession:
     client_secret: str
     model: str
     expires_at: str
+    realtime_url: str = ""  # v1.7.5: the SDP endpoint matching where the secret was minted
 
 
 class VoicePort(Protocol):

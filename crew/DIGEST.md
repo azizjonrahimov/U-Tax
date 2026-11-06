@@ -9,6 +9,10 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- backend · 0m · report refreshed (owner's 7 Saturday steps, full swap table); lane resting
+- frontend · 15m · MERGED slice 3: live + replay against the gateway, watchdog, finale (207 tests)
+- backend · 30m · MERGED task 10: HubSpot + Monid wired, buy_tool, outbox off the request path (807 tests)
+
 - agents · 0m · report merged: owner's Saturday setup for Mobilerun, Apify, HubSpot, Monid; lane resting
 - agents · 15m · MERGED HubSpot + Monid adapters (771 tests on main)
 - backend · 30m · MERGED task 9 (slow ports off the lock, private phone screenshots, memo_ref) + e2e fixes; main green
@@ -27,6 +31,6 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | slice 3 (live + replay) review passes → READY; then /talk, /ceo | 10m |
-| backend | `backend/`, `fixtures/`, `db/` | task 10: wire HubSpot + Monid, outbox off the request path | 15m |
+| frontend | `frontend/` | /talk (the finale), then /ceo; slice 3 live + replay merged | 0m |
+| backend | `backend/`, `fixtures/`, `db/` | done for tonight: all tasks merged (807 tests); resting, may rerun e2e | 0m |
 | agents | `naive/` | done for tonight; resting until Naïve access Saturday (task 3) | 0m |

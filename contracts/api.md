@@ -315,7 +315,11 @@ placeholders are listed in `naive/README.md`: `memo`, `ask-client`,
 Subject line; the gateway sets subjects. `hr-questionnaire` must contain the exact line
 `This screen is run by an AI agent. A human makes the final hiring decision.`
 `POST /api/voice/session` uses `naive/prompts/voice-intake.md` as the Realtime instructions
-and sets instructions and tools **server-side when minting**, so a client `session.update`
+and sets instructions, tools **and `input_audio_transcription`** (model from
+`OPENAI_TRANSCRIBE_MODEL`, default `whisper-1`) **server-side when minting**, so the customer's
+words arrive as text the page can post. The page may repeat a `session.update` that sets only
+`input_audio_transcription`, never instructions or tools. The mint response also carries
+`realtime_url` (the SDP exchange endpoint the page must use), so the page never hard-codes it; so a client `session.update`
 cannot replace them.
 
 ## 6e. Trust boundaries for `/talk` and mail volume
@@ -370,6 +374,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.5 (2026-11-07, frontend /talk): the voice session is minted with input transcription
+  (`OPENAI_TRANSCRIBE_MODEL`, default whisper-1); the mint response carries `realtime_url`.
 
 - v1.7.4 (2026-11-07, backend task 10): spend counts `cost.booked` only (theater rail too);
   `POST /api/dev/resolve-purchase`.
