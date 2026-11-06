@@ -73,3 +73,12 @@ All taken as you recommended, except #3, which is stronger: **one tool token per
 (`UTAX_TOOL_TOKEN_<ACTOR>`, each in its own vault entry), and the gateway derives the actor
 from the token. Keep `X-UTax-Actor` only as an optional matching header. `book_cost` is
 removed from §6. Wake messages are exactly as in §6b, plus `New applicant cand_N`.
+
+## Contract v1.4 (2026-11-06): your pass-3 asks, decided
+1. `get_candidate` added (hr only). HR never declines; the CEO decides.
+2. **Per-seat URLs now, not as a fallback**: `/mcp/<actor>`, each with its own token. Point
+   each agent's MCP server at its own seat URL (`${UTAX_MCP_URL}/<actor>`).
+3. The post guard also blocks URLs (except the firm's `PUBLIC_TALK_URL`) and @handles.
+4. QA gets `flag_case {case_id, kind}`. CEO emails include flags and shortlists. Standing
+   orders are gateway switches (`POST /api/trust`), so the CoS doesn't need to remember them.
+5. `UTAX_PHONE_E164` stays unset.

@@ -71,3 +71,9 @@ The owner never has to speak. Slice 4 is now two pages (contract §8):
 - **`/ceo` console**: admin token; on login it plays and shows the brief from
   `GET /api/ceo/brief?since_id=` (remember `last_event_id` locally), lists pending approvals
   with Approve/Deny (`POST /api/approve`), and has an optional typed order box.
+
+## Contract v1.4 (2026-11-06): for `/ceo` and the rail
+- `/ceo` gets pause/resume switches per action type (email, social_post, calendar_invite)
+  via `POST /api/trust`, and Hire/Decline buttons on shortlisted candidates via
+  `POST /api/candidates/{id}/decision`.
+- A new event `case.flagged` (qa) shows on the case card as a small amber "flagged" chip.
