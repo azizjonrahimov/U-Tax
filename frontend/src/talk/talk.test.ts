@@ -137,7 +137,12 @@ describe("following the case", () => {
     p = followCase(p, [ev(10, "voice.command", {}), ev(11, "facts.extracted", { facts: {}, quotes: {}, assumed: [] }), tax]);
     expect(p).toMatchObject({ stage: "computed", totalCents: 45000, method: "assumed_par", lastId: 12 });
     expect(progressLine(p)).toBe("Your estimated Delaware franchise tax is $450, using the assumed par value method. QA is checking it, then the memo goes out.");
-    p = followCase(p, [ev(13, "qa.passed", { checks: [] }, { actor: "qa" }), ev(14, "memo.sent", {}, { actor: "acct" })]);
+    p = followCase(p, [ev(13, "qa.passed", { checks: [] }, { actor: "qa" })]);
+    expect(progressLine(p)).toMatch(/QA checked every number\. The memo is going out now\.$/);
+    p = followCase(p, [ev(14, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: "s" }, { actor: "system" })]);
+    expect(progressLine(p)).toMatch(/U-Tax's CEO approves this memo, then it goes out\.$/);
+    p = followCase(p, [ev(15, "memo.sent", {}, { actor: "acct" })]);
+    expect(p.awaitingCeo).toBe(false);
     expect(p.stage).toBe("sent");
     expect(progressLine(p)).toMatch(/The memo is in your inbox\.$/);
   });

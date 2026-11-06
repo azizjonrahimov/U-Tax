@@ -22,7 +22,7 @@
 .talk main { width: 100%; max-width: 780px; margin: 0 auto; padding: 48px 24px 64px; display: flex; flex-direction: column; gap: 24px; }
 .talk h1 { font-size: 40px; line-height: 1.15; font-weight: 800; letter-spacing: -.01em; margin: 0; text-wrap: balance; }
 .talk .lead { font-size: 22px; color: var(--text); margin: 0; }
-.talk .terms { margin: 0; padding: 18px 22px 18px 40px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; color: var(--dim); font-size: 18px; display: grid; gap: 8px; }
+.talk .terms { list-style: disc; margin: 0; padding: 18px 22px 18px 44px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; color: var(--dim); font-size: 18px; display: grid; gap: 8px; }
 .talk .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
 .talk section { display: flex; flex-direction: column; gap: 22px; }
 
@@ -45,7 +45,7 @@
 @keyframes talk-breathe { 50% { transform: scale(1.25); opacity: .75; } }
 
 /* Transcript */
-.talk .turns { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; max-height: 46vh; overflow-y: auto; }
+.talk .turns { scroll-behavior: smooth; list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; max-height: 46vh; overflow-y: auto; }
 .talk .turns li { font-size: 22px; line-height: 1.4; padding: 14px 18px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); overflow-wrap: anywhere; }
 .talk .turns li.customer { background: var(--panel2); margin-left: 48px; }
 .talk .turns li.agent { margin-right: 48px; }

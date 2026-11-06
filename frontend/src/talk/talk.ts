@@ -186,13 +186,15 @@ export interface CaseProgress {
   notEligible: string | null;
   /** Waiting on a human (BLOCKED). */
   blocked: boolean;
+  /** The memo waits for the CEO's sign-off (an email approval on this case). */
+  awaitingCeo: boolean;
   lastId: number;
 }
 
 const ORDER: Record<Stage, number> = { received: 0, facts: 1, computed: 2, checked: 3, sent: 4 };
 
 export const emptyProgress = (caseId: string): CaseProgress => ({
-  caseId, stage: "received", totalCents: null, method: null, askedFor: [], notEligible: null, blocked: false, lastId: 0,
+  caseId, stage: "received", totalCents: null, method: null, askedFor: [], notEligible: null, blocked: false, awaitingCeo: false, lastId: 0,
 });
 
 /** Fold this case's events (others ignored) into what the page shows. Forward-only. */
@@ -221,7 +223,10 @@ export function followCase(p: CaseProgress, events: readonly UTaxEvent[]): CaseP
         s = { ...s, stage: up("checked") };
         break;
       case "memo.sent":
-        s = { ...s, stage: up("sent"), blocked: false };
+        s = { ...s, stage: up("sent"), blocked: false, awaitingCeo: false };
+        break;
+      case "approval.requested":
+        if (pl.action_type === "email") s = { ...s, awaitingCeo: true };
         break;
       case "case.not_eligible":
         s = { ...s, notEligible: typeof pl.reason === "string" ? pl.reason : "not_eligible" };
@@ -256,7 +261,14 @@ export function progressLine(p: CaseProgress): string {
   }
   if (p.totalCents !== null) {
     const how = p.method === "authorized" ? "the authorized shares method" : "the assumed par value method";
-    const tail = p.stage === "sent" ? "The memo is in your inbox." : "QA is checking it, then the memo goes out.";
+    const tail =
+      p.stage === "sent"
+        ? "The memo is in your inbox."
+        : p.awaitingCeo
+          ? "U-Tax's CEO approves this memo, then it goes out."
+          : p.stage === "checked"
+            ? "QA checked every number. The memo is going out now."
+            : "QA is checking it, then the memo goes out.";
     return `Your estimated Delaware franchise tax is ${formatCents(p.totalCents)}, using ${how}. ${tail}`;
   }
   return STAGES.find((s) => s.id === p.stage)?.label ?? "";

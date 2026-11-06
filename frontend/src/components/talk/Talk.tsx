@@ -84,10 +84,18 @@ export function Talk() {
   /** The turns as of the last change: handlers read this, never a state updater with side effects. */
   const turnsRef = useRef<Turn[]>([]);
   const callRef = useRef<Call | null>(null);
-  const requestId = useRef(newRequestId());
+  /** One id per conversation, made at the first send: a retry reuses it, so the gateway returns the same case. */
+  const requestId = useRef<string | null>(null);
   const soundRef = useRef(sound);
   const usedVoice = useRef(false);
   const spoken = useRef<string>("");
+  const listRef = useRef<HTMLOListElement | null>(null);
+
+  // Keep the newest turn in view.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [turns]);
 
   useEffect(() => {
     soundRef.current = sound;
@@ -238,7 +246,7 @@ export function Talk() {
     try {
       const res = await apiFetch<{ case_id?: unknown; masked_name?: unknown }>("/voice", {
         method: "POST",
-        body: JSON.stringify(voiceBody(turns, email, usedVoice.current ? "voice" : "typed", requestId.current)),
+        body: JSON.stringify(voiceBody(turns, email, usedVoice.current ? "voice" : "typed", (requestId.current ??= newRequestId()))),
       });
       if (typeof res.case_id !== "string") throw new ApiError(500, "bad_response", "no case id");
       setCaseName(typeof res.masked_name === "string" ? res.masked_name : null);
@@ -287,7 +295,7 @@ export function Talk() {
   const startOver = () => {
     hangUp();
     hush();
-    requestId.current = newRequestId();
+    requestId.current = null;
     usedVoice.current = false;
     spoken.current = "";
     turnsRef.current = [];
@@ -361,7 +369,7 @@ export function Talk() {
                 {VOICE_LABEL[voiceState]}
               </div>
             )}
-            <ol className="turns" aria-live="polite" aria-label="Transcript">
+            <ol className="turns" ref={listRef} aria-live="polite" aria-label="Transcript">
               {turns.map((t, i) => (
                 <li key={i} className={t.speaker}>
                   <small>{t.speaker === "agent" ? "U-Tax (AI)" : "You"}</small>
