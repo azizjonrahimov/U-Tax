@@ -77,3 +77,6 @@ The owner never has to speak. Slice 4 is now two pages (contract §8):
   via `POST /api/trust`, and Hire/Decline buttons on shortlisted candidates via
   `POST /api/candidates/{id}/decision`.
 - A new event `case.flagged` (qa) shows on the case card as a small amber "flagged" chip.
+- v1.4.2: `/ceo` also lists BLOCKED cases with Retry (to READY), Re-ask (to INTAKE_PENDING)
+  and Not eligible buttons → `POST /api/cases/{id}/unblock`, plus a Resume button on any
+  PAUSED action type (`POST /api/trust`).
