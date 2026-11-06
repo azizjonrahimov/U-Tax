@@ -328,7 +328,11 @@ export function seedScreen(base: ScreenState, cases: readonly SeedCase[], flagge
 /** Case ids a log flags possible_injection anywhere (replay knows the whole night up front). */
 export function flaggedInLog(events: readonly { type: string; case_id: string | null; payload: Record<string, unknown> }[]): string[] {
   const out = new Set<string>();
-  for (const e of events) if (e.type === "case.flagged" && e.case_id && e.payload?.kind === "possible_injection") out.add(e.case_id);
+  for (const e of events) {
+    // /api/events items are unvalidated here: a null or primitive entry must not kill the replay.
+    if (typeof e !== "object" || e === null) continue;
+    if (e.type === "case.flagged" && typeof e.case_id === "string" && e.payload?.kind === "possible_injection") out.add(e.case_id);
+  }
   return [...out];
 }
 

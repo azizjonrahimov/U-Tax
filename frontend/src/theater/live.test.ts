@@ -238,6 +238,8 @@ describe("v1.6.4 and slice-2 follow-ups in the fold", () => {
   it("replay pre-marks cases the log flags later; live seeds case rows from /api/state", () => {
     const flag = ev(9, "case.flagged", { kind: "possible_injection" }, { actor: "qa", case_id: "case_3" });
     expect(flaggedInLog([mail, flag])).toEqual(["case_3"]);
+    // Unvalidated /api/events items: a null entry is skipped, not fatal.
+    expect(flaggedInLog([null as unknown as UTaxEvent, flag])).toEqual(["case_3"]);
     const pre = seedScreen(emptyScreen(), [], ["case_3"]);
     const s = applySteps(pre, buildScript([mail], quiet).steps);
     expect(s.cases.case_3.mail.hidden).toBe(true); // hidden from the very first frame

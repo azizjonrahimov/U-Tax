@@ -148,9 +148,17 @@ interface Feed {
   seed: ((s: ScreenState) => ScreenState) | null;
   /** Steps dropped from the head (live only), so progress stays meaningful. */
   dropped: number;
+  /** Highest event id the player has finished (live clock trimming never drops events still to play). */
+  playedId: number;
   wake: (() => void) | null;
 }
-const newFeed = (): Feed => ({ steps: [], accepted: [], times: new Map(), maxAcceptedId: 0, skipped: 0, ended: false, seed: null, dropped: 0, wake: null });
+const newFeed = (): Feed => ({ steps: [], accepted: [], times: new Map(), maxAcceptedId: 0, skipped: 0, ended: false, seed: null, dropped: 0, playedId: 0, wake: null });
+
+/** Chain screen seeds: the feed holds one, and several sources can add to it before the player applies it. */
+const addSeed = (feed: Feed, next: (s: ScreenState) => ScreenState) => {
+  const prev = feed.seed;
+  feed.seed = prev ? (s) => next(prev(s)) : next;
+};
 
 /** A cancellable wait: cleanup settles every pending one, so no async closure is left hanging. */
 function waiter() {
@@ -296,12 +304,16 @@ export function Theater() {
         feed.maxAcceptedId = Math.max(feed.maxAcceptedId, e.id);
       }
       if (live && feed.times.size > LIVE_KEEP_EVENTS) {
-        const extra = feed.times.size - LIVE_KEEP_EVENTS;
-        let k = 0;
+        // Drop only events already played, so a big catch-up keeps its clock.
         for (const id of feed.times.keys()) {
-          if (k++ >= extra) break;
+          if (feed.times.size <= LIVE_KEEP_EVENTS || id > feed.playedId) break;
           feed.times.delete(id);
         }
+      }
+      if (live) {
+        // A backlog can hold an email and the flag on its case: hide the case before its mail plays.
+        const flagged = flaggedInLog(res.accepted);
+        if (flagged.length) addSeed(feed, (s) => seedScreen(s, [], flagged));
       }
       feed.skipped += res.skipped.length;
       setFeedVersion((v) => v + 1);
@@ -331,7 +343,7 @@ export function Theater() {
           if (!alive) return;
           // The whole night is known up front: cases flagged later never show their mail at all.
           const flagged = flaggedInLog(events);
-          if (flagged.length) feed.seed = (s) => seedScreen(s, [], flagged);
+          if (flagged.length) addSeed(feed, (s) => seedScreen(s, [], flagged));
           push(events);
           end();
           return;
@@ -372,23 +384,33 @@ export function Theater() {
       let messages = 0;
       let stalled = 0;
       let queued: UTaxEvent[] = [];
+      /** A rejected token stops live mode for good: no more polls or reconnects that would flap the screen. */
+      let stopped = false;
+      const stop = (e: unknown) => {
+        stopped = true;
+        es?.close();
+        clearInterval(watchdog);
+        fail(e);
+      };
 
       const poll = async () => {
+        if (stopped) return;
+        // Compare against where we were when we asked: events that land while the request is
+        // in flight move the cursor past the snapshot, and that is not a reset.
+        const before = cursor.lastId;
+        const msgsBefore = messages;
+        messages = 0;
         let s: unknown;
         try {
           s = await getJson(stateUrl(GATEWAY));
         } catch (e) {
-          if (isAuthError(e)) {
-            es?.close();
-            fail(e);
-          }
+          if (isAuthError(e)) stop(e);
           return; // an outage shows through the stream's own errors
         }
-        if (!alive) return;
+        if (!alive || stopped) return;
         const n = numbersFromState(s);
         if (n) setLiveNumbers(n);
-        const v = liveVerdict({ stateLastId: seedFromState(s).lastId, cursorLastId: cursor.lastId, messagesSinceLastPoll: messages, stalledPolls: stalled });
-        messages = 0;
+        const v = liveVerdict({ stateLastId: seedFromState(s).lastId, cursorLastId: before, messagesSinceLastPoll: msgsBefore + messages, stalledPolls: stalled });
         stalled = v.stalledPolls;
         if (v.verdict === "resync") {
           console.warn(`[theater] gateway log went back behind id ${cursor.lastId}; resyncing`);
@@ -408,7 +430,7 @@ export function Theater() {
       };
 
       const connect = () => {
-        if (!alive) return;
+        if (!alive || stopped) return;
         es?.close();
         // Resume after the last id we applied; the browser's own reconnects send Last-Event-ID.
         es = new EventSource(streamUrl(GATEWAY, cursor.lastId));
@@ -438,7 +460,7 @@ export function Theater() {
           }
         };
         es.onerror = () => {
-          if (!alive) return;
+          if (!alive || stopped) return;
           setStatus("reconnecting");
           if (es?.readyState === EventSource.CLOSED) {
             // The browser gave up (HTTP error or the server ended the stream): retry ourselves.
@@ -465,7 +487,7 @@ export function Theater() {
           return;
         } catch (e) {
           if (!alive) return;
-          if (isAuthError(e)) return fail(e);
+          if (isAuthError(e)) return stop(e);
           setLoadError(e instanceof Error ? e.message : String(e));
           setStatus("reconnecting");
           await wait(reconnectDelayMs(attempt++));
@@ -493,7 +515,8 @@ export function Theater() {
     const feed = feedRef.current;
     const live = source === "live";
     let i = 0;
-    let lastEff = 1;
+    let lastEff = speedRef.current;
+    setEffSpeed(lastEff); // a new run starts at the operator's speed, not the last run's catch-up speed
     const { wait: realSleep, cancelAll } = waiter();
     const effective = () => {
       const v = Math.max(speedRef.current, live ? backlogSpeed(feed.steps.length - i) : 1);
@@ -648,7 +671,10 @@ export function Theater() {
         }
         i += 1;
         const next = feed.steps[i];
-        if (!next || next.eventId !== step.eventId) setDoneId(step.eventId);
+        if (!next || next.eventId !== step.eventId) {
+          setDoneId(step.eventId);
+          feed.playedId = Math.max(feed.playedId, step.eventId);
+        }
         // Live: drop played steps from the head so a long night doesn't grow memory.
         if (live && i > LIVE_KEEP_PLAYED * 2) {
           feed.steps.splice(0, i - LIVE_KEEP_PLAYED);
