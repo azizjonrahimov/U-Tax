@@ -192,6 +192,11 @@
 @media (max-width: 900px) {
   .theater main { grid-template-columns: 1fr !important; }
   .theater aside, .theater .col.mid { display: none; }
-  .theater .sub, .theater .hint { display: none; }
+  .theater .sub, .theater .hint, .theater .pill > .mono, .theater .avs, .theater .bar, .theater .firmline { display: none; }
+  .theater header { gap: 8px; }
+  .theater .pill { gap: 6px; }
+  .theater footer { justify-content: flex-end; padding: 0 8px; overflow-x: auto; }
+  .theater .ctl { gap: 4px; }
+  .theater .ctl button { padding: 6px 8px; }
   .theater { padding: 8px 16px; }
 }
