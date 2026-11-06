@@ -1,4 +1,4 @@
-# API contract (v1.4): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.5): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -159,7 +159,9 @@ For Replay mode and catch-up. Ordered by `id`.
   `trust.changed`, and mails the CEO; further calls get `refused` with code `paused` until
   `POST /api/trust {state: "AUTO"}` (design: PAUSED → human operating touch → AUTO).
 - `POST /api/candidates/{candidate_id}/decision` `{decision: "hire"|"decline"}` (admin) →
-  `hr.hired` / `hr.declined` with actor `ceo` and a `touch.operating`.
+  `hr.hired` / `hr.declined` with actor `ceo`, a `touch.operating`, and the `hr-hired` /
+  `hr-declined` mail to the candidate (trust type `email`). `/ceo` lists **every screened
+  candidate**, not only shortlisted ones, so no AI screen becomes a silent rejection.
 - `POST /api/voice/session` → `{client_secret, model, expires_at}`: an ephemeral OpenAI
   Realtime session minted with the gateway's `OPENAI_API_KEY` (the key never reaches the
   browser). `503 voice_unavailable` when no key is set; the mic page then falls back to
@@ -213,7 +215,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `send_memo` | acct | `{case_id}` | refuses unless `QA_PASSED`; memo from template + engine output only; `memo.sent` |
 | `book_call` | intake | `{case_id, start}` | `start` must be one of the case's `offered_slots`, else `refused`; trust type `calendar_invite`; `call.booked` |
 | `phone_check` | qa | `{case_id}` | DevicePort; `phone.checked` (never blocks the case) |
-| `post_social` | mkt | `{channel, text, image_url}` | content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; `post.published` |
+| `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
 | `draft_dm` | mkt | `{recipient_label, text}` | `dm.drafted` (the human sends it) |
 | `get_candidate` | hr | `{candidate_id}` | the masked candidate: stated credentials, questionnaire answers, stage (no contact details) |
 | `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
@@ -247,7 +249,8 @@ with exactly one of these opening messages (the CoS prompt parses them):
 | `POST /api/voice` with `speaker: "customer"` | `FAST PATH case_N` |
 | `POST /api/approve` | `Approval apr_N allowed for case_N` / `Approval apr_N denied for case_N` (`for firm` when there is no case) |
 | `POST /api/voice` with `speaker: "ceo"` | `CEO: <text>` |
-| inbound applicant mail (hiring inbox) | `New applicant cand_N` |
+| inbound applicant mail (hiring inbox) | `New applicant cand_N` (the CoS does nothing yet) |
+| the applicant's first questionnaire reply | `Applicant answered cand_N` (the CoS routes it to an `hr` card) |
 
 Each wake writes nothing extra; the session's own tool calls produce the events.
 Stand-in tonight (no Naïve until Saturday, design D26): the **local driver** receives the
@@ -261,6 +264,30 @@ questionnaire template (trust type `email`), writes `hr.applicant` with the mask
 stated credentials only (no contact details reach any agent), then wakes the crew with
 `New applicant cand_N`. Questionnaire answers arrive as more mail on the same thread and are
 added to the candidate, masked the same way.
+
+## 6d. Templates and the voice prompt
+
+The gateway loads **every** `naive/templates/*.md` with the strict memo renderer (unknown or
+missing placeholder → built-in fallback, logged), not only `memo.md`. The names and
+placeholders are listed in `naive/README.md`: `memo`, `ask-client`,
+`not-eligible-<reason>`, `hr-questionnaire`, `hr-hired`, `hr-declined`, `ceo-update-email`
+(with an `action_line` per reason), `ceo-digest-email`, `login-brief`. Template files carry no
+Subject line; the gateway sets subjects. `hr-questionnaire` must contain the exact line
+`This screen is run by an AI agent. A human makes the final hiring decision.`
+`POST /api/voice/session` uses `naive/prompts/voice-intake.md` as the Realtime instructions
+and sets instructions and tools **server-side when minting**, so a client `session.update`
+cannot replace them.
+
+## 6e. Trust boundaries for `/talk` and mail volume
+
+- `/talk` posts **customer turns only**, speaker-labelled (`{turns: [{speaker: "customer",
+  text}]}` alongside `text`). Fact quotes must match customer lines only, never the AI's
+  read-back. `reply_email` comes from the typed field, never from the transcript.
+- Memos per `reply_email`: at most 3 a day, on top of the per-IP limit.
+- A reply from a voice case's `reply_email` threads onto that case (the voice case's sender
+  key is the reply address), never opening a new case.
+- Flag mails to the CEO: the first `case.flagged` in an hour mails right away; the rest go
+  into the 3-hour digest with a count.
 
 ## 7. Memo template
 
@@ -290,6 +317,12 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.5 (2026-11-06, agents task 2 review): post links appended by the gateway (`kind`
+  client|hiring, `PUBLIC_TALK_URL` required); `Applicant answered` wake; all templates loaded,
+  voice-intake prompt minted server-side; `/talk` customer-turns-only, 3 memos/day per address,
+  voice re-ask threading, flag mail throttle; every screened candidate visible to the CEO,
+  decision mails.
 
 - v1.4.3 (2026-11-06, frontend slice 2): `/api/brief/audio` accepts the theater token.
 
