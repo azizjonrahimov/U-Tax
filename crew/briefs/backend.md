@@ -75,3 +75,16 @@ event, 503 without a key). Stand-ins work with no key. See contract §5 and §8.
   every `CEO_DIGEST_HOURS`=3), each writing `ceo.notified`. Stand-in: the console outbox.
 - Naïve access arrives Saturday at the event (D26): everything tonight runs on stand-ins
   plus your local driver.
+
+## Contract v1.3 (2026-11-06, from the agents lane's /review; supersedes UTAX_TOOL_SECRET above)
+- `/mcp` auth: **one token per agent** (`UTAX_TOOL_TOKEN_COS|_INTAKE|_TAX|_QA|_ACCT|_MKT|_HR`,
+  ≥32 chars). The token decides the actor; refuse tools outside that actor's §6 column
+  (`tool_not_allowed`); `X-UTax-Actor` only if it matches; **no empty-token bypass**.
+- `book_cost` is gone: the gateway books spend itself (§6a); the local driver books a
+  code price-table estimate.
+- §6b wake-ups: on `email.received`, customer voice, `/api/approve`, CEO voice and
+  applicant mail, start a Chief of Staff session via the Naïve client with the exact
+  message strings. Tonight the local driver consumes the same messages.
+- §6c two inboxes plus HR ingress (auto-reply questionnaire, masked `hr.applicant`, wake).
+- `mark_not_eligible` reason enum; `get_case.offered_slots` and `book_call.start` limited
+  to them; `post_social` content guard.

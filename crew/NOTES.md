@@ -42,3 +42,4 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-06 20:05Z DECISION (auto, recommended) D23 /talk customer voice agent, D24 CEO email updates + login brief, D25 click approvals in /ceo, D26 Naive Saturday; contract v1.2 (3bf21cc)
 - 2026-11-06 20:10Z READY lane/frontend 79e4176ad5d7 scaffold (controller: lint clean, build ok at pin, owned paths only); MERGED as 22a6f40. Lane noted /verify fails without an origin remote.
 - 2026-11-06 20:30Z OWNER "ok we'll do it later, continue building" -> GitHub repo deferred; latest Saturday morning before leaving for the event
+- 2026-11-06 20:50Z DECISION (auto) agents /review 8 asks -> contract v1.3: all as recommended; #3 strengthened to per-agent tool tokens (a self-declared header is not auth with a shared secret); #7 no localhost bypass (tunnel traffic is localhost)
