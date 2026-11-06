@@ -60,9 +60,15 @@ class OpenAIVoice:
     def __repr__(self) -> str:  # never show the key
         return "OpenAIVoice()"
 
-    def create_session(self) -> VoiceSession:
+    MAX_OUTPUT_TOKENS = 600  # per response: a short intake turn, not an open assistant
+
+    def create_session(self, instructions: str = "") -> VoiceSession:
+        # Contract §6d: instructions and (no) tools are fixed here, server-side, so the
+        # browser's short-lived secret is only good for this intake conversation.
+        body = {"model": self.realtime_model, "instructions": instructions, "tools": [],
+                "max_response_output_tokens": self.MAX_OUTPUT_TOKENS}
         try:
-            response = self._http.post("/realtime/sessions", json={"model": self.realtime_model})
+            response = self._http.post("/realtime/sessions", json=body)
         except httpx.TransportError as exc:
             raise Unavailable(f"openai unreachable: {exc}") from exc
         if not response.is_success:

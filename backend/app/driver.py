@@ -140,6 +140,8 @@ class LocalCrew:
             self._call("cos", "firm_brief", {})
             return
         if message.startswith("New applicant "):
+            return  # v1.5: nothing to screen until the questionnaire answers arrive
+        if message.startswith("Applicant answered "):
             cand = _CAND.search(message)
             if cand:
                 self._screen(cand.group(1))
@@ -230,8 +232,11 @@ class LocalCrew:
         cand = self._call("hr", "get_candidate", {"candidate_id": candidate_id}).data
         if not cand or cand.get("stage") != "applicant":
             return
+        if not cand.get("answers"):
+            return  # D1: never claim a review of answers that don't exist
         self._call("hr", "hr_record", {"stage": "screened", "candidate_id": candidate_id,
-                                       "note": "questionnaire reviewed by the AI screen"})
+                                       "note": "answers received; stand-in screen (local "
+                                               "driver, not a model)"})
         credentials = cand.get("credentials") or ""
         if any(c in credentials for c in ("EA", "CPA")):
             self._call("hr", "hr_record", {"stage": "shortlisted", "candidate_id": candidate_id,

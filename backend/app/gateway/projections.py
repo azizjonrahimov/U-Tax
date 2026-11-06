@@ -137,6 +137,8 @@ class State:
     cap_log: dict[str, list[str]] = field(default_factory=lambda: {t: [] for t in TRUST_TYPES})
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
     last_login_brief: dict | None = None
+    memo_log: dict[str, list[str]] = field(default_factory=dict)  # reply address -> ts
+    flag_notice_log: list[str] = field(default_factory=list)
     public_notice_log: list[str] = field(default_factory=list)
     crm_failed: set[str] = field(default_factory=set)
     posts: int = 0
@@ -167,10 +169,18 @@ class State:
             "trust": dict(self.trust),
             "money": {
                 "tax_saved_cents": self.tax_saved_cents,
-                "spent_usd": _money(self.spent_usd()),
-                "spent_by_provider": {p: _money(v) for p, v in sorted(self.spent_by_provider.items())},
+                "spent_usd": money_text(self.spent_usd()),
+                "spent_by_provider": {p: money_text(v)
+                                      for p, v in sorted(self.spent_by_provider.items())},
             },
-            "hiring": dict(self.hiring),
+            # v1.5: every screened candidate is listed for the CEO (no silent rejection)
+            "hiring": {**self.hiring, "candidates": [
+                {"candidate_id": c["candidate_id"], "name_masked": c["name_masked"],
+                 "stage": c.get("stage"), "credentials": c.get("credentials")}
+                for c in sorted(self.candidates.values(), key=lambda c: c["candidate_id"])
+                # applicants too: nobody waits unseen when a questionnaire didn't go out
+                if c.get("stage") in ("applicant", "screened", "shortlisted", "hired",
+                                      "declined")]},
             "queue": {
                 "waiting": sum(1 for c in cases if c.status in OPEN_STATUSES and c.status != "BLOCKED"),
                 "blocked": sum(1 for c in cases if c.status == "BLOCKED"),
@@ -297,6 +307,10 @@ class State:
 
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)
+        if case is not None and e.status == "ok" and case.reply_to:
+            from app.gateway.masking import mail_identity
+
+            self.memo_log.setdefault(mail_identity(case.reply_to), []).append(e.ts)
         if case is not None and e.status == "ok":
             case.memo_message_id = e.payload["message_id"]
             case.memo_version = case.facts_version
@@ -373,6 +387,8 @@ class State:
             cand["sender_key"] = private["sender_key"]
             cand["reply_to"] = private.get("reply_to")
         if stage == "applicant" and private.get("text"):
+            if cand.get("texts"):  # every mail after the first is an answer
+                cand["answers"] = cand.get("answers", 0) + 1
             cand.setdefault("texts", []).append(private["text"])  # contact-free answers
         if stage == "applicant" and e.payload["note"] and "credentials" not in cand:
             cand["credentials"] = e.payload["note"]
@@ -410,6 +426,8 @@ class State:
         self._last_brief = e
 
     def _on_ceo_notified(self, e: Event) -> None:
+        if e.payload["reason"] == "flagged":
+            self.flag_notice_log.append(e.ts)
         if e.payload["reason"] == "login" and getattr(self, "_last_brief", None) is not None:
             b = self._last_brief
             self.last_login_brief = {"brief_id": b.id, "notice_id": e.id, "ts": e.ts,
@@ -419,7 +437,7 @@ class State:
         pass
 
 
-def _money(value: Decimal) -> str:
+def money_text(value: Decimal) -> str:
     """Spend for the rail: 2 places when whole cents, else up to 4 ("11.38", "0.0034")."""
     text = usd_string(value)
     return text[:-2] if text.endswith("00") else text

@@ -13,7 +13,7 @@ DOT = "•"
 
 # 123-45-6789, 123 45 6789 (SSN) and 12-3456789 (EIN): always redacted.
 _FORMATTED_IDS = re.compile(
-    r"(?<![\d.,])(?:\d{3}([- .–])\d{2}\1\d{4}|\d{2}[-– ]\d{7})(?![\d,]|\.\d)"
+    r"(?<!\d)(?<!\d[.,])(?:\d{3}([- .–])\d{2}\1\d{4}|\d{2}[-– ]\d{7})(?!\d|[.,]\d)"
 )
 # A bare 9-digit run is only an id when a keyword says so: "100000000" alone is a
 # share count and must survive.
@@ -101,6 +101,31 @@ _COMPANY_PHRASE = re.compile(
 
 # optional country code, then 3-3-4: (415) 555-0100, 415.555.0100, +1 415 555 0100
 _PHONE = re.compile(r"(?<![\w$])(?:\+?\d{1,2}[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]\d{4}(?!\d)")
+
+
+_TLD = r"(?:com|org|net|io|dev|ai|co|app|xyz|edu|gov|us|uk|de|fr|ca|me|tech|so|sh)"
+_WEBMAIL = r"(?:gmail|googlemail|yahoo|outlook|hotmail|icloud|protonmail|proton|aol)"
+# Spoken forms only, and unambiguous (every repeat is anchored on the literal word "dot",
+# so matching stays linear): "jane dot doe at example dot com", "jane at gmail".
+_SPOKEN_EMAIL = re.compile(
+    r"(?i)\b[a-z0-9]+(?:\s+dot\s+[a-z0-9]+)*\s+at\s+[a-z0-9-]+(?:\s+dot\s+[a-z0-9-]+)*"
+    r"\s+dot\s+" + _TLD + r"\b"
+    r"|\b[a-z0-9]+(?:\s+dot\s+[a-z0-9]+)*\s+at\s+" + _WEBMAIL + r"\b")
+SPOKEN_MAX_CHARS = 4000
+
+
+def mask_spoken_emails(text: str) -> str:
+    """/talk transcripts: "jane at example dot com", "jane at gmail" -> hidden (v1.5)."""
+    return _SPOKEN_EMAIL.sub("[email hidden]", text[:SPOKEN_MAX_CHARS])
+
+
+def mail_identity(address: str) -> str:
+    """One mailbox, however it is spelled: case, +tags, and Gmail's dots."""
+    local, _, domain = address.strip().lower().partition("@")
+    local = local.split("+", 1)[0]
+    if domain in ("gmail.com", "googlemail.com"):
+        local, domain = local.replace(".", ""), "gmail.com"
+    return f"{local}@{domain}"
 
 
 def has_email(text: str) -> bool:
