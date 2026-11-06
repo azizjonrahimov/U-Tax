@@ -69,7 +69,8 @@ def test_engine_problems_are_reasked():
     out = check(body, {"authorized_shares": "1,000,000", "issued_shares": "2,000,000",
                        "gross_assets": "$500k"})
     assert "issued_shares" in out.missing
-    assert any("exceed" in p for p in out.problems)
+    # plain words for the client (6c LOW), never the engine's wording
+    assert any("more than the authorized shares" in p for p in out.problems)
 
 
 def test_zero_issued_is_reasked():
@@ -77,6 +78,9 @@ def test_zero_issued_is_reasked():
     out = check(body, {"authorized_shares": "10,000,000", "issued_shares": "0",
                        "gross_assets": "$500k"})
     assert "issued_shares" in out.missing
+    assert out.problems == ["your email says no shares have been issued; how many shares does "
+                            "the company have issued (held by founders and investors) today?"]
+    assert not any("> 0" in p or "assumed par" in p for p in out.problems)
 
 
 def test_unrealistic_inputs_are_flagged():

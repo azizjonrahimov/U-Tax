@@ -60,6 +60,24 @@ _SHARE_WORD = re.compile(r"(?i)\b(shares?|authori[sz]ed|issued|outstanding)\b")
 _BOUNDARY = re.compile(r"[.;!?\n]|\d")
 
 
+# Engine wording -> what the client reads in the re-ask (no engine jargon, no "> 0")
+PLAIN_PROBLEMS = {
+    "assumed par needs issued shares > 0":
+        "your email says no shares have been issued; how many shares does the company "
+        "have issued (held by founders and investors) today?",
+    "issued shares can't exceed authorized shares":
+        "the issued shares are more than the authorized shares; could you check both numbers?",
+    "assumed par needs gross assets above $0":
+        "the method that usually saves the most needs your total assets; what were the "
+        "company's total assets at the end of last year (even a rough number)?",
+}
+PLAIN_BY_FIELD = {
+    "issued_shares": "could you check your issued shares?",
+    "authorized_shares": "could you check your authorized shares?",
+    "gross_assets": "could you check your total assets?",
+}
+
+
 def _squash(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
 
@@ -258,7 +276,8 @@ def check_facts(
         except ValidationError as exc:
             if exc.field not in out.missing:
                 out.missing.append(exc.field)
-            out.problems.append(exc.message)
+            out.problems.append(PLAIN_PROBLEMS.get(exc.message, PLAIN_BY_FIELD.get(
+                exc.field, "one of your numbers doesn't fit with the others")))
         if values["authorized_shares"] > MAX_SHARES or values["issued_shares"] > MAX_SHARES:
             out.unrealistic.append("shares over 1 billion")
         if values["gross_assets"] > MAX_ASSETS_CENTS:

@@ -177,6 +177,24 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def clip(text: str, limit: int) -> str:
+    """Cut at the last word boundary before `limit`, with an ellipsis: never mid-word."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit - 1]
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ,;:.-") + "…"
+
+
+def tidy_lines(text: str) -> str:
+    """Three or more newlines become one blank line; trailing spaces go."""
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text)
+
+
 def _cap(text: str) -> str:
     """Uppercase the first letter only ("first memo..." -> "First memo...")."""
     return text[:1].upper() + text[1:]
@@ -536,8 +554,8 @@ class Gateway:
             self._emit([*(extra or []),
                         NewEvent(type="ceo.notified", actor="cos",
                                  provider=None if channel == "login" else self.ports.mail.provider,
-                                 payload={"channel": channel, "subject": subject[:120],
-                                          "summary": summary[:500], "reason": reason},
+                                 payload={"channel": channel, "subject": clip(subject, 120),
+                                          "summary": clip(summary, 500), "reason": reason},
                                  idempotency_key=key)])
         except EventWriteError as err:  # the mail went (its key dedupes a resend)
             log.error("ceo.notified not logged: %s", err)
@@ -610,7 +628,8 @@ class Gateway:
                              idempotency_key=f"approval:{action_key}:{approval_id}",
                              private={"action_key": action_key})])
         if not (public and self._recent_public_notice()):  # anonymous traffic: throttled
-            self._notify_ceo("approval", f"Approve? {summary}"[:120], f"{approval_id}: {summary}",
+            self._notify_ceo("approval", clip(f"Approve? {summary}", 120),
+                             f"{approval_id}: {summary}",
                              key=f"ceo:approval:{approval_id}")
         raise NeedsApproval(approval_id, summary)
 
@@ -691,7 +710,7 @@ class Gateway:
             log.info("dropped an auto-reply from %s", mail.sender)
             return {"dropped": True, "reason": "auto-reply"}
         mail = InMail(message_id=mail.message_id, sender=mail.sender, subject=mail.subject,
-                      body=html_to_text(mail.body[:MAX_BODY_CHARS]))  # v1.6: no markup stored
+                      body=tidy_lines(html_to_text(mail.body[:MAX_BODY_CHARS])))
         if inbox == "hiring":
             return self._receive_applicant(mail)
         result = self._receive(mail, provider=self.ports.mail.provider)
@@ -878,7 +897,7 @@ class Gateway:
                          payload={"text": text, "channel": channel, "speaker": "ceo",
                                   "case_id": None}),
                 NewEvent(type="touch.operating", actor="ceo",
-                         payload={"note": f'order: "{text[:120]}"', "approval_id": None}),
+                         payload={"note": f'order: "{clip(text, 120)}"', "approval_id": None}),
             ])
             self._wake(f"CEO: {text}")
             return {"forwarded": True}
@@ -1657,6 +1676,14 @@ class Gateway:
                           {"offered_slots": offered})
         # the approval names the time: an OK for one slot never books another
         slot_key = f"{key}:{start_iso}"
+        approved = [k[len(key) + 1:] for k, apr in self.state.approval_by_key.items()
+                    if k.startswith(f"{key}:") and k != slot_key
+                    and self.state.approvals[apr].decision == "allow"]
+        still_open = [s for s in approved if s in offered]
+        if still_open:
+            # the CEO approved that time; the AUTO it earned never moves the call elsewhere
+            raise Refused("slot_not_approved", f"the CEO approved {still_open[0]}; book that slot",
+                          {"approved_start": still_open[0], "offered_slots": offered})
         self._gate("calendar_invite", slot_key,
                    _cap(f"{self._first('calendar_invite')}calendar invite: "
                         f"{case.masked_name}, {start_iso}"), case.case_id)
@@ -1715,7 +1742,7 @@ class Gateway:
             raise Refused("too_long", f"with the link the post is {len(text)} characters; "
                                       f"X allows {X_MAX_CHARS}")
         self._gate("social_post", key,
-                   _cap(f"{self._first('social_post')}post on {channel}: {text[:80]}"),
+                   _cap(f"{self._first('social_post')}post on {channel}: {clip(text, 80)}"),
                    None)
         try:
             posted = self._with_retry("social post", lambda: self.ports.social.post(
@@ -1760,7 +1787,8 @@ class Gateway:
                              payload={"recipient_label": label, "text": text},
                              idempotency_key=f"dmsent:{_digest([label, text])}"),
                     NewEvent(type="touch.operating", actor="ceo",
-                             payload={"note": f"sent DM to {label}"[:120], "approval_id": None},
+                             payload={"note": clip(f"sent DM to {label}", 120),
+                                      "approval_id": None},
                              idempotency_key=f"touch:dmsent:{_digest([label, text])}")])
         return {"sent_by_human": True}
 
