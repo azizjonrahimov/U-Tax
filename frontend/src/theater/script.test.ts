@@ -16,7 +16,7 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 const FIXTURE = read("../../public/fixtures/events.sample.jsonl");
 const parsed = parseJsonl(FIXTURE);
 const events = parsed.events;
-const quiet = { log: () => {} };
+const quiet = { log: () => {}, onGap: () => {} };
 
 const ev = (id: number, type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent => ({
   id,
@@ -537,11 +537,15 @@ describe("review pass 2", () => {
     expect(skipped.map((s) => s.detail)).toEqual(Array(3).fill("checks contradict the verdict"));
   });
 
-  it("missing ids are reported as a gap; a late arrival is then dropped", () => {
+  it("id gaps are info only (contract v1.3.2): events after a gap still apply, nothing is skipped", () => {
     const log = vi.fn<(s: SkippedEvent) => void>();
-    const a = appendEvents(startScript(), [events[0], events[3]], { log });
-    expect(a.skipped).toEqual([{ eventId: 2, type: "?", reason: "gap", detail: "ids 2..3 never arrived" }]);
-    expect(log).toHaveBeenCalledOnce();
+    const onGap = vi.fn();
+    const a = appendEvents(startScript(), [events[0], events[3]], { log, onGap });
+    expect(a.gaps).toEqual([{ from: 2, to: 3 }]);
+    expect(onGap).toHaveBeenCalledExactlyOnceWith({ from: 2, to: 3 });
+    expect(a.skipped).toEqual([]);
+    expect(log).not.toHaveBeenCalled();
+    expect(a.steps.some((s) => s.eventId === 4)).toBe(true);
     expect(appendEvents(a.cursor, [events[1]], quiet).steps).toEqual([]);
   });
 

@@ -62,8 +62,13 @@ export interface CursorStep {
   meta?: Meta;
 }
 
-/** "gap": ids that never arrived before a higher id did (eventId = first missing id). */
-export type SkipReason = "unknown_type" | "status_skipped" | "bad_event" | "bad_payload" | "gap";
+export type SkipReason = "unknown_type" | "status_skipped" | "bad_event" | "bad_payload";
+
+/** Ids that were jumped over. Info only: contract §2 (v1.3.2) allows gaps (e.g. Postgres rollbacks). */
+export interface IdGap {
+  from: number;
+  to: number;
+}
 
 export interface SkippedEvent {
   eventId: number;
@@ -98,6 +103,8 @@ export interface Script {
 export interface ScriptOptions {
   /** Called once per skipped event. Default: console.warn. */
   log?: (skipped: SkippedEvent) => void;
+  /** Called once per id gap (info only). Default: console.info. */
+  onGap?: (gap: IdGap) => void;
 }
 
 const defaultLog = (s: SkippedEvent) =>
@@ -630,8 +637,10 @@ export function appendEvents(
   cursor: ScriptCursor,
   events: readonly UTaxEvent[],
   opts: ScriptOptions = {},
-): { cursor: ScriptCursor; steps: CursorStep[]; skipped: SkippedEvent[] } {
+): { cursor: ScriptCursor; steps: CursorStep[]; skipped: SkippedEvent[]; gaps: IdGap[] } {
   const log = opts.log ?? defaultLog;
+  const onGap = opts.onGap ?? ((g: IdGap) => console.info(`[theater] ids ${g.from}..${g.to} not in the log (gap)`));
+  const gaps: IdGap[] = [];
   const applied = (e: UTaxEvent, last: number) => Number.isSafeInteger(e?.id) && e.id >= 1 && e.id <= last;
   // Invalid ids are kept so validation reports them as bad_event.
   const fresh = events.filter((e) => !applied(e, cursor.lastId));
@@ -653,10 +662,11 @@ export function appendEvents(
       continue;
     }
     prev = ev;
-    if (Number.isSafeInteger(ev?.id) && ev.id > lastId + 1) {
-      // Ids are dense (contract §2). Missing ones can't be inserted later without
-      // changing emitted keys, so report the gap; a late arrival is then dropped.
-      skip({ eventId: lastId + 1, type: "?", reason: "gap", detail: `ids ${lastId + 1}..${ev.id - 1} never arrived` });
+    if (Number.isSafeInteger(ev?.id) && ev.id > lastId + 1 && lastId > 0) {
+      // Ids may skip (contract §2). The event still applies; note the gap as info.
+      const gap = { from: lastId + 1, to: ev.id - 1 };
+      gaps.push(gap);
+      onGap(gap);
     }
     const res = stepsForEvent(state, ev);
     state = res.state;
@@ -664,7 +674,7 @@ export function appendEvents(
     if (res.skipped) skip(res.skipped);
     if (Number.isSafeInteger(ev?.id) && ev.id >= 1) lastId = Math.max(lastId, ev.id);
   }
-  return { cursor: { state, lastId }, steps, skipped };
+  return { cursor: { state, lastId }, steps, skipped, gaps };
 }
 
 /** The whole log at once (fixture, replay). Sorted by id; exact duplicates collapse, conflicting ones are reported. */
