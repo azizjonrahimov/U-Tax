@@ -40,6 +40,25 @@ def _local(name: str, settings: Settings):
     }[name]()
 
 
+def _need(value: str, env: str, switch: str) -> str:
+    if not value:
+        raise AdapterNotReady(f"{switch} needs {env} (set it in backend/.env)")
+    return value
+
+
+def _sponsor(name: str, choice: str, settings: Settings):
+    """The sponsor adapters that exist (task 8). A missing key fails at boot, never later."""
+    if name == "mail" and choice == "agentmail":
+        from app.gateway.adapters.agentmail import AgentMailMail
+
+        key = _need(settings.agentmail_api_key, "AGENTMAIL_API_KEY", "ADAPTER_MAIL=agentmail")
+        _need(settings.inbox_clients, "MAIL_INBOX_CLIENTS", "ADAPTER_MAIL=agentmail")
+        return AgentMailMail(key, inboxes={"clients": settings.inbox_clients,
+                                           "hiring": settings.inbox_hiring},
+                             data_dir=settings.data_dir, base_url=settings.agentmail_base_url)
+    return None
+
+
 def build_port(name: str, settings: Settings):
     choice = settings.adapters.get(name, "local")
     if choice in ("local", "none"):
@@ -50,6 +69,9 @@ def build_port(name: str, settings: Settings):
         from app.gateway.adapters.openai_voice import OpenAIVoice
 
         return OpenAIVoice(settings.openai_api_key)
+    built = _sponsor(name, choice, settings)
+    if built is not None:
+        return built
     if choice in SPONSORS.get(name, ()):
         raise AdapterNotReady(f"ADAPTER_{name.upper()}={choice}: the sponsor adapter isn't "
                               "built yet (Saturday); use local")

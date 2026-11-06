@@ -289,7 +289,54 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         # `inbox` is a dev-only extra ("hiring" plays the second inbox, §6c)
         return act("inject_email", _pick(body, "from", "subject", "body", "message_id", "inbox"))
 
+    @router.post("/hooks/agentmail")
+    async def agentmail_hook(request: Request, token: str | None = Query(None)):
+        """AgentMail's message.received webhook (task 8). Svix-signed when
+        AGENTMAIL_WEBHOOK_SECRET is set, else ?token=UTAX_HOOK_TOKEN; with neither it is
+        closed (503). Delivery is at least once: the gateway dedupes on the message id."""
+        from app.gateway.adapters.agentmail import verify_svix
+
+        settings = gw().settings
+        raw = await request.body()
+        if len(raw) > HOOK_MAX_BYTES:
+            raise APIError(413, "too_large", "webhook body too large")
+        if settings.agentmail_webhook_secret:
+            if not verify_svix(settings.agentmail_webhook_secret, dict(request.headers), raw):
+                raise APIError(401, "unauthorized", "bad webhook signature")
+        elif settings.hook_token:
+            if not _same(token, settings.hook_token):
+                raise APIError(401, "unauthorized", "bad hook token")
+        else:
+            raise APIError(503, "hook_not_configured",
+                           "set AGENTMAIL_WEBHOOK_SECRET (or UTAX_HOOK_TOKEN)")
+        try:
+            payload = json.loads(raw)
+        except ValueError as err:
+            raise APIError(400, "bad_input", "JSON expected") from err
+        if not isinstance(payload, dict) or payload.get("event_type") != "message.received":
+            kind = payload.get("event_type") if isinstance(payload, dict) else None
+            return {"ok": True, "ignored": kind}  # 2xx: AgentMail must not retry these
+        port = gw().ports.mail
+        if not hasattr(port, "inbox_of"):  # a config slip must not swallow client mail
+            raise APIError(503, "hook_not_configured", "ADAPTER_MAIL is not agentmail")
+        try:
+            mail = await asyncio.to_thread(port.parse_inbound, payload)
+        except PortError as err:  # the > 64 KiB body fetch failed: let AgentMail retry
+            raise APIError(503, "unavailable", str(err)) from err
+        if mail is None:
+            return {"ok": True, "ignored": "unparseable"}
+        inbox = port.inbox_of(payload) if hasattr(port, "inbox_of") else "clients"
+        result = await asyncio.to_thread(gw().perform, "receive_email",
+                                         {"mail": mail, "inbox": inbox})
+        if result.status == "error":  # e.g. the event store is down: retry later
+            raise APIError(503, result.error["code"], result.error["message"])
+        return {"ok": result.ok, "status": result.status, "data": result.data,
+                "error": result.error}
+
     return router
+
+
+HOOK_MAX_BYTES = 1_000_000  # a message.received body is inlined only up to 64 KiB
 
 
 def _pick(body: dict, *names: str) -> dict[str, Any]:

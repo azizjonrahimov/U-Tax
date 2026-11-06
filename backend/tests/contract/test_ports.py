@@ -38,7 +38,18 @@ def _ids(factories: dict) -> list[str]:
 
 # ---------------------------------------------------------------- mail
 
-MAIL = {"local": lambda tmp, faults: local.LocalMail(tmp, faults)}
+def _agentmail(tmp: Path, faults: FaultPlan):
+    from app.gateway.adapters.agentmail import AgentMailMail
+    from tests.adapters.fakes import FakeAgentMail
+
+    fake = FakeAgentMail(faults)
+    return AgentMailMail("am_test", inboxes={"clients": "checkup@u-tax.test"}, data_dir=tmp,
+                         transport=fake.transport())
+
+
+# Sponsor adapters run here against their documented API through an httpx MockTransport
+# fake (tests/adapters/fakes.py); live calls are in tests/adapters/, skipped without keys.
+MAIL = {"local": lambda tmp, faults: local.LocalMail(tmp, faults), "agentmail": _agentmail}
 
 
 @pytest.fixture(params=_ids(MAIL))

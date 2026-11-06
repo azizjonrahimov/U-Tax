@@ -785,7 +785,8 @@ class Gateway:
         try:
             sent = self._with_retry("questionnaire email", lambda: self.ports.mail.send(
                 OutMail(to=cand["reply_to"], subject=QUESTIONNAIRE_SUBJECT,
-                        body=self.templates.render("hr-questionnaire", {})), key))
+                        body=self.templates.render("hr-questionnaire", {}), inbox="hiring"),
+                key))
         except ToolError as err:
             log.warning("questionnaire to %s failed: %s", candidate_id, err)
             return "failed"
@@ -1892,7 +1893,8 @@ class Gateway:
         try:
             self._with_retry("decision email", lambda: self.ports.mail.send(
                 OutMail(to=cand["reply_to"], subject=DECISION_SUBJECT,
-                        body=self.templates.render(f"hr-{stage}", {})), key))
+                        body=self.templates.render(f"hr-{stage}", {}), inbox="hiring"),
+                key))
         except ToolError as err:
             log.warning("decision mail to %s failed: %s", candidate_id, err)
             return "failed"

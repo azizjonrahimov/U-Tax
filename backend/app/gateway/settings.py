@@ -47,6 +47,11 @@ class Settings:
     driver: str = ""  # "local": the in-process stand-in crew plays the agents (D26)
     driver_pace_seconds: float = 1.2
     tool_tokens: dict[str, str] = field(default_factory=dict)  # actor -> token (v1.3)
+    # task 8 sponsor adapters (keys from .env; empty = that adapter can't start)
+    agentmail_api_key: str = ""
+    agentmail_webhook_secret: str = ""  # whsec_... (Svix); verifies /hooks/agentmail
+    agentmail_base_url: str = "https://api.agentmail.to"
+    hook_token: str = ""  # fallback for /hooks/*: ?token=<this> when no signing secret
 
     @property
     def events_file(self) -> Path:
@@ -91,4 +96,8 @@ class Settings:
             driver=_env("UTAX_DRIVER").lower(),
             driver_pace_seconds=float(_env("UTAX_DRIVER_PACE") or 1.2),
             tool_tokens={a: t for a, t in tokens.items() if t},
+            agentmail_api_key=_env("AGENTMAIL_API_KEY"),
+            agentmail_webhook_secret=_env("AGENTMAIL_WEBHOOK_SECRET"),
+            agentmail_base_url=_env("AGENTMAIL_BASE_URL") or "https://api.agentmail.to",
+            hook_token=_env("UTAX_HOOK_TOKEN"),
         )
