@@ -54,7 +54,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "hr.questionnaire_sent": _HR,
     "hr.decision_mailed": _HR,  # v1.6.1
     "screen.call": ("candidate_id", "transcript_excerpt", "seconds"),
-    "voice.command": ("text", "channel", "speaker", "case_id"),
+    "voice.command": ("text", "channel", "speaker", "case_id", "masked_name"),  # v1.6.4
     "ceo.notified": ("channel", "subject", "summary", "reason"),
     "approval.requested": ("approval_id", "action_type", "summary"),
     "touch.training": _TOUCH,
@@ -69,6 +69,8 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
 
 FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",
              "gross_assets_cents", "foreign_owner_25")
+# keys a payload may leave out: v1.6.4 masked_name is set on customer voice.command only
+OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"})}
 OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only
 
 
@@ -92,7 +94,8 @@ def validate(type_: str, actor: str, provider: str | None, status: str, payload:
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}")
     expected = set(PAYLOAD_KEYS[type_])
-    if set(payload) != expected:
+    optional = OPTIONAL_PAYLOAD_KEYS.get(type_, frozenset())
+    if not (expected - optional <= set(payload) <= expected):
         raise ValueError(
             f"{type_} payload keys {sorted(payload)} != contract {sorted(expected)}"
         )

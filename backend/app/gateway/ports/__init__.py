@@ -70,6 +70,7 @@ class OutMail:
     subject: str
     body: str
     in_reply_to: str | None = None
+    inbox: str = "clients"  # which of our inboxes sends it: "clients" or "hiring" (§6c)
 
 
 @dataclass(frozen=True)
