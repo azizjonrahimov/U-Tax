@@ -1188,6 +1188,12 @@ class Gateway:
         approval = self.state.approvals.get(approval_id)
         if approval is None:
             raise Refused("not_found", f"no approval {approval_id}")
+        if approval.superseded_by:  # task 14: never a figure the CEO didn't see
+            by = approval.superseded_by
+            why = ("the client wrote again; the crew asks again if it still applies"
+                   if by == "client_reply" else f"decide {by} instead")
+            raise Refused("superseded", f"{approval_id} is out of date: {why}",
+                          {"approval_id": approval_id, "superseded_by": by})
         if approval.decision is not None:
             return {"approval_id": approval_id, "decision": approval.decision, "duplicate": True}
         action_type = approval.action_type
@@ -1204,11 +1210,12 @@ class Gateway:
             return {"approval_id": approval_id, "decision": "deny"}
         events: list[NewEvent] = []
         if current == "PAUSED":
-            # the CEO's pause (or a cap) holds until POST /api/trust: record the OK only
+            # the CEO's pause (or a cap) holds until POST /api/trust: record the OK now,
+            # carry it out on resume (task 14)
             events.append(NewEvent(type="touch.operating", actor="ceo", case_id=approval.case_id,
                                    payload={"note": f"approved while paused: {approval.summary}"[:160],
                                             "approval_id": approval_id},
-                                   idempotency_key=key, private=private))
+                                   idempotency_key=key, private={**private, "while_paused": True}))
         elif current != "AUTO":
             first = action_type not in self.state.trusted_once and current == "ASK"
             kind = "touch.training" if first else "touch.operating"
@@ -1244,9 +1251,12 @@ class Gateway:
     def _wake_superseded(self, approvals: list) -> None:
         """After a flip to AUTO, the other actions that were waiting on an approval of that
         type are superseded: wake their owners (or run the gateway-owned questionnaire)."""
+        self._carry_out([a for a in approvals if a.decision == "superseded"])
+
+    def _carry_out(self, approvals: list) -> None:
+        """Run each gateway-owned action (questionnaire, decision mail); wake the owner of
+        every other one so its agent retries the call."""
         for a in approvals:
-            if a.decision != "superseded":
-                continue
             if self._run_gateway_owned(a.action_key) is not None:
                 continue
             if a.case_id:
@@ -2521,21 +2531,32 @@ class Gateway:
 
     def _set_trust(self, args: dict) -> dict:
         """POST /api/trust: the CEO's standing order ("stop posting" = social_post PAUSED;
-        resume = AUTO). trust.changed + touch.operating."""
+        resume = AUTO). trust.changed + touch.operating. Task 14: ASK, and RESUME (back to
+        the state before the pause); approvals allowed while PAUSED are carried out on any
+        resume."""
         action_type = _one_of(args, "action_type", TRUST_TYPES)
-        to = _one_of(args, "state", ("PAUSED", "AUTO"))
+        requested = _one_of(args, "state", ("PAUSED", "AUTO", "ASK", "RESUME"))
         current = self.state.trust[action_type]
+        to = requested
+        if requested == "RESUME":
+            to = self.state.trust_before_pause.get(action_type, "ASK") \
+                if current == "PAUSED" else current
         if current == to:
             return {"action_type": action_type, "trust": to, "duplicate": True}
         waiting = self._pending_of(action_type) if to == "AUTO" else []
+        released = [a for a in self.state.approvals.values()
+                    if a.action_type == action_type and a.decision == "allow"
+                    and a.while_paused] if current == "PAUSED" else []
+        reason = "CEO resume" if requested == "RESUME" else "CEO order"
         self._emit([NewEvent(type="touch.operating", actor="ceo",
                              payload={"note": f"{action_type} \u2192 {to}",
                                       "approval_id": None}),
                     NewEvent(type="trust.changed", actor="system",
                              payload={"action_type": action_type, "from": current, "to": to,
-                                      "reason": "CEO order"})])
+                                      "reason": reason})])
         self._wake_superseded(waiting)
-        if to == "AUTO":  # resumed: wake whatever the pause held up
+        self._carry_out(released)
+        if to == "AUTO" or current == "PAUSED":  # resumed: wake whatever the pause held up
             for case in self.state.cases.values():
                 if case.status in ("QA_PASSED", "SENT", "INTAKE_PENDING") and not case.priority:
                     self._wake(f"New case {case.case_id}")

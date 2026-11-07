@@ -174,9 +174,23 @@ def build_store(settings: Settings) -> EventStorePort:
     raise AdapterNotReady(f"STORE={settings.store!r} must be jsonl or postgres")
 
 
+def open_auth_problem(settings: Settings) -> str | None:
+    """Empty tokens disable auth (local dev only). A production store, the event (a public
+    crowd) or a public https /talk URL never runs open (task 14)."""
+    if settings.admin_token and settings.theater_token:
+        return None
+    for what, on in (("STORE=postgres", settings.store == "postgres"),
+                     ("PUBLIC_MODE=event", settings.public_mode == "event"),
+                     ("an https PUBLIC_TALK_URL",
+                      settings.public_talk_url.strip().lower().startswith("https://"))):
+        if on:
+            return f"{what} needs ADMIN_TOKEN and THEATER_TOKEN set"
+    return None
+
+
 def build_gateway(settings: Settings | None = None) -> Gateway:
     settings = settings or Settings.from_env()
-    if settings.store == "postgres" and not (settings.admin_token and settings.theater_token):
-        # empty tokens disable auth (local dev only); a production store never runs open
-        raise AdapterNotReady("STORE=postgres needs ADMIN_TOKEN and THEATER_TOKEN set")
+    problem = open_auth_problem(settings)
+    if problem:
+        raise AdapterNotReady(problem)
     return Gateway(build_store(settings), build_ports(settings), settings)

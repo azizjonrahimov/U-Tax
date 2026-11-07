@@ -365,13 +365,15 @@ def test_three_newlines_collapse(h):
 
 
 def test_two_approved_slots_never_block_each_other(h):
-    # review: approvals for A and B (made while paused) refused both bookings
+    # review: approvals for A and B (made while paused) refused both bookings.
+    # v1.7.7: B's request supersedes A's, so only B can be allowed now.
     case_id = h.to_sent()
     a, b = h.ok("get_case", case_id=case_id)["offered_slots"][:2]
     first, second = h.do("book_call", case_id=case_id, start=a), \
         h.do("book_call", case_id=case_id, start=b)
     h.ok("set_trust", action_type="calendar_invite", state="PAUSED")
-    h.ok("approve", approval_id=first.approval_id, decision="allow")
+    stale = h.do("approve", approval_id=first.approval_id, decision="allow")
+    assert stale.error["code"] == "superseded"
     h.ok("approve", approval_id=second.approval_id, decision="allow")
     h.ok("set_trust", action_type="calendar_invite", state="AUTO")
     assert h.ok("book_call", case_id=case_id, start=b)["start"] == b
