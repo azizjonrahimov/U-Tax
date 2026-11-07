@@ -90,11 +90,15 @@ def test_source_candidates_on_monid_returns_masked_public_leads(h):
         {"title": "No URL", "url": "ftp://x"},
         {"title": "EA, startup tax", "url": "https://example.com/in/ea"}]}
 
+    sent = []
+
     def handler(request):
+        sent.append(json.loads(request.content))
         return httpx.Response(200, json=completed(output=output))
 
-    tools = {"candidate_search": {"provider": "exa", "endpoint": "search", "max_usd": "0.05",
-                                  "fields": ["query"]}}
+    # the live MONID_TOOLS entry (task 24): ploid people search, {filters, limit} only
+    tools = {"candidate_search": {"provider": "ploid", "endpoint": "/linkedin/search",
+                                  "max_usd": "0.05", "fields": ["filters", "limit"]}}
     h.gw.ports.toolbuy = MonidToolBuy("mk_test", tools=tools, daily_cap_usd="1.00",
                                       transport=httpx.MockTransport(handler),
                                       today=lambda: "2026-11-07")
@@ -105,6 +109,23 @@ def test_source_candidates_on_monid_returns_masked_public_leads(h):
     assert "bob@example.com" not in json.dumps(leads)
     assert h.events("hr.sourced")[-1].payload == {"count": 3, "source": "monid"}
     assert [e.provider for e in h.events("cost.booked")] == ["monid"]  # bought, booked
+    [run] = sent
+    assert run["provider"] == "ploid" and run["endpoint"] == "/linkedin/search"
+    assert run["input"]["body"] == {"filters": {"keywords": "Delaware franchise tax",
+                                                "title": ["CPA", "Enrolled Agent",
+                                                          "Tax Accountant"]}, "limit": 5}
+
+
+def test_a_people_search_nested_under_data_is_read_without_names(h):
+    output = {"data": {"people": [
+        {"name": "Jane Roe", "headline": "CPA at Roe & Co", "profileUrl": "https://example.com/in/jr"},
+        {"name": "Ann Lee", "position": "Enrolled Agent", "linkedinUrl": "https://example.com/in/al"}],
+        "cursor": "abc"}}
+    leads = h.gw._public_leads(output, 5)
+    assert [(lead["headline"], lead["public_url"]) for lead in leads] == [
+        ("CPA at Roe & Co", "https://example.com/in/jr"),
+        ("Enrolled Agent", "https://example.com/in/al")]
+    assert "Jane" not in json.dumps(leads) and "Ann" not in json.dumps(leads)
 
 
 # ---------------------------------------------------------------- the CEO's list, outreach

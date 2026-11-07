@@ -5,6 +5,7 @@
     python -m app.devtools approve-all            # plays the CEO clicking Approve
     python -m app.devtools state
     python -m app.devtools agentmail-webhook https://<public-host>   # after a tunnel restart
+    python -m app.devtools rotate-host https://<public-host>   # UTAX_PUBLIC_URL + the webhook
 
 Env: UTAX_BASE (default http://localhost:8000), ADMIN_TOKEN.
 """
@@ -162,6 +163,26 @@ def agentmail_webhook(public: str, env_path: Path,
         return outcome
 
 
+def rotate_host(public: str, env_path: Path,
+                transport: httpx.BaseTransport | None = None) -> str:
+    """A quick tunnel's new host, in one go: UTAX_PUBLIC_URL (make_ad's images) in the
+    .env, then the AgentMail webhook. Returns the webhook outcome."""
+    base = hook_url(public).removesuffix("/hooks/agentmail")
+    set_env_values(env_path, {"UTAX_PUBLIC_URL": base})
+    return agentmail_webhook(base, env_path, transport=transport)
+
+
+def cmd_rotate_host(args: argparse.Namespace) -> int:
+    outcome = rotate_host(args.url, Path(args.env))
+    base = hook_url(args.url).removesuffix("/hooks/agentmail")
+    restart = outcome in ("created", "recreated")
+    print(f"UTAX_PUBLIC_URL={base}")
+    print(f"AgentMail webhook {outcome} -> {base}/hooks/agentmail")
+    print("restart the gateway (UTAX_PUBLIC_URL" + (" and the new webhook secret" if restart
+                                                     else "") + " are read at boot)")
+    return 0
+
+
 def cmd_agentmail_webhook(args: argparse.Namespace) -> int:
     outcome = agentmail_webhook(args.url, Path(args.env))
     note = {"created": "secret written; restart the gateway",
@@ -196,6 +217,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
                    help="the .env that gets AGENTMAIL_WEBHOOK_SECRET (default backend/.env)")
     p.set_defaults(func=cmd_agentmail_webhook)
+    p = sub.add_parser("rotate-host",
+                       help="a new tunnel host: UTAX_PUBLIC_URL and the AgentMail webhook")
+    p.add_argument("url", help="the new public https URL (the tunnel host)")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
+                   help="the .env to update (default backend/.env)")
+    p.set_defaults(func=cmd_rotate_host)
     args = parser.parse_args(argv)
     return args.func(args)
 
