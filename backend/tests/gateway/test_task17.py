@@ -876,11 +876,11 @@ def test_a_resolution_whose_commit_ack_was_lost_still_reaches_the_adapter(h):
         assert again.error["code"] == "wrong_status" and f"buy:{key}" not in port._unsure
 
 
-def test_a_cost_that_rounds_to_nothing_is_not_charged(h):
+def test_a_cost_that_rounds_to_nothing_is_booked_as_the_smallest_unit(h):
     h.gw.ports.toolbuy = monid(lost)
     buy(h.gw)
     r = h.gw.perform("resolve_purchase", {"key": "k1", "charged": True, "cost_usd": "0.00004"})
-    assert r.status == "refused" and r.error["code"] == "bad_input"
+    assert r.status == "done" and h.gw.state.spent_usd() == Decimal("0.0001")  # 17b
 
 
 def test_a_charge_whose_events_failed_is_resolved_by_the_ceo_after_a_restart(make_harness):

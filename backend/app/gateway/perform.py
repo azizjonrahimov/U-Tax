@@ -1856,8 +1856,7 @@ class Gateway:
                 return episode, unsure, resolved
             episode += 1
 
-    def _buy_leftover(self, port_key: str, key: str, fp: str, left: dict,
-                      episode: int) -> dict:
+    def _buy_leftover(self, port_key: str, key: str, fp: str, left: dict) -> dict:
         """An intent an earlier call wrote and never settled (a crash, or a store error after
         Monid answered): it may have paid. A purchase this process still remembers is booked
         now; anything else becomes an unsure record for the CEO, never a second buy."""
@@ -1866,14 +1865,13 @@ class Gateway:
         known = recall(port_key) if callable(recall) else None
         if known is not None and known[0] == left_fp:
             return {"purchase": known[1], "fingerprint": left_fp, "port_key": port_key,
-                    "episode": episode, "other_input": left_fp != fp, "tool": left.get("tool")}
+                    "other_input": left_fp != fp, "tool": left.get("tool")}
         return {"error": "unavailable", "unsure": True, "retryable": False,
                 "tool": left.get("tool"),
                 "message": f"purchase {key} may already be charged (an earlier call did not "
                            "finish); the CEO resolves it (resolve_purchase) before it can run again",
                 "fingerprint": left_fp, "port_key": port_key, "ceiling": left.get("ceiling"),
-                "intent_ts": left.get("ts"), "provider": left.get("provider"),
-                "episode": episode}
+                "intent_ts": left.get("ts"), "provider": left.get("provider")}
 
     def _buy_fetch(self, args: dict) -> dict:
         """buy_tool's slow half, before the lock. Fail closed before paying: the log must be
@@ -1906,7 +1904,9 @@ class Gateway:
             self._buy_intents.put(port_key, None)
             left = None
         if left:  # never overwrite, never clear what an unsettled earlier call wrote
-            return self._buy_leftover(port_key, key, fp, left, episode)
+            return self._buy_leftover(port_key, key, fp, left)
+        if episode and unsure is None:  # 17b: the last attempt was answered "not charged";
+            self._resolve_port(port_key, None)  # a hold kept after that lost reply goes now
         with self._lock:  # the budget gates only a call that would pay (a repeat is free)
             cap = self.settings.spend_cap_usd
             if cap is not None and self.state.spent_usd() >= cap:
@@ -1924,9 +1924,8 @@ class Gateway:
                 self._buy_intents.put(port_key, None)  # proved not charged
             return {"error": err.code, "message": str(err)[:200], "unsure": unsure_now,
                     "fingerprint": fp, "port_key": port_key, "ceiling": ceiling,
-                    "retryable": err.retryable, "episode": episode}
-        return {"purchase": purchase, "fingerprint": fp, "port_key": port_key,
-                "episode": episode}
+                    "retryable": err.retryable}
+        return {"purchase": purchase, "fingerprint": fp, "port_key": port_key}
 
     def _buy_tool(self, args: dict) -> dict:
         tool = _str(args, "tool", max_len=80)
@@ -2018,6 +2017,10 @@ class Gateway:
         if port_key in self._buy_inflight:  # its intent is live, not a leftover
             raise Refused("wrong_status", f"purchase {key} is in flight; resolve it after "
                                           "it returns")
+        if self._done_from(f"tool:{port_key}") is not None:  # 17b: the log first
+            self._buy_intents.put(port_key, None)  # an intent whose clear failed: settled
+            raise Refused("not_found", f"purchase {key} was already bought and booked; "
+                                       "nothing to resolve")
         episode, unsure, resolved = self._buy_episode(port_key)
         left = self._buy_intents.get(port_key) if unsure is None and resolved is None else None
         if isinstance(left, dict):  # unsettled, not on the log yet: record it first
@@ -2066,8 +2069,7 @@ class Gateway:
             raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over "
                                        f"${MAX_PLAUSIBLE_USD}; no data call costs that")
         if cost and usd_string(cost) == usd_string(Decimal(0)):  # booked at 4 places
-            raise Refused("bad_input", f"cost_usd {raw} rounds to $0.0000; charged: false if "
-                                       "Monid's run shows no charge")
+            cost = Decimal("0.0001")  # 17b: a real charge is never booked as $0.0000
         if cost and cost > ceiling and not over:  # max_usd is ours: Monid can charge more
             raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over this purchase's "
                                        f"ceiling ${usd_string(ceiling)}; check the run in Monid, "
@@ -2116,6 +2118,9 @@ class Gateway:
             intents = self._buy_intents.load() or {}
         except Exception:  # noqa: BLE001 - a bad file never stops the server
             log.exception("toolbuy intents unreadable at boot")
+            return
+        if not isinstance(intents, dict):  # 17b: never crash the boot on a damaged file
+            log.error("toolbuy intents file is not a JSON object; left as is")
             return
         for port_key, left in intents.items():
             if not left:

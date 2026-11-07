@@ -67,3 +67,65 @@ def test_a_charge_whose_commit_ack_was_lost_still_reaches_the_spend(h):
     assert h.gw.state.spent_by_provider == {"monid": Decimal("0.0400")}  # booked, once
     resolve(h, charged=True, cost_usd="0.0400")
     assert h.gw.state.spent_by_provider == {"monid": Decimal("0.0400")}
+
+
+def commit_then_lose(h, event_type):
+    """The store keeps the next batch holding `event_type`, and the reply is lost."""
+    real = h.gw.store.append_batch
+
+    def append(events, **kw):
+        out = real(events, **kw)
+        if any(e.type == event_type for e in events):
+            h.gw.store.append_batch = real
+            raise EventWriteError("commit reply lost")
+        return out
+
+    h.gw.store.append_batch = append
+
+
+def test_a_lost_not_charged_answer_never_leaves_a_phantom_hold(h):
+    import httpx
+
+    from ..adapters.test_monid import completed
+
+    calls = {"n": 0}
+
+    def once_lost(request):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise httpx.ReadTimeout("gone", request=request)
+        return httpx.Response(200, json=completed())
+
+    h.gw.ports.toolbuy = monid(once_lost)
+    buy(h.gw)  # unsure
+    commit_then_lose(h, "tool.bought")
+    assert resolve(h, charged=False).status == "error"  # logged, the reply lost
+    assert "buy:k1" in h.gw.ports.toolbuy._unsure  # the adapter's hold stayed
+    retry = buy(h.gw)  # the agent retries before anyone resends the resolve
+    assert retry.status == "done" and retry.data["bought"] is True
+    assert len(unsure_events(h, "k1")) == 1
+
+
+def test_a_charge_under_a_hundredth_of_a_cent_is_booked_as_one(h):
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    r = resolve(h, charged=True, cost_usd="0.00004")
+    assert r.status == "done" and r.data["charged"] is True
+    assert h.gw.state.spent_by_provider == {"monid": Decimal("0.0001")}
+
+
+def test_a_leftover_intent_of_a_logged_purchase_is_not_held_by_the_process(h):
+    h.gw.ports.toolbuy = monid()
+    assert buy(h.gw).status == "done"  # bought and logged
+    crash_left_intent(h, key="k1")  # its intent survived (the clear failed)
+    r = resolve(h, charged=False)
+    assert r.error["code"] == "not_found" and "already bought" in r.error["message"]
+    assert h.gw._buy_intents.get("buy:k1") is None and not unsure_events(h, "k1")
+
+
+def test_an_intents_file_that_is_not_an_object_never_stops_the_boot(make_harness):
+    h = make_harness()
+    h.gw.settings.data_dir.mkdir(parents=True, exist_ok=True)
+    (h.gw.settings.data_dir / "toolbuy-intents.json").write_text("[1, 2]", encoding="utf-8")
+    h.restart()  # used to crash: list has no .items()
+    assert h.gw.state.last_event_id >= 0
