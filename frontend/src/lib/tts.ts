@@ -5,8 +5,12 @@
 
 export type TtsPurpose = "ceo" | "talk";
 
-/** The gateway's text limits per purpose (§5c); longer text is split at sentences. */
+/** The gateway's text limits per purpose (§5c). */
 export const TTS_MAX: Readonly<Record<TtsPurpose, number>> = { ceo: 1500, talk: 600 };
+/** Pieces are at most this long either way: a short piece starts playing sooner. */
+const PIECE_MAX = 600;
+/** Listening comes back this long after the firm's voice stops (the room's echo dies down; §5c). */
+export const ECHO_TAIL_MS = 800;
 /** After a 503 the gateway isn't asked again for this long (the fallback voice is used). */
 export const TTS_DOWN_MS = 60_000;
 const FETCH_MS = 10_000;
@@ -21,7 +25,9 @@ export function ttsChunks(text: string, max: number): string[] {
   if (clean.length <= max) return [clean];
   const out: string[] = [];
   let cur = "";
-  for (const sentence of clean.split(/(?<=[.!?])\s+/)) {
+  // Sentences without a lookbehind (older Safari can't parse one, and this ships on /talk).
+  const sentences = (clean.match(/[^.!?]+(?:[.!?]+|$)/g) ?? [clean]).map((x) => x.trim()).filter(Boolean);
+  for (const sentence of sentences) {
     for (let piece = sentence; piece; ) {
       const room = max - (cur ? cur.length + 1 : 0);
       if (piece.length <= room) {
@@ -48,8 +54,11 @@ export const lineLimitMs = (text: string) => Math.min(MAX_LINE_MS, 2000 + text.s
 /** What a Speaker needs from the browser (injected, so the queue is testable without one). */
 export interface SpeakerDeps {
   fetch: typeof fetch;
-  /** Play an MP3 blob; resolves true when it ended, false when it failed or was stopped. */
-  playBlob: (blob: Blob, stop: AbortSignal) => Promise<boolean>;
+  /**
+   * Play an MP3 blob; resolves true when it ended, false when it failed or was stopped, and
+   * "refused" when the browser wouldn't play it at all (autoplay rules): then the browser's own voice reads it.
+   */
+  playBlob: (blob: Blob, stop: AbortSignal) => Promise<boolean | "refused">;
   /** Read text with the browser's own voice; same contract. Null when there is none. */
   synth: ((text: string, stop: AbortSignal) => Promise<boolean>) | null;
   now: () => number;
@@ -69,7 +78,6 @@ export interface SpeakerOptions {
 }
 
 interface Line {
-  text: string;
   /** Called once with whether every piece actually played to the end. */
   onDone?: (played: boolean) => void;
   pieces: string[];
@@ -94,12 +102,12 @@ export class Speaker {
 
   /** Queue a line. `onDone(played)` runs once it finished (played: heard to the end, every piece). */
   say(text: string, onDone?: (played: boolean) => void) {
-    const pieces = ttsChunks(text, TTS_MAX[this.opts.purpose]);
+    const pieces = ttsChunks(text, Math.min(PIECE_MAX, TTS_MAX[this.opts.purpose]));
     if (!pieces.length) {
       onDone?.(true);
       return;
     }
-    this.queue.push({ text, onDone, pieces, played: true });
+    this.queue.push({ onDone, pieces, played: true });
     if (!this.current) {
       this.opts.onAudio?.(true);
       void this.pump();
@@ -134,8 +142,10 @@ export class Speaker {
     }
     if (this.current?.line !== line) return; // stopped meanwhile (stop() already reported it)
     this.current = null;
-    line.onDone?.(line.played);
+    // The next line starts (synchronously claims `current`) before onDone runs, so a say() made
+    // from inside onDone queues behind it instead of starting a second pump.
     void this.pump();
+    line.onDone?.(line.played);
   }
 
   /** One piece, never longer than its stall limit (a stalled voice is silenced and counts as not heard). */
@@ -152,10 +162,11 @@ export class Speaker {
         stop.signal.removeEventListener("abort", onOuter);
         resolve(ok);
       };
+      // Fetch (the first bytes, then the whole MP3) plus playing it, plus the browser voice if that fails.
       const timer = this.deps.setTimeout(() => {
         pieceStop.abort();
         finish(false);
-      }, lineLimitMs(piece) + FETCH_MS);
+      }, FETCH_MS + 2 * lineLimitMs(piece));
       this.speakPiece(piece, pieceStop.signal).then(finish, () => finish(false));
     });
   }
@@ -164,8 +175,13 @@ export class Speaker {
     if (this.deps.now() >= this.downUntil) {
       const blob = await this.fetchTts(text, stop);
       if (stop.aborted) return false;
-      if (blob) return this.deps.playBlob(blob, stop);
+      if (blob) {
+        const played = await this.deps.playBlob(blob, stop);
+        if (played !== "refused") return played;
+        // The browser refused to play it (autoplay rules, iOS): its own voice may still be allowed.
+      }
     }
+    if (stop.aborted) return false;
     return this.deps.synth ? this.deps.synth(text, stop) : true; // nothing can speak: the screen says it
   }
 
@@ -175,14 +191,16 @@ export class Speaker {
     const token = this.opts.token?.();
     if (token) headers.Authorization = `Bearer ${token}`;
     try {
+      // The budget covers the first bytes and the whole download (a long piece takes longer to make).
       const r = await this.deps.fetch(`${this.opts.api}/tts`, {
         method: "POST",
         headers,
         body: JSON.stringify({ text, purpose: this.opts.purpose }),
         cache: "no-store",
-        signal: AbortSignal.any([stop, AbortSignal.timeout(FETCH_MS)]),
+        signal: anySignal(stop, FETCH_MS + lineLimitMs(text)),
       });
-      if (r.status === 503) this.downUntil = this.deps.now() + TTS_DOWN_MS;
+      // No key (503) or the public budget spent (429): rest the gateway voice instead of asking per line.
+      if (r.status === 503 || r.status === 429) this.downUntil = this.deps.now() + TTS_DOWN_MS;
       if (!r.ok) return null;
       const type = r.headers.get("content-type") ?? "";
       if (!/^audio\//.test(type)) return null;
@@ -191,6 +209,20 @@ export class Speaker {
       return null;
     }
   }
+}
+
+/** `stop` or a timeout, whichever comes first (no AbortSignal.any: older Safari lacks it). */
+function anySignal(stop: AbortSignal, ms: number): AbortSignal {
+  const c = new AbortController();
+  const t = setTimeout(() => c.abort(), ms);
+  const onStop = () => c.abort();
+  if (stop.aborted) c.abort();
+  else stop.addEventListener("abort", onStop, { once: true });
+  c.signal.addEventListener("abort", () => {
+    clearTimeout(t);
+    stop.removeEventListener("abort", onStop);
+  });
+  return c.signal;
 }
 
 /** The real browser: an Audio element for the MP3, speechSynthesis for the fallback. */
@@ -202,7 +234,10 @@ function browserDeps(): SpeakerDeps {
       new Promise((resolve) => {
         const url = URL.createObjectURL(blob);
         const a = new Audio(url);
-        const end = (ok: boolean) => {
+        let done = false;
+        const end = (ok: boolean | "refused") => {
+          if (done) return;
+          done = true;
           a.onended = a.onerror = null;
           a.pause();
           URL.revokeObjectURL(url);
@@ -211,7 +246,7 @@ function browserDeps(): SpeakerDeps {
         a.onended = () => end(true);
         a.onerror = () => end(false);
         stop.addEventListener("abort", () => end(false), { once: true });
-        a.play().catch(() => end(false)); // autoplay refused: not heard
+        a.play().catch((e: unknown) => end(e instanceof DOMException && e.name === "NotAllowedError" ? "refused" : false));
       }),
     synth:
       hasWindow && "speechSynthesis" in window
