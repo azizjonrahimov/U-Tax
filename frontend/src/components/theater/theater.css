@@ -121,6 +121,9 @@
 .theater .log { font-size: calc(11px * var(--k) * var(--s)); font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace; color: var(--dim); display: grid; gap: 3px; margin-top: 8px; }
 .theater .log .h { color: var(--a-ceo); margin-right: 6px; }
 .theater .log .by-voice { color: var(--a-ceo); margin-right: 4px; }
+.theater .naive { margin-top: 6px; font-size: calc(11px * var(--k) * var(--s)); color: var(--green); overflow-wrap: anywhere; }
+.theater .naive.denied { color: var(--red); }
+.theater .naive .n { color: var(--dim); white-space: nowrap; }
 .theater .pending { margin-top: 6px; font-size: calc(11px * var(--k) * var(--s)); color: var(--amber); }
 .theater .cases { display: flex; flex-direction: column; gap: 6px; font-size: calc(12px * var(--k) * var(--s)); overflow: hidden; }
 .theater .case { display: flex; justify-content: space-between; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }

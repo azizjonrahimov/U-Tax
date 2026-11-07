@@ -7,7 +7,8 @@
 // MOCK_VOICE=1 mints a fake Realtime session (the browser's WebRTC must be stubbed by the test);
 // otherwise /api/voice/session answers 503 voice_unavailable and the console falls back.
 // THEATER_TOKEN (default theater-test) may read state, events and the stream, as the projector does.
-// Dev-only extras: POST /api/dev/approval {summary, case_id} and POST /api/dev/block {case_id, reason}.
+// Dev-only extras: POST /api/dev/approval {summary, case_id}, POST /api/dev/block {case_id, reason},
+// POST /api/dev/naive-confirm {agent, tool, decision}.
 
 import { createServer } from "node:http";
 
@@ -259,6 +260,11 @@ const server = createServer(async (req, res) => {
     return out(200, { ok: true });
   }
   if (req.method === "POST" && p === "/api/dev/approval") return out(200, { approval_id: requestApproval(String(body.summary || "memo"), body.case_id ?? null) });
+  if (req.method === "POST" && p === "/api/dev/naive-confirm") {
+    // v1.9 §6b-bis as the gateway writes it, so the theater's rail line can be checked.
+    const e = emit("naive.confirm", { session_id: `ses_${events.length}`, agent: String(body.agent || "cos"), tool: String(body.tool || "board_write"), decision: body.decision === "deny" ? "deny" : "allow", read_people: false });
+    return out(200, { id: e.id });
+  }
   if (req.method === "POST" && p === "/api/dev/block") {
     const c = cases.find((x) => x.case_id === body.case_id);
     if (c) c.status = "BLOCKED";
