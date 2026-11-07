@@ -14,6 +14,7 @@ import {
   logStillMatches,
   readableSummary,
   briefParagraphs,
+  supersededBy,
   logWasReset,
   briefSince,
   MAX_ORDER_CHARS,
@@ -107,6 +108,12 @@ describe("what the CEO is shown", () => {
     expect(out).not.toMatch(/2026-11-07T/);
     expect(out).toMatch(/^Call for Team #2 at .+, \$450 → \$400$/);
     expect(readableSummary("no times here")).toBe("no times here");
+  });
+
+  it("reads the newer approval out of a 409 superseded (v1.7.8)", () => {
+    expect(supersededBy("apr_3 is out of date: decide apr_5 instead")).toBe("apr_5");
+    expect(supersededBy("apr_3 is out of date: the case changed; the crew asks again if it still applies")).toBeNull();
+    expect(supersededBy("")).toBeNull();
   });
 
   it("reads the brief as paragraphs, joining the gateway's wrapped lines", () => {

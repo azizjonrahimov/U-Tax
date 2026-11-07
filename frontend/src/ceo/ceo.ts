@@ -123,6 +123,15 @@ export function approveReleases(pending: readonly Approval[], a: Approval, trust
   return { others: others.length, outdated: others.filter((x) => outdated.has(x.approvalId)).length };
 }
 
+/**
+ * v1.7.8 `409 superseded`: the newer approval to decide instead. The HTTP body carries only code and
+ * message tonight ("apr_3 is out of date: decide apr_5 instead"), so it is read from the message.
+ */
+export function supersededBy(message: string): string | null {
+  const m = /decide (apr_[A-Za-z0-9_-]{1,40}) instead/.exec(message);
+  return m ? m[1] : null;
+}
+
 /** The brief as paragraphs: blank lines separate them; the gateway's single line breaks are just wrapping. */
 export const briefParagraphs = (text: string) =>
   text
