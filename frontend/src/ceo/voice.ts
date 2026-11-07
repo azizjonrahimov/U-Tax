@@ -199,7 +199,14 @@ export function describeRead(data: unknown, depth = 0): string {
   if (isObj(data)) {
     for (const k of ["say", "text", "summary"]) if (typeof data[k] === "string" && data[k]) return data[k] as string;
     if (depth > 1) return "";
+    // An activity line: "case blocked, Team #7" (ids and timestamps are for the model, not the ear).
+    if (typeof data.type === "string" && depth > 0) {
+      const what = data.type.replace(/[._]/g, " ");
+      const who = typeof data.case === "string" ? data.case : typeof data.masked_name === "string" ? data.masked_name : "";
+      return who ? `${what}, ${who}` : what;
+    }
     return Object.entries(data)
+      .filter(([k]) => !/^(id|ts|last_event_id)$|_id$/.test(k))
       .slice(0, 8)
       .map(([k, v]) => {
         const val = describeRead(v, depth + 1);

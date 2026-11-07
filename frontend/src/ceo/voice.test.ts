@@ -423,6 +423,17 @@ describe("gateway answers", () => {
     expect(describeRead(null)).toBe("Nothing to report.");
   });
 
+  it("reads recent activity as plain lines, never ids or timestamps (the gateway's recent_activity shape)", () => {
+    const activity = [
+      { id: 1, ts: "2026-11-07T20:46:24.738Z", type: "brief.generated", case: null },
+      { id: 7, ts: "2026-11-07T20:47:00Z", type: "case.blocked", case: "Team #7", reason: "QA rejected the figure" },
+    ];
+    const said = describeRead(activity);
+    expect(said).toBe("2: brief generated; case blocked, Team #7.");
+    expect(said).not.toMatch(/2026|id:/);
+    expect(describeRead({ approval_id: "apr_1", case: "Team #7", action_type: "email" })).toBe("case: Team #7. action type: email");
+  });
+
   it("counts down in whole seconds", () => {
     expect(secondsLeft(T0 + 59_001, T0)).toBe(60);
     expect(secondsLeft(T0 - 5, T0)).toBe(0);
