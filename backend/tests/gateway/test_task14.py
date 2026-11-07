@@ -66,15 +66,52 @@ def test_a_corrected_memo_never_sends_on_the_old_approval(h):
     assert asked[0] != asked[1]  # the figure changed: the CEO approved the new one
 
 
-def test_a_client_reply_makes_a_pending_approval_stale(h):
+def test_a_reopen_makes_a_pending_approval_stale_and_the_crew_asks_again(h):
+    wakes = []
+    h.gw.on_wake(wakes.append)
     case_id = h.to_qa_passed()
     first = h.do("send_memo", case_id=case_id)
     h.ok("inject_email", **{"from": "founder@team7.dev", "subject": "re",
                             "body": "Wait, we have more assets than that."})
+    assert f"New case {case_id}" in wakes  # back to intake: the crew re-reads it
     stale = h.do("approve", approval_id=first.approval_id, decision="deny")
     assert stale.error["code"] == "superseded"
-    assert stale.data["superseded_by"] == "client_reply"
+    assert stale.data["superseded_by"] is None  # nothing newer to decide yet
     assert h.gw.state.trust["email"] == "ASK" and h.gw.state.touches["operating"] == 0
+    h.to_qa_passed(case_id)  # same figures re-read
+    again = h.do("send_memo", case_id=case_id)
+    assert again.status == "needs_approval" and again.approval_id != first.approval_id
+    h.ok("approve", approval_id=again.approval_id, decision="allow")
+    assert h.ok("send_memo", case_id=case_id)["message_id"]
+
+
+def test_a_quiet_thanks_keeps_a_pending_call_invite(h):
+    # review: a "thanks!" on a SENT case wakes nobody, so it must not void the invite
+    case_id = h.to_sent()
+    slot = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    pending = h.do("book_call", case_id=case_id, start=slot)
+    h.ok("inject_email", **{"from": "founder@team7.dev", "subject": "re",
+                            "body": "thanks, see you!"})
+    h.ok("approve", approval_id=pending.approval_id, decision="allow")
+    assert h.ok("book_call", case_id=case_id, start=slot)["start"] == slot
+
+
+def test_a_superseded_by_points_at_the_newest_live_request(h):
+    case_id, first, second = two_slot_requests(h)
+    c = h.ok("get_case", case_id=case_id)["offered_slots"][2]
+    third = h.do("book_call", case_id=case_id, start=c).approval_id
+    assert h.do("approve", approval_id=first, decision="allow").data["superseded_by"] == third
+
+
+def test_a_back_and_forth_mails_the_ceo_once_per_request(make_harness):
+    h = make_harness(ceo_email="ceo@u-tax.dev")
+    case_id, first, second = two_slot_requests(h)
+    notices = len(h.events("ceo.notified"))
+    assert notices >= 2  # the two slot requests did mail the CEO
+    slot_a = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    again = h.do("book_call", case_id=case_id, start=slot_a)  # back to slot A
+    assert again.status == "needs_approval" and again.approval_id not in (first, second)
+    assert len(h.events("ceo.notified")) == notices  # no third "Approve?" mail
 
 
 def test_a_other_cases_and_types_are_not_superseded(h):
@@ -146,7 +183,82 @@ def test_b_while_paused_flag_survives_a_restart(h):
     assert not h.gw.state.approvals[approval].while_paused
 
 
+def test_b_a_post_allowed_while_paused_wakes_the_firm_on_resume(h):
+    # review: posts have no case; the resume used to drop them silently
+    wakes = []
+    h.gw.on_wake(wakes.append)
+    post = h.do("post_social", channel="x", text="Free Delaware checkup.")
+    h.ok("set_trust", action_type="social_post", state="PAUSED")
+    h.ok("approve", approval_id=post.approval_id, decision="allow")
+    wakes.clear()
+    h.ok("set_trust", action_type="social_post", state="RESUME")
+    assert f"Approval {post.approval_id} allowed for firm" in wakes
+    assert h.ok("post_social", channel="x", text="Free Delaware checkup.")
+
+
+def test_b_a_failed_send_on_resume_to_ask_is_retried_by_the_tick(h):
+    from app.gateway.ports import PortError
+
+    h.ok("inject_email", **{"from": "a@x.io", "subject": "gig", "body": "EA",
+                            "inbox": "hiring"})
+    approval = h.events("approval.requested")[0].payload["approval_id"]
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    h.ok("approve", approval_id=approval, decision="allow")
+    real = h.gw.ports.mail.send
+
+    def down(*a, **k):
+        raise PortError("mail down")
+
+    h.gw.ports.mail.send = down
+    h.ok("set_trust", action_type="email", state="RESUME")  # -> ASK, the send fails
+    assert not h.events("hr.questionnaire_sent")
+    h.gw.ports.mail.send = real
+    assert h.gw.retry_questionnaires() == ["cand_1"]
+    assert len(h.events("hr.questionnaire_sent")) == 1
+
+
+def test_b_ceo_stop_out_of_pause_carries_out_too(h):
+    h.ok("inject_email", **{"from": "a@x.io", "subject": "gig", "body": "EA",
+                            "inbox": "hiring"})
+    approval = h.events("approval.requested")[0].payload["approval_id"]
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    h.ok("approve", approval_id=approval, decision="allow")
+    assert h.ok("ceo_stop", action_type="email")["trust"] == "ASK"
+    assert len(h.events("hr.questionnaire_sent")) == 1
+
+
+def test_b_a_reopen_voids_an_ok_given_while_paused(h):
+    case_id = h.to_sent()
+    slot = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    pending = h.do("book_call", case_id=case_id, start=slot)
+    h.ok("set_trust", action_type="calendar_invite", state="PAUSED")
+    h.ok("approve", approval_id=pending.approval_id, decision="allow")
+    h.ok("unblock", case_id=case_id, to="INTAKE_PENDING", note="new numbers")
+    assert h.gw.state.approvals[pending.approval_id].decision == "superseded"
+    wakes = []
+    h.gw.on_wake(wakes.append)
+    h.ok("set_trust", action_type="calendar_invite", state="RESUME")
+    assert not any(pending.approval_id in w for w in wakes)
+
+
+def test_b_resume_to_ask_wakes_the_cases_the_pause_held(h):
+    wakes = []
+    h.gw.on_wake(wakes.append)
+    case_id = h.to_qa_passed()
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    wakes.clear()
+    h.ok("set_trust", action_type="email", state="ASK")
+    assert f"New case {case_id}" in wakes
+
+
 # ---------------------------------------------------------------- c. ASK and RESUME
+
+
+def test_c_resume_after_a_restart_returns_to_auto(h):
+    h.to_sent()  # email -> AUTO
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    h.restart()
+    assert h.ok("set_trust", action_type="email", state="RESUME")["trust"] == "AUTO"
 
 
 def test_c_ask_and_resume(h):
@@ -197,7 +309,14 @@ def test_d_public_runs_refuse_open_auth(tmp_path, kw):
         build_gateway(Settings(data_dir=tmp_path, **kw))
 
 
+def test_d_public_runs_refuse_the_theater_token_as_admin(tmp_path):
+    with pytest.raises(AdapterNotReady, match="different from THEATER_TOKEN"):
+        build_gateway(Settings(data_dir=tmp_path, public_mode="event", admin_token="same",
+                               theater_token="same"))
+
+
 @pytest.mark.parametrize("kw", [{}, {"public_talk_url": "http://localhost:3000/talk"},
+                                {"admin_token": "same", "theater_token": "same"},
                                 {"public_mode": "event", "admin_token": "a",
                                  "theater_token": "t",
                                  "public_talk_url": "https://u-tax.app/talk"}])

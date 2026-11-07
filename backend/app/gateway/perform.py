@@ -402,18 +402,26 @@ class Gateway:
             todo = [cid for cid, c in self.state.candidates.items()
                     if c.get("reply_to") and not c.get("questionnaire_sent")
                     and c.get("stage") == "applicant"
-                    and self.state.trust["email"] == "AUTO"]
+                    and self._mail_may_go(f"questionnaire:{cid}")]
             return [cid for cid in todo if self._send_questionnaire(cid) == "sent"]
+
+    def _mail_may_go(self, key: str) -> bool:
+        """Email AUTO, or (task 14) an allowed approval for this gateway-owned mail and email
+        not PAUSED: an OK carried out on a resume to ASK whose send failed is retried."""
+        trust = self.state.trust["email"]
+        if trust == "AUTO":
+            return True
+        approval = self.state.approvals.get(self.state.approval_by_key.get(key, ""))
+        return trust != "PAUSED" and approval is not None and approval.decision == "allow"
 
     def retry_decision_mails(self) -> list[str]:
         """Decision mails that couldn't go out (paused, failed) are retried by the tick;
         the mail port's key makes a resend of a delivered one a no-op."""
         with self._lock:
-            if self.state.trust["email"] != "AUTO":
-                return []
             todo = [cid for cid, c in self.state.candidates.items()
                     if c.get("stage") in ("hired", "declined") and c.get("reply_to")
-                    and not c.get("decision_mailed")]
+                    and not c.get("decision_mailed")
+                    and self._mail_may_go(f"decision:{cid}")]
             return [cid for cid in todo if self._send_decision_mail(cid) == "sent"]
 
     def _retry_wakes_action(self, args: dict) -> dict:
@@ -764,14 +772,19 @@ class Gateway:
                 raise Refused("denied", "the CEO said no to this action", {"approval_id": approval_id})
             if approval.decision is None:
                 raise NeedsApproval(approval_id, approval.summary)
-            # "superseded" (the type went AUTO, then back to ASK): ask again
+            # "superseded": the type went AUTO and back to ASK, or (task 14) a newer request
+            # or a reopen replaced it: ask again
+        replaced = approval_id is not None and \
+            (self.state.approvals[approval_id].superseded_by or "").startswith("apr_")
         approval_id = f"apr_{len(self.state.approvals) + 1}"
         self._emit([NewEvent(type="approval.requested", actor="system", case_id=case_id,
                              payload={"approval_id": approval_id, "action_type": action_type,
                                       "summary": summary},
                              idempotency_key=f"approval:{action_key}:{approval_id}",
                              private={"action_key": action_key})])
-        if not (public and self._recent_public_notice()):  # anonymous traffic: throttled
+        # anonymous traffic is throttled; so is an agent going back and forth between two
+        # requests (slot A, B, A...): the console lists the newest, one mail was enough
+        if not (public and self._recent_public_notice()) and not replaced:
             self._notify_ceo("approval", clip(f"Approve? {summary}", 120),
                              f"{approval_id}: {summary}",
                              key=f"ceo:approval:{approval_id}")
@@ -1188,10 +1201,10 @@ class Gateway:
         approval = self.state.approvals.get(approval_id)
         if approval is None:
             raise Refused("not_found", f"no approval {approval_id}")
-        if approval.superseded_by:  # task 14: never a figure the CEO didn't see
-            by = approval.superseded_by
-            why = ("the client wrote again; the crew asks again if it still applies"
-                   if by == "client_reply" else f"decide {by} instead")
+        if approval.decision == "superseded" and approval.superseded_by:  # task 14
+            by = self._newest(approval)  # never a figure the CEO didn't see
+            why = (f"decide {by} instead" if by else
+                   "the case changed; the crew asks again if it still applies")
             raise Refused("superseded", f"{approval_id} is out of date: {why}",
                           {"approval_id": approval_id, "superseded_by": by})
         if approval.decision is not None:
@@ -1243,6 +1256,15 @@ class Gateway:
         self._wake(f"Approval {approval_id} allowed for {target}")
         return result
 
+    def _newest(self, approval) -> str | None:
+        """The pending approval that replaced this one (following the chain), or None."""
+        seen = set()
+        while approval.superseded_by and approval.superseded_by.startswith("apr_") \
+                and approval.approval_id not in seen:
+            seen.add(approval.approval_id)
+            approval = self.state.approvals[approval.superseded_by]
+        return approval.approval_id if approval.decision is None else None
+
     def _pending_of(self, action_type: str, *, exclude: str | None = None) -> list:
         return [a for a in self.state.approvals.values()
                 if a.action_type == action_type and a.decision is None
@@ -1255,12 +1277,23 @@ class Gateway:
 
     def _carry_out(self, approvals: list) -> None:
         """Run each gateway-owned action (questionnaire, decision mail); wake the owner of
-        every other one so its agent retries the call."""
+        every other one so its agent retries the call (a post: the firm, as _approve does).
+        A failed mail is retried by the tick (`_mail_may_go`)."""
         for a in approvals:
-            if self._run_gateway_owned(a.action_key) is not None:
+            try:
+                if self._run_gateway_owned(a.action_key) is not None:
+                    continue
+            except Exception:  # noqa: BLE001 - one bad send never strands the rest
+                log.exception("carrying out %s failed; the tick retries it", a.approval_id)
                 continue
-            if a.case_id:
-                self._wake(f"Approval {a.approval_id} allowed for {a.case_id}")
+            self._wake(f"Approval {a.approval_id} allowed for {a.case_id or 'firm'}")
+
+    def _released(self, action_type: str, current: str) -> list:
+        """Task 14: the OKs given while `action_type` was PAUSED, carried out on resume."""
+        if current != "PAUSED":
+            return []
+        return [a for a in self.state.approvals.values()
+                if a.action_type == action_type and a.decision == "allow" and a.while_paused]
 
     def _run_gateway_owned(self, action_key: str) -> tuple[str, str] | None:
         kind, _, target = action_key.partition(":")
@@ -1279,7 +1312,9 @@ class Gateway:
             events.append(NewEvent(type="trust.changed", actor="system",
                                    payload={"action_type": action_type, "from": current,
                                             "to": "ASK", "reason": "CEO stop"}))
+        released = self._released(action_type, current)
         self._emit(events)
+        self._carry_out(released)  # task 14: a stop out of PAUSED is a resume to ASK
         return {"trust": self.state.trust[action_type]}
 
     UNBLOCK_TARGETS = {"BLOCKED": ("INTAKE_PENDING", "READY", "NOT_ELIGIBLE"),
@@ -2530,10 +2565,10 @@ class Gateway:
         return "sent"
 
     def _set_trust(self, args: dict) -> dict:
-        """POST /api/trust: the CEO's standing order ("stop posting" = social_post PAUSED;
-        resume = AUTO). trust.changed + touch.operating. Task 14: ASK, and RESUME (back to
-        the state before the pause); approvals allowed while PAUSED are carried out on any
-        resume."""
+        """POST /api/trust: the CEO's standing order ("stop posting" = social_post PAUSED).
+        AUTO and ASK set the state; RESUME (task 14) goes back to the state before the
+        pause (ASK if none is known). Leaving PAUSED carries out the approvals allowed
+        while paused. trust.changed + touch.operating."""
         action_type = _one_of(args, "action_type", TRUST_TYPES)
         requested = _one_of(args, "state", ("PAUSED", "AUTO", "ASK", "RESUME"))
         current = self.state.trust[action_type]
@@ -2544,9 +2579,7 @@ class Gateway:
         if current == to:
             return {"action_type": action_type, "trust": to, "duplicate": True}
         waiting = self._pending_of(action_type) if to == "AUTO" else []
-        released = [a for a in self.state.approvals.values()
-                    if a.action_type == action_type and a.decision == "allow"
-                    and a.while_paused] if current == "PAUSED" else []
+        released = self._released(action_type, current)
         reason = "CEO resume" if requested == "RESUME" else "CEO order"
         self._emit([NewEvent(type="touch.operating", actor="ceo",
                              payload={"note": f"{action_type} \u2192 {to}",

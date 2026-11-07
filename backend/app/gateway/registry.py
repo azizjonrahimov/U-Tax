@@ -176,15 +176,18 @@ def build_store(settings: Settings) -> EventStorePort:
 
 def open_auth_problem(settings: Settings) -> str | None:
     """Empty tokens disable auth (local dev only). A production store, the event (a public
-    crowd) or a public https /talk URL never runs open (task 14)."""
-    if settings.admin_token and settings.theater_token:
-        return None
+    crowd) or a public https /talk URL never runs open (task 14), and never with the admin
+    token equal to the theater token (that one ships to every browser)."""
     for what, on in (("STORE=postgres", settings.store == "postgres"),
                      ("PUBLIC_MODE=event", settings.public_mode == "event"),
                      ("an https PUBLIC_TALK_URL",
                       settings.public_talk_url.strip().lower().startswith("https://"))):
-        if on:
+        if not on:
+            continue
+        if not (settings.admin_token and settings.theater_token):
             return f"{what} needs ADMIN_TOKEN and THEATER_TOKEN set"
+        if settings.admin_token == settings.theater_token:
+            return f"{what} needs an ADMIN_TOKEN different from THEATER_TOKEN"
     return None
 
 

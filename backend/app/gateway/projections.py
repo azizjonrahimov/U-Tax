@@ -134,9 +134,10 @@ class Approval:
     action_key: str
     case_id: str | None
     summary: str
+    # superseded: the type went AUTO (superseded_by None: the action runs on its own), or
+    # task 14: a newer request for the same case and action type (superseded_by = its id),
+    # or the case went back to intake (superseded_by = "reopened": the figure may be stale)
     decision: str | None = None  # allow | deny | superseded
-    # task 14: the newer request for the same case and type, or "client_reply" (the client
-    # wrote again, so the figure it names may be out of date)
     superseded_by: str | None = None
     while_paused: bool = False  # task 14: allowed while PAUSED, carried out on resume
 
@@ -268,8 +269,6 @@ class State:
                         priority=priority)
             self.cases[e.case_id] = case
             self.case_by_sender[case.sender_key] = e.case_id
-        else:  # task 14: the client wrote again; what the CEO was asked may be out of date
-            self._supersede(case.case_id, "client_reply")
         case.texts.append(text)
         case.agent_texts.append(private.get("agent_text", text))
         if private.get("agent_subject") and not case.agent_subject:
@@ -322,6 +321,10 @@ class State:
             case.status = e.payload["to"]
             if case.status != "BLOCKED":
                 case.blocked_reason = None
+            if case.status == "INTAKE_PENDING" and e.payload["from"] != "NEW":
+                # task 14: back to intake (new numbers, a reopen): what the CEO was asked
+                # may name a figure that is no longer true; the woken crew asks again
+                self._supersede(case.case_id, "reopened")
 
     def _on_case_blocked(self, e: Event) -> None:
         case = self._case(e)
@@ -427,10 +430,15 @@ class State:
             self.public_notice_log.append(e.ts)
 
     def _supersede(self, case_id: str, by: str, action_type: str | None = None) -> None:
+        """Task 14. A reopen ("reopened") also voids an OK given while the type was PAUSED
+        and not carried out yet: the crew re-reads the case and asks again."""
         for old in self.approvals.values():
-            if old.case_id == case_id and old.decision is None \
-                    and action_type in (None, old.action_type):
+            if old.case_id != case_id or action_type not in (None, old.action_type):
+                continue
+            if old.decision is None or (by == "reopened" and old.decision == "allow"
+                                        and old.while_paused):
                 old.decision, old.superseded_by = "superseded", by
+                old.while_paused = False
 
     def _touch(self, kind: str, e: Event) -> None:
         self.touches[kind] += 1
@@ -439,9 +447,11 @@ class State:
         approval_id = e.payload.get("approval_id")
         decision = (e.private or {}).get("decision")
         if approval_id in self.approvals and decision:
-            self.approvals[approval_id].decision = decision
+            approval = self.approvals[approval_id]
+            approval.decision = decision
+            approval.superseded_by = None  # a decision logged before task 14 stands
             if (e.private or {}).get("while_paused"):
-                self.approvals[approval_id].while_paused = True
+                approval.while_paused = True
 
     def _on_touch_training(self, e: Event) -> None:
         self._touch("training", e)
@@ -457,7 +467,7 @@ class State:
         self.trust[action_type] = to
         if to == "PAUSED" and was != "PAUSED":
             self.trust_before_pause[action_type] = was
-        elif was == "PAUSED" and to != "PAUSED":  # resumed: Gateway carried these out
+        elif was == "PAUSED" and to != "PAUSED":  # resumed: Gateway._carry_out ran these
             for approval in self.approvals.values():
                 if approval.action_type == action_type:
                     approval.while_paused = False
