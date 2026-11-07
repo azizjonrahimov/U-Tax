@@ -278,6 +278,10 @@ def pin_decision(verb: str) -> Callable[[Any, dict], tuple[dict, str]]:
                                                  f"{DECIDED.get(approval.decision, approval.decision)}")
         if gw.flagged_injection(approval.case_id):
             raise ToolRefused("flagged", FLAGGED_DECISION)
+        if verb == "Approve" and approval.action_type == "social_post" and not approval.detail:
+            # requested before posts were read back word for word: never approve by summary
+            raise ToolRefused("console_only", "that post can't be read back in full: "
+                                              "decide it in the console")
         label = trust_label(approval.action_type)
         trust = gw.state.trust.get(approval.action_type)
         others = _waiting_ids(gw, approval.action_type, exclude=approval.approval_id)
@@ -290,7 +294,9 @@ def pin_decision(verb: str) -> Callable[[Any, dict], tuple[dict, str]]:
         pinned = {"approval_id": approval.approval_id}
         if verb == "Approve":  # its side effects hang on these: pinned, re-checked at confirm
             pinned.update(trust=trust, others=others)
-        return pinned, f"{verb} {approval.summary}.{also} Say confirm."
+        # v1.8.5: a post is read back word for word (the summary clips it at 80)
+        what = approval.detail if verb == "Approve" and approval.detail else approval.summary
+        return pinned, f"{verb} {what}.{also} Say confirm."
     return pin
 
 

@@ -357,7 +357,7 @@ def test_a_proposal_that_expired_while_down_is_cancelled_at_boot(make_harness):
     h.restart()
     [cancelled] = h.events("ceo.cancelled")
     assert cancelled.payload == {"proposal_id": proposal["proposal_id"], "via": "click",
-                                 "heard": "", "reason": "expired"}
+                                 "heard_len": 0, "reason": "expired"}
     assert confirm(h, proposal["proposal_id"]).error["code"] == "expired"
 
 
@@ -893,3 +893,82 @@ def test_a_waiting_case_flagged_after_the_readback_stops_the_approve(h):
 def test_words_the_grammar_cannot_read_never_confirm(heard):
     # 18b review: other scripts were stripped away, so "yes, <no in another script>" confirmed
     assert not ceo_tools.heard_confirms(heard, "approve", "Approve x. Say confirm.")
+
+
+# ---------------------------------------------------------------- task 18c
+
+POST = ("Free Delaware franchise tax checkup for startups this week. We read your filing, "
+        "find the cheaper method, and file it for you. Ask us anything about the annual report.")
+
+
+def test_a_voice_post_approve_reads_back_the_whole_post(h):
+    assert len(POST) > 80 and h.do("post_social", channel="x", text=POST).status == "needs_approval"
+    readback = tool(h, "approve", approval="latest").data["readback"]
+    assert POST in readback and h.gw.settings.public_talk_url in readback  # word for word
+    assert POST not in tool(h, "deny", approval="latest").data["readback"]  # deny: the summary
+    # an unapproved post stays off the public log and the model's activity feed
+    proposed = h.events("ceo.proposed")[0]
+    assert POST not in proposed.payload["readback"] and POST in proposed.private["readback"]
+    assert POST not in json.dumps(tool(h, "recent_activity").data)
+
+
+def test_a_post_that_says_go_ahead_is_approved_by_click_only(h):
+    h.do("post_social", channel="x", text="Ready to file? Go ahead and ask us.")
+    proposal = tool(h, "approve", approval="latest").data
+    assert confirm(h, proposal["proposal_id"], heard="Go ahead.").error["code"] == "not_a_confirm"
+    assert confirm(h, proposal["proposal_id"], via="click", heard="").status == "done"
+
+
+def test_the_ceos_words_stay_in_the_private_part(make_harness):
+    h = make_harness(admin_token=ADMIN, theater_token=THEATER)
+    order = "Ask Team 3 for the issued shares"
+    proposal = tool(h, "order", text=order).data
+    assert order in proposal["readback"]  # the CEO still hears it
+    with http(h) as client:
+        voice_confirm(client, proposal["proposal_id"], "nope, not now")
+        feed = client.get("/api/events", params={"token": THEATER}).json()["data"]
+    blob = json.dumps([e for e in feed if e["type"].startswith("ceo.")])
+    assert "issued shares" not in blob and "nope" not in blob
+    [proposed] = h.events("ceo.proposed")
+    assert proposed.payload["args"] == {"text_len": len(order)}
+    assert proposed.private["args"] == {"text": order}
+    cancelled = h.events("ceo.cancelled")[-1]
+    assert cancelled.payload["heard_len"] == len("nope, not now") and "heard" not in cancelled.payload
+    assert cancelled.private == {"heard": "nope, not now"}
+
+
+def test_an_order_is_rebuilt_from_its_private_part_after_a_restart(make_harness):
+    h = make_harness()
+    proposal = tool(h, "order", text="Ask Team 3 for the issued shares").data
+    h.restart()
+    assert confirm(h, proposal["proposal_id"]).status == "done"
+    assert "issued shares" in h.events("voice.command")[-1].payload["text"]
+    assert h.events("ceo.confirmed")[-1].private == {"heard": "confirm"}
+    assert h.events("ceo.confirmed")[-1].payload == {
+        "proposal_id": proposal["proposal_id"], "via": "voice", "heard_len": len("confirm")}
+
+
+def test_a_post_requested_before_full_readbacks_is_decided_in_the_console(h):
+    h.do("post_social", channel="x", text=POST)
+    [approval] = h.gw.state.approvals.values()
+    approval.detail = None  # requested before 18c: only the clipped summary is known
+    r = tool(h, "approve", approval="latest")
+    assert r.status == "refused" and r.error["code"] == "console_only"
+    assert tool(h, "deny", approval="latest").status == "done"  # a deny needs no full text
+
+
+def test_old_log_rows_never_show_the_ceos_words_to_the_theater(h):
+    from dataclasses import replace
+
+    proposal = tool(h, "order", text="Ask Team 3 for the issued shares").data
+    confirm(h, proposal["proposal_id"], heard="nope")
+    proposed, cancelled = h.events("ceo.proposed")[0], h.events("ceo.cancelled")[-1]
+    old_proposed = replace(proposed, payload={**proposed.payload, "args": {
+        "text": "Ask Team 3 for the issued shares"}, "readback": proposal["readback"]})
+    old_cancelled = replace(cancelled, payload={
+        "proposal_id": proposal["proposal_id"], "via": "voice", "heard": "nope",
+        "reason": "spoken"})
+    blob = json.dumps([h.gw.public_event(old_proposed), h.gw.public_event(old_cancelled)])
+    assert "issued shares" not in blob and "nope" not in blob
+    assert h.gw.public_event(old_cancelled, admin=True)["payload"]["heard"] == "nope"
+    assert h.events("ceo.cancelled")[-1].private == {"heard": "nope"}
