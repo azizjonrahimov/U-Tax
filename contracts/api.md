@@ -351,6 +351,17 @@ the tool names, kinds and args are fixed here:
     voice_unavailable`. On either, the page falls back to the browser's voice without a sound
     of its own (on a 503 it stops using the gateway voice for 60 s).
   - **Text length:** `/talk` sends pieces of ≤ 600 chars, split at sentence ends.
+- v1.10.2:
+  - **`purpose: "talk"` takes no free text.** The body is `{purpose: "talk", phrase:
+    "<key>", args: {...}}`. The gateway renders the line from a server-side registry: the
+    `/talk` script's questions, the number read-back template (numbers only, ≤ 12 digits each),
+    the "your memo is on its way" line, and the at-capacity line. An unknown key, extra args or
+    non-numeric args answer `400 bad_input`. That keeps the firm's voice from being an open relay,
+    and caps how fast the daily budget can drain. The frontend sends phrase keys only; the
+    registry lives in `naive/prompts/talk-phrases.json` (agents lane) and the gateway loads it
+    strictly.
+  - **`purpose: "ceo"` is spoken unmasked** (admin token only). The CEO hears exactly what the
+    card shows.
 - `/api/voice/session` is unchanged: with no Realtime provider it answers 503, and the
   pages use browser `SpeechRecognition` for listening (§8 fallback, now the main path).
   The confirm grammar and the echo guard (v1.8.1/v1.8.4) apply to that path too: the mic is
@@ -573,6 +584,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.10.2 (2026-11-07, frontend review): /api/tts talk speaks phrase keys only (registry naive/prompts/talk-phrases.json); ceo is unmasked.
 
 - v1.10.1 (2026-11-07, frontend D30 build): /api/tts CORS, streaming, 429 on a spent talk budget.
 
