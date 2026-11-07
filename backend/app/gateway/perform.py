@@ -1856,8 +1856,7 @@ class Gateway:
                 return episode, unsure, resolved
             episode += 1
 
-    def _buy_leftover(self, port_key: str, key: str, fp: str, left: dict,
-                      episode: int) -> dict:
+    def _buy_leftover(self, port_key: str, key: str, fp: str, left: dict) -> dict:
         """An intent an earlier call wrote and never settled (a crash, or a store error after
         Monid answered): it may have paid. A purchase this process still remembers is booked
         now; anything else becomes an unsure record for the CEO, never a second buy."""
@@ -1866,14 +1865,13 @@ class Gateway:
         known = recall(port_key) if callable(recall) else None
         if known is not None and known[0] == left_fp:
             return {"purchase": known[1], "fingerprint": left_fp, "port_key": port_key,
-                    "episode": episode, "other_input": left_fp != fp, "tool": left.get("tool")}
+                    "other_input": left_fp != fp, "tool": left.get("tool")}
         return {"error": "unavailable", "unsure": True, "retryable": False,
                 "tool": left.get("tool"),
                 "message": f"purchase {key} may already be charged (an earlier call did not "
                            "finish); the CEO resolves it (resolve_purchase) before it can run again",
                 "fingerprint": left_fp, "port_key": port_key, "ceiling": left.get("ceiling"),
-                "intent_ts": left.get("ts"), "provider": left.get("provider"),
-                "episode": episode}
+                "intent_ts": left.get("ts"), "provider": left.get("provider")}
 
     def _buy_fetch(self, args: dict) -> dict:
         """buy_tool's slow half, before the lock. Fail closed before paying: the log must be
@@ -1891,6 +1889,8 @@ class Gateway:
             self._buy_inflight.add(port_key)  # released after the handler ran (perform)
             args["_buy_reserved"] = port_key
             known = self._done_from(f"tool:{port_key}")
+            if known is not None:  # 17b: a booking whose commit reply was lost counts once
+                self._catch_up_cost(self._done_from(f"cost:tool:{port_key}"))
             episode, unsure, resolved = self._buy_episode(port_key)
         if known is None and resolved is not None and resolved.status == "ok":
             known = resolved  # the CEO found it charged: it is a purchase like any other
@@ -1906,7 +1906,9 @@ class Gateway:
             self._buy_intents.put(port_key, None)
             left = None
         if left:  # never overwrite, never clear what an unsettled earlier call wrote
-            return self._buy_leftover(port_key, key, fp, left, episode)
+            return self._buy_leftover(port_key, key, fp, left)
+        if episode and unsure is None:  # 17b: the last attempt was answered "not charged";
+            self._resolve_port(port_key, None)  # a hold kept after that lost reply goes now
         with self._lock:  # the budget gates only a call that would pay (a repeat is free)
             cap = self.settings.spend_cap_usd
             if cap is not None and self.state.spent_usd() >= cap:
@@ -1924,9 +1926,8 @@ class Gateway:
                 self._buy_intents.put(port_key, None)  # proved not charged
             return {"error": err.code, "message": str(err)[:200], "unsure": unsure_now,
                     "fingerprint": fp, "port_key": port_key, "ceiling": ceiling,
-                    "retryable": err.retryable, "episode": episode}
-        return {"purchase": purchase, "fingerprint": fp, "port_key": port_key,
-                "episode": episode}
+                    "retryable": err.retryable}
+        return {"purchase": purchase, "fingerprint": fp, "port_key": port_key}
 
     def _buy_tool(self, args: dict) -> dict:
         tool = _str(args, "tool", max_len=80)
@@ -2014,9 +2015,15 @@ class Gateway:
             raise Refused("bad_input", "key must be the agent's buy_tool key "
                                        "(1-120 of A-Z a-z 0-9 _ . : -)")
         port_key = f"buy:{key}"  # the agent's key, exactly as buy_tool's refusal names it
+        wanted = _int(args, "episode") or 0  # 17b: the episode the CEO checked in Monid
         if port_key in self._buy_inflight:  # its intent is live, not a leftover
             raise Refused("wrong_status", f"purchase {key} is in flight; resolve it after "
                                           "it returns")
+        if self._done_from(f"tool:{port_key}") is not None:  # 17b: the log first
+            self._catch_up_cost(self._done_from(f"cost:tool:{port_key}"))
+            self._buy_intents.put(port_key, None)  # an intent whose clear failed: settled
+            raise Refused("not_found", f"purchase {key} was already bought and booked; "
+                                       "nothing to resolve")
         episode, unsure, resolved = self._buy_episode(port_key)
         left = self._buy_intents.get(port_key) if unsure is None and resolved is None else None
         if isinstance(left, dict):  # unsettled, not on the log yet: record it first
@@ -2029,6 +2036,7 @@ class Gateway:
             self._record_leftover(port_key, left)
             episode, unsure, resolved = self._buy_episode(port_key)
         if resolved is not None:  # once only: a second answer used to book its cost too
+            self._catch_up_cost(self._done_from(f"cost:tool:{port_key}"))
             self._resolve_port(port_key, resolved.cost_usd)  # a lost commit ack: catch up
             raise Refused("wrong_status", f"purchase {key} is already resolved as charged")
         if unsure is None:
@@ -2038,6 +2046,10 @@ class Gateway:
             hint = " (use the agent's key, without the buy: prefix)" \
                 if key.startswith("buy:") else ""
             raise Refused("not_found", f"no unsure purchase {key}{hint}")
+        if wanted != episode:  # a replayed answer for a settled episode, or a new leftover
+            raise Refused("wrong_status", f"purchase {key} has a newer unsure attempt, episode "
+                                          f"{episode}, nobody has checked yet: check it in "
+                                          f"Monid's runs, then resend with episode: {episode}")
         raw = args.get("cost_usd")
         try:
             cost = parse_usd(raw) if raw not in (None, "") else None
@@ -2060,8 +2072,7 @@ class Gateway:
             raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over "
                                        f"${MAX_PLAUSIBLE_USD}; no data call costs that")
         if cost and usd_string(cost) == usd_string(Decimal(0)):  # booked at 4 places
-            raise Refused("bad_input", f"cost_usd {raw} rounds to $0.0000; charged: false if "
-                                       "Monid's run shows no charge")
+            cost = Decimal("0.0001")  # 17b: a real charge is never booked as $0.0000
         if cost and cost > ceiling and not over:  # max_usd is ours: Monid can charge more
             raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over this purchase's "
                                        f"ceiling ${usd_string(ceiling)}; check the run in Monid, "
@@ -2087,7 +2098,14 @@ class Gateway:
         self._buy_intents.put(port_key, None)
         self._emit(events)
         self._resolve_port(port_key, usd_string(cost) if cost else None)
-        return {"key": key, "charged": bool(cost)}
+        return {"key": key, "charged": bool(cost), "episode": episode}
+
+    def _catch_up_cost(self, booked: Event | None) -> None:
+        """A cost.booked on the log the projection never applied (its commit reply was lost,
+        and newer events landed since): apply it once, or the spend cap undercounts it."""
+        if (booked is not None and booked.idempotency_key
+                and booked.idempotency_key not in self.state.cost_keys):
+            self.state.apply(booked)
 
     def _resolve_port(self, port_key: str, cost_usd: str | None) -> None:
         """The adapter's half of a resolution (its unsure hold and daily spend). Idempotent:
@@ -2103,6 +2121,9 @@ class Gateway:
             intents = self._buy_intents.load() or {}
         except Exception:  # noqa: BLE001 - a bad file never stops the server
             log.exception("toolbuy intents unreadable at boot")
+            return
+        if not isinstance(intents, dict):  # 17b: never crash the boot on a damaged file
+            log.error("toolbuy intents file is not a JSON object; left as is")
             return
         for port_key, left in intents.items():
             if not left:

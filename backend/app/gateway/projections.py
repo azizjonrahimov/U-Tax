@@ -159,6 +159,7 @@ class State:
                                                              "engineering": 0})
     touch_log: list[dict] = field(default_factory=list)
     spent_by_provider: dict[str, Decimal] = field(default_factory=dict)
+    cost_keys: set[str] = field(default_factory=set)  # applied cost.booked keys (17b)
     public_cases_by_day: dict[str, int] = field(default_factory=dict)  # task 13: UTC date -> n
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
     candidates: dict[str, dict] = field(default_factory=dict)
@@ -231,6 +232,8 @@ class State:
     def apply(self, e: Event) -> None:
         self.last_event_id = max(self.last_event_id, e.id)
         if e.cost_usd is not None and e.type == "cost.booked":
+            if e.idempotency_key:  # 17b: a booking whose commit ack was lost is caught up once
+                self.cost_keys.add(e.idempotency_key)
             # contract §4: spend is cost.booked only; tool.bought, law.searched, ... may carry
             # cost_usd for display, and counting them would double the booking
             provider = e.provider or "unknown"
