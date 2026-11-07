@@ -126,11 +126,8 @@ export function approveReleases(pending: readonly Approval[], a: Approval, trust
 /** The brief as paragraphs: blank lines separate them; the gateway's single line breaks are just wrapping. */
 export const briefParagraphs = (text: string) =>
   text
-    .split(/
-\s*
-/)
-    .map((p) => p.replace(/\s*
-\s*/g, " ").trim())
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/\s*\n\s*/g, " ").trim())
     .filter(Boolean);
 
 /** ISO timestamps in gateway summaries read as local times. */
