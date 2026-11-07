@@ -17,7 +17,9 @@ $flags = @()
 foreach ($p in $pairs) { $flags += "--build-env"; $flags += $p; $flags += "--env"; $flags += $p }
 Push-Location (Join-Path $root "frontend")
 try {
-    $out = & npx -y vercel@latest deploy --prod --yes --token $vals["VERCEL_TOKEN"] --name u-tax @flags 2>&1 | Out-String
+    # Windows PowerShell 5.1 turns any native stderr line (npm notices) into an error under "Stop".
+    $ErrorActionPreference = "Continue"
+    $out = & npx -y vercel@latest deploy --prod --yes --token $vals["VERCEL_TOKEN"] --name u-tax @flags 2>&1 | ForEach-Object { "$_" } | Out-String
     $out = $out.Replace($vals["VERCEL_TOKEN"], "***").Replace($vals["THEATER_TOKEN"], "***")
     Write-Host $out
     if ($LASTEXITCODE -ne 0) { throw "vercel deploy exited $LASTEXITCODE" }

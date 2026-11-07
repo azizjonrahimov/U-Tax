@@ -3060,9 +3060,12 @@ class Gateway:
             raise Refused("slot_not_offered", "slot must be one of get_candidate's "
                                               "offered_slots", {"offered_slots": offered})
         label = cand["name_masked"]
-        # the approval names the time (like book_call): an OK for X never sends Y
+        # the approval names the time (like book_call): an OK for X never sends Y. The
+        # invite is a calendar invite too: its own trust applies, before anything leaves
         self._gate("email", f"{key}:{start}", _cap(
             f"{self._first('email')}outreach email + call invite: {label} at {start}"), None)
+        self._gate("calendar_invite", f"{key}:{start}:call", _cap(
+            f"{self._first('calendar_invite')}calendar invite: {label} at {start}"), None)
         self._outreach_intents.put(candidate_id, start)  # before anything leaves
         body = self.templates.render("hr-outreach", {"slot_time": _when(start),
                                                      "minutes": str(SLOT_MINUTES)})
@@ -3097,6 +3100,10 @@ class Gateway:
                                           f"{' or '.join(self.FOLLOW_UP_STATUSES[kind])}")
         if kind == "call_reminder" and not case.call:
             raise Refused("wrong_status", "no review call is booked")
+        if kind == "call_reminder" and parse_ts(case.call["start"]) <= self._now():
+            raise Refused("wrong_status", "the review call has already started")
+        if kind == "missing_facts" and not case.missing:
+            raise Refused("wrong_status", "nothing is missing on this case")
         if not case.reply_to:
             raise Refused("no_address", "the client's address isn't known")
         day = iso_ts(self._now())[:10]
