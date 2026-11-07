@@ -127,3 +127,24 @@ def test_rotate_host_takes_only_https(env):
         devtools.rotate_host("http://new.trycloudflare.com", env,
                              transport=httpx.MockTransport(FakeAgentMail()))
     assert "UTAX_PUBLIC_URL" not in devtools.env_file_values(env)
+
+
+@pytest.mark.parametrize("url", ["https://h.trycloudflare.com\nADMIN_TOKEN=x",
+                                 "https://h.trycloudflare.com?x=1",
+                                 "https://h.trycloudflare.com/#frag",
+                                 "https://user@h.trycloudflare.com",
+                                 "https://h.trycloudflare.com/other/path", "https://"])
+def test_a_host_that_could_break_the_env_line_is_refused(env, url):
+    with pytest.raises(SystemExit):
+        devtools.rotate_host(url, env, transport=httpx.MockTransport(FakeAgentMail()))
+    assert "UTAX_PUBLIC_URL" not in devtools.env_file_values(env)
+
+
+def test_a_failed_webhook_move_leaves_the_env_as_it_was(env):
+    def down(request):
+        return httpx.Response(500, json={})
+
+    with pytest.raises(httpx.HTTPStatusError):
+        devtools.rotate_host("https://new.trycloudflare.com", env,
+                             transport=httpx.MockTransport(down))
+    assert "UTAX_PUBLIC_URL" not in devtools.env_file_values(env)

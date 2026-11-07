@@ -113,10 +113,22 @@ def set_env_values(path: Path, updates: dict[str, str]) -> None:
 
 
 def hook_url(public: str) -> str:
-    """https://<host>[/hooks/agentmail]: only an https host, the path added when missing."""
+    """https://<host>[/hooks/agentmail]: only an https host (no query, fragment, user or
+    control characters, which could also break the .env line), the path added when missing."""
+    from urllib.parse import urlsplit
+
     url = public.strip().rstrip("/")
-    if not url.startswith("https://") or " " in url:
-        raise SystemExit("the webhook needs the public https URL (https://<public-host>)")
+    bad = SystemExit("needs the public https URL (https://<public-host>)")
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in url):
+        raise bad
+    try:
+        parts = urlsplit(url)
+    except ValueError as err:
+        raise bad from err
+    if (parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment
+            or parts.username or parts.password
+            or parts.path not in ("", "/hooks/agentmail")):
+        raise bad
     return url if url.endswith("/hooks/agentmail") else url + "/hooks/agentmail"
 
 
@@ -168,8 +180,9 @@ def rotate_host(public: str, env_path: Path,
     """A quick tunnel's new host, in one go: UTAX_PUBLIC_URL (make_ad's images) in the
     .env, then the AgentMail webhook. Returns the webhook outcome."""
     base = hook_url(public).removesuffix("/hooks/agentmail")
-    set_env_values(env_path, {"UTAX_PUBLIC_URL": base})
-    return agentmail_webhook(base, env_path, transport=transport)
+    outcome = agentmail_webhook(base, env_path, transport=transport)  # first: a failure
+    set_env_values(env_path, {"UTAX_PUBLIC_URL": base})  # leaves the .env as it was
+    return outcome
 
 
 def cmd_rotate_host(args: argparse.Namespace) -> int:

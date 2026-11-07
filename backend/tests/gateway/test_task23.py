@@ -347,3 +347,17 @@ def test_a_follow_up_approval_names_its_kind(h):
                          actor="intake")
     assert asked.status == "needs_approval"
     assert "memo check" in h.gw.state.approvals[asked.approval_id].summary
+
+
+def test_a_lead_never_carries_an_object_repr_or_digs_forever(h):
+    rows = [{"position": {"title": "CPA", "name": "Jane Roe"}, "url": "https://example.com/a"},
+            {"headline": "EA, startup tax", "url": {"href": "https://example.com/b"}},
+            {"headline": "CPA, Delaware", "url": "https://example.com/c"}]
+    leads = h.gw._public_leads({"results": [], "people": rows}, 5)
+    assert [lead["headline"] for lead in leads] == ["CPA, Delaware"]
+    deep: dict = {"data": {}}
+    node = deep["data"]
+    for _ in range(50):
+        node["data"] = {}
+        node = node["data"]
+    assert h.gw._public_leads(deep, 5) == []
