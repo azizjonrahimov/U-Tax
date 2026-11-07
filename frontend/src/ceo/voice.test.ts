@@ -7,6 +7,8 @@ import {
   clearProposal,
   clipHeard,
   decide,
+  decideTyped,
+  actionResultEvents,
   describeRead,
   emptyVoice,
   functionOutputEvents,
@@ -36,7 +38,6 @@ function run(s: VoiceState, events: unknown[], now = NOW) {
   }
   return { state: s, effects };
 }
-const committed = (id: string) => ({ type: "input_audio_buffer.committed", item_id: id });
 const heard = (id: string, transcript: string) => ({ type: "conversation.item.input_audio_transcription.completed", item_id: id, transcript });
 const confirms = (effects: VoiceEffect[]) => effects.filter((e) => e.type === "confirm");
 
@@ -76,15 +77,74 @@ describe("the confirm grammar (contract §5b)", () => {
   });
 });
 
-describe("Realtime: who can confirm", () => {
-  const armed = () => armProposal(run(emptyVoice(), [committed("item_cmd")]).state, proposal);
+describe("Realtime: who can confirm (v1.8.1 echo guard)", () => {
+  const started = (id: string) => ({ type: "input_audio_buffer.speech_started", item_id: id });
+  /** The CEO said the command (item_cmd); the card opened; the agent read it back (resp_2, with audio) and finished. */
+  const readBack = [
+    { type: "response.created", response: { id: "resp_2" } },
+    { type: "output_audio_buffer.started", response_id: "resp_2" },
+    { type: "response.done", response: { id: "resp_2" } },
+    { type: "output_audio_buffer.stopped", response_id: "resp_2" },
+  ];
+  const opened = () => armProposal(run(emptyVoice(), [started("item_cmd")]).state, proposal);
+  const armed = () => run(opened(), readBack).state;
 
-  it("the CEO's own transcript after the card appeared confirms, with via voice and what was heard", () => {
-    const { effects, state } = run(armed(), [committed("item_2"), heard("item_2", "Yes, do it.")]);
+  it("the CEO's own words, spoken after the readback ended, confirm with via voice and what was heard", () => {
+    const { effects, state } = run(armed(), [started("item_2"), heard("item_2", "Yes, do it.")]);
     expect(confirms(effects)).toEqual([{ type: "confirm", proposalId: "prop_1", decision: "confirm", heard: "Yes, do it." }]);
     // Regression: ISSUE-001 — the console refused its own reducer's confirm because the card was already settling.
     // Found by /qa on 2026-11-07. The handshake: the reducer claims the card it names; the console sends for that id.
     expect(state.proposal).toMatchObject({ proposalId: "prop_1", settling: true });
+  });
+
+  it("an echo transcript whose speech started while the agent's audio played is ignored", () => {
+    // The speakers play "...Say confirm." and the mic hears "confirm" mid-readback.
+    const { effects } = run(opened(), [
+      { type: "response.created", response: { id: "resp_2" } },
+      { type: "output_audio_buffer.started", response_id: "resp_2" },
+      started("echo"),
+      { type: "output_audio_buffer.stopped", response_id: "resp_2" },
+      heard("echo", "confirm"),
+    ]);
+    expect(confirms(effects)).toEqual([]);
+  });
+
+  it("before the readback has even started, nothing confirms", () => {
+    expect(confirms(run(opened(), [started("x"), heard("x", "yes")]).effects)).toEqual([]);
+  });
+
+  it("response.done ends the readback only when no audio came; with audio, only output_audio_buffer.stopped does", () => {
+    const textOnly = run(opened(), [{ type: "response.created", response: { id: "r" } }, { type: "response.done", response: { id: "r" } }]).state;
+    expect(confirms(run(textOnly, [started("x"), heard("x", "confirm")]).effects)).toHaveLength(1);
+    const withAudio = run(opened(), [
+      { type: "response.created", response: { id: "r" } },
+      { type: "response.output_audio.delta", response_id: "r" },
+      { type: "response.done", response: { id: "r" } },
+    ]).state;
+    expect(confirms(run(withAudio, [started("x"), heard("x", "confirm")]).effects)).toEqual([]);
+  });
+
+  it("an earlier response's audio ending never opens the card (only the readback's own)", () => {
+    const { state } = run(opened(), [
+      { type: "output_audio_buffer.stopped", response_id: "resp_1" }, // "one moment…" from before the card
+      { type: "response.created", response: { id: "resp_2" } },
+      { type: "output_audio_buffer.started", response_id: "resp_2" },
+      { type: "output_audio_buffer.stopped", response_id: "resp_1" },
+    ]);
+    expect(state.proposal?.heardFrom).toBeNull();
+  });
+
+  it("a transcript containing 'say confirm' is rejected even after the readback", () => {
+    expect(confirms(run(armed(), [started("x"), heard("x", "Say confirm.")]).effects)).toEqual([]);
+    expect(confirms(run(armed(), [started("x"), heard("x", "OK, say confirm, yes")]).effects)).toEqual([]);
+  });
+
+  it("an earlier transcript can still cancel", () => {
+    // The late transcript of the command itself, and speech during the readback: both may cancel.
+    expect(confirms(run(opened(), [heard("item_cmd", "approve it, no wait")]).effects)).toEqual([
+      { type: "confirm", proposalId: "prop_1", decision: "cancel", heard: "approve it, no wait" },
+    ]);
+    expect(confirms(run(opened(), [started("x"), heard("x", "cancel")]).effects)).toHaveLength(1);
   });
 
   it("a model message saying 'confirmed' does nothing", () => {
@@ -107,31 +167,38 @@ describe("Realtime: who can confirm", () => {
   });
 
   it("the late transcript of the command that made the card ('approve it') does not confirm it", () => {
-    // "approve it" was committed before the proposal came back; its words finish after.
-    const { effects } = run(armed(), [heard("item_cmd", "approve it")]);
-    expect(confirms(effects)).toEqual([]);
+    expect(confirms(run(armed(), [heard("item_cmd", "approve it")]).effects)).toEqual([]);
   });
 
-  it("a transcript for an utterance never seen committed does not confirm (fails closed)", () => {
+  it("a transcript whose speech start was never seen does not confirm (fails closed)", () => {
     expect(confirms(run(armed(), [heard("item_ghost", "confirm")]).effects)).toEqual([]);
     expect(confirms(run(armed(), [{ type: "conversation.item.input_audio_transcription.completed", transcript: "confirm" }]).effects)).toEqual([]);
   });
 
   it("single use: a second 'yes' while the first is on its way does nothing", () => {
-    const { effects } = run(armed(), [committed("a"), committed("b"), heard("a", "yes"), heard("b", "yes")]);
+    const { effects } = run(armed(), [started("a"), started("b"), heard("a", "yes"), heard("b", "yes")]);
     expect(confirms(effects)).toHaveLength(1);
   });
 
   it("an expired card can't be confirmed, but can still be cancelled", () => {
     const late = proposal.expiresAt + 1;
-    expect(confirms(run(armed(), [committed("x"), heard("x", "confirm")], late).effects)).toEqual([]);
-    expect(confirms(run(armed(), [committed("x"), heard("x", "cancel")], late).effects)).toEqual([
+    expect(confirms(run(armed(), [started("x"), heard("x", "confirm")], late).effects)).toEqual([]);
+    expect(confirms(run(armed(), [started("x"), heard("x", "cancel")], late).effects)).toEqual([
       { type: "confirm", proposalId: "prop_1", decision: "cancel", heard: "cancel" },
     ]);
   });
 
+  it("typed words (and the browser's own ear) decide at once, with the same grammar and the same echo rule", () => {
+    const typedCard = armProposal(emptyVoice(), proposal, false);
+    expect(decideTyped(typedCard, "confirm", NOW)).toMatchObject({ decision: "confirm" });
+    expect(decideTyped(opened(), "confirm", NOW)).toMatchObject({ decision: "confirm" }); // typing needs no readback wait
+    expect(decideTyped(typedCard, "say confirm", NOW)).toBeNull();
+    expect(decideTyped(typedCard, "confirm", proposal.expiresAt)).toBeNull();
+    expect(decideTyped(emptyVoice(), "confirm", NOW)).toBeNull();
+  });
+
   it("no card, no confirm; a cleared card stays cleared", () => {
-    expect(confirms(run(emptyVoice(), [committed("x"), heard("x", "yes")]).effects)).toEqual([]);
+    expect(confirms(run(emptyVoice(), [started("x"), heard("x", "yes")]).effects)).toEqual([]);
     const s = clearProposal(armed(), "prop_1");
     expect(s.proposal).toBeNull();
     expect(clearProposal(armed(), "other").proposal).not.toBeNull(); // only the named card
@@ -140,8 +207,19 @@ describe("Realtime: who can confirm", () => {
 
   it("heard text is clipped to 200 characters on its way to the gateway", () => {
     const words = `yes ${"x".repeat(300)}`;
-    const c = confirms(run(armed(), [committed("x"), heard("x", words)]).effects)[0] as { heard: string };
+    const c = confirms(run(armed(), [started("x"), heard("x", words)]).effects)[0] as { heard: string };
     expect(Array.from(c.heard)).toHaveLength(MAX_HEARD);
+  });
+});
+
+describe("v1.8.1: the action result goes back to the model", () => {
+  it("as a system item 'Action result: …', then response.create; never a proposal_id", () => {
+    expect(actionResultEvents("Approved the memo for Team #7, $450.")).toEqual([
+      { type: "conversation.item.create", item: { type: "message", role: "system", content: [{ type: "input_text", text: "Action result: Approved the memo for Team #7, $450" }] } },
+      { type: "response.create" },
+    ]);
+    expect(actionResultEvents("Paused everything.", false)).toHaveLength(1);
+    expect(JSON.stringify(toolOutput({ kind: "proposal", ...proposal }))).not.toContain("prop_1");
   });
 });
 

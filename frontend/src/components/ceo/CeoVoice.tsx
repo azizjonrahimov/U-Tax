@@ -16,14 +16,14 @@ import { parseVoiceSession } from "@/talk/talk";
 import { ceoError } from "@/ceo/ceo";
 import {
   announcements,
+  actionResultEvents,
   armProposal,
   clearProposal,
-  decide,
+  decideTyped,
   describeRead,
   emptyVoice,
   functionOutputEvents,
   matchConfirm,
-  outcomeEvents,
   parseToolResult,
   secondsLeft,
   settleProposal,
@@ -304,8 +304,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     [signOut],
   );
 
-  const openCard = useCallback((p: Proposal) => {
-    vs.current = armProposal(vs.current, p);
+  /** `fromModel`: the agent will read it back, so a spoken confirm waits until that audio ends (v1.8.1). */
+  const openCard = useCallback((p: Proposal, fromModel: boolean) => {
+    vs.current = armProposal(vs.current, p, fromModel);
     setNow(Date.now());
     setOutcome(null);
     setCard({ ...p, expired: false, sending: false });
@@ -318,7 +319,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   /** A gateway answer: back to the model (Realtime), or read aloud (fallback and typing). */
   const handle = useCallback(
     (r: ToolResult, callId: string | null) => {
-      if (r.kind === "proposal") openCard(r);
+      if (r.kind === "proposal") openCard(r, callId !== null);
       if (r.kind === "done") {
         setOutcome({ ok: true, text: r.summary });
         refresh();
@@ -373,7 +374,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         closeCard(p.proposalId);
         const text = decision === "cancel" ? "Cancelled. Nothing was done." : r.kind === "done" ? r.summary : "Done.";
         setOutcome({ ok: true, text: decision === "cancel" ? text : `Done: ${text}` });
-        if (linkRef.current === "realtime") send(outcomeEvents(`The CEO ${decision === "confirm" ? "confirmed" : "cancelled"} it (${via}). The gateway says: ${text}`));
+        if (linkRef.current === "realtime") send(actionResultEvents(text));
         else speak(text);
         refresh();
       } catch (e) {
@@ -390,7 +391,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           refresh();
         }
         setOutcome({ ok: false, text: msg });
-        if (linkRef.current === "realtime") send(outcomeEvents(`Nothing was done: ${msg}`));
+        if (linkRef.current === "realtime") send(actionResultEvents(`Nothing was done. ${msg}`));
         else speak(msg);
       }
     },
@@ -403,9 +404,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       const t = text.trim();
       if (!t) return;
       addLine("you", t);
-      // Each new utterance counts after any card already open (the command that made a card came before it).
-      vs.current = { ...vs.current, seq: vs.current.seq + 1 };
-      const d = decide(vs.current, t, vs.current.seq, Date.now());
+      // Typed, or heard by the browser (it never listens while it speaks): no echo ordering to wait for.
+      const d = decideTyped(vs.current, t, Date.now());
       if (d?.type === "confirm") return settle(d.decision, via, d.heard);
       if (vs.current.proposal && matchConfirm(t)) return; // the card is settling or expired: never a command
       try {
@@ -670,7 +670,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       }
       if (!alive.current) return;
       setStopNote({ ok: true, text: `${summary} Resume each kind under Standing orders when you're ready.` });
-      if (linkRef.current === "realtime") send([{ type: "conversation.item.create", item: { type: "message", role: "system", content: [{ type: "input_text", text: `The CEO pressed STOP EVERYTHING. ${summary}` }] } }]);
+      // The model was just cut off: tell it what happened, but don't start it talking again.
+      if (linkRef.current === "realtime") send(actionResultEvents(`The CEO pressed STOP EVERYTHING. ${summary}`, false));
       else speak("Everything is paused.");
     } catch (e) {
       if (!alive.current || unauthorized(e)) return;
@@ -734,10 +735,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       if (p && p.proposalId === cardId && n >= p.expiresAt && !p.settling) {
         vs.current = clearProposal(vs.current, cardId);
         setCard((c) => (c && c.proposalId === cardId ? { ...c, expired: true } : c));
+        if (linkRef.current === "realtime") send(actionResultEvents("The proposal expired. Nothing was done."));
       }
     }, 250);
     return () => clearInterval(t);
-  }, [cardId]);
+  }, [cardId, send]);
 
   useEffect(() => {
     alive.current = true;

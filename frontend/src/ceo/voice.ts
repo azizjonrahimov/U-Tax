@@ -5,9 +5,10 @@
 // - The model can only reach POST /api/ceo/tool with a tool from the registry below. A "start"
 //   tool comes back as a proposal; nothing is carried out.
 // - A proposal is confirmed only by the CEO's own words (Realtime's
-//   conversation.item.input_audio_transcription.completed for audio the CEO said *after* the
-//   card appeared, or browser speech / typing in the fallback), matched by the grammar below,
-//   or by a click. Model output never confirms: its transcripts are never matched.
+//   conversation.item.input_audio_transcription.completed for speech that started *after* the
+//   agent finished reading the card back, so the speakers' echo of "Say confirm" never counts;
+//   or browser speech / typing in the fallback), matched by the grammar below, or by a click.
+//   Model output never confirms: its transcripts are never matched (contract v1.8.1).
 
 import type { UTaxEvent } from "@/theater/events";
 
@@ -188,25 +189,42 @@ export type VoiceEffect =
   | { type: "state"; state: "listening" | "thinking" | "speaking" | "idle" }
   | { type: "error"; message: string };
 
-export interface VoiceState {
-  /** Counts committed CEO utterances, in order. */
-  seq: number;
-  /** item_id → its place in that order. */
-  committed: ReadonlyMap<string, number>;
-  /** call_ids already handled: Realtime can repeat a call in two event shapes. */
-  calls: ReadonlySet<string>;
-  /** The open confirm card. */
-  proposal: (Proposal & { armedAt: number; settling: boolean }) | null;
+/** The open confirm card, as the reducer tracks it. */
+export interface OpenProposal extends Proposal {
+  settling: boolean;
+  /**
+   * v1.8.1 echo guard: the event tick after which the CEO's speech may confirm, set when the
+   * agent's audio for this proposal (its readback) has finished. Null until then.
+   */
+  heardFrom: number | null;
+  /** The Realtime response that reads the readback (the first one created after the card opened). */
+  replyId: string | null;
+  /** That response played audio (then only output_audio_buffer.stopped ends it). */
+  replyAudio: boolean;
 }
 
-export const emptyVoice = (): VoiceState => ({ seq: 0, committed: new Map(), calls: new Set(), proposal: null });
+export interface VoiceState {
+  /** Counts server events, in order. */
+  tick: number;
+  /** item_id -> the tick its speech started. */
+  started: ReadonlyMap<string, number>;
+  /** call_ids already handled: Realtime can repeat a call in two event shapes. */
+  calls: ReadonlySet<string>;
+  proposal: OpenProposal | null;
+}
 
-/** Keep the item map bounded on a long session. */
+export const emptyVoice = (): VoiceState => ({ tick: 0, started: new Map(), calls: new Set(), proposal: null });
+
+/** Keep the item maps bounded on a long session. */
 const MAX_ITEMS = 200;
 
-/** A proposal arrived: the card opens, and only utterances committed from now on can confirm it. */
-export function armProposal(s: VoiceState, p: Proposal): VoiceState {
-  return { ...s, proposal: { ...p, armedAt: s.seq, settling: false } };
+/**
+ * A proposal arrived: the card opens. On a Realtime session (`waitForReadback`), spoken confirms
+ * count only from speech that starts after the agent finishes reading it back; typed words and
+ * the browser-speech fallback (which never listens while it speaks) count at once.
+ */
+export function armProposal(s: VoiceState, p: Proposal, waitForReadback = true): VoiceState {
+  return { ...s, proposal: { ...p, settling: false, heardFrom: waitForReadback ? null : s.tick, replyId: null, replyAudio: false } };
 }
 
 /** The card closed (confirmed, cancelled, expired, STOP, or replaced). */
@@ -217,41 +235,63 @@ export const clearProposal = (s: VoiceState, proposalId?: string): VoiceState =>
 export const settleProposal = (s: VoiceState): VoiceState => (s.proposal ? { ...s, proposal: { ...s.proposal, settling: true } } : s);
 
 /**
- * Can the CEO's words decide the open card? Only words from after it appeared (a transcript of the
- * command that created it, "approve it", finishing late must not confirm it), before it expires,
- * and only once.
+ * Can the CEO's words decide the open card? A cancel word cancels from any transcript. A confirm
+ * needs speech that started after the readback finished (`speechAt` > heardFrom: never the
+ * speakers' echo of "Say confirm", never the late transcript of the command that made the card),
+ * no echo of the readback's own words, an unexpired card, and only once.
  */
-export function decide(s: VoiceState, text: string, utteranceSeq: number | null, now: number): VoiceEffect | null {
+export function decide(s: VoiceState, text: string, speechAt: number | null, now: number): VoiceEffect | null {
   const p = s.proposal;
   if (!p || p.settling) return null;
-  if (utteranceSeq === null || utteranceSeq <= p.armedAt) return null;
   const d = matchConfirm(text);
   if (!d) return null;
-  if (d === "confirm" && now >= p.expiresAt) return null;
+  if (d === "confirm") {
+    if (now >= p.expiresAt) return null;
+    if (p.heardFrom === null || speechAt === null || speechAt <= p.heardFrom) return null;
+  }
   return { type: "confirm", proposalId: p.proposalId, decision: d, heard: clipHeard(text) };
 }
 
-/** Realtime server event (data channel "oai-events") → new state and what the console does. */
-export function voiceStep(s: VoiceState, raw: unknown, now: number): { state: VoiceState; effects: VoiceEffect[] } {
-  if (!isObj(raw)) return { state: s, effects: [] };
+/** Words typed (or heard by the browser, which never listens while it speaks): no audio ordering to check. */
+export const decideTyped = (s: VoiceState, text: string, now: number): VoiceEffect | null =>
+  decide(s.proposal ? { ...s, proposal: { ...s.proposal, heardFrom: -1 } } : s, text, 0, now);
+
+const bounded = <K, V>(m: Map<K, V>) => {
+  if (m.size > MAX_ITEMS) m.delete(m.keys().next().value as K);
+  return m;
+};
+
+/** The readback finished playing: from the next tick on, the CEO's speech can confirm. */
+const readbackDone = (s: VoiceState): VoiceState =>
+  s.proposal && s.proposal.heardFrom === null ? { ...s, proposal: { ...s.proposal, heardFrom: s.tick } } : s;
+
+/** Realtime server event (data channel "oai-events") -> new state and what the console does. */
+export function voiceStep(prev: VoiceState, raw: unknown, now: number): { state: VoiceState; effects: VoiceEffect[] } {
+  if (!isObj(raw)) return { state: prev, effects: [] };
+  const s: VoiceState = { ...prev, tick: prev.tick + 1 };
+  const p = s.proposal;
+  const waiting = p !== null && p.heardFrom === null;
+  const responseId = (r: unknown) => (isObj(r) ? str(r.id) : "");
   switch (raw.type) {
-    case "input_audio_buffer.committed": {
+    case "input_audio_buffer.speech_started": {
       const id = str(raw.item_id);
-      if (!id || s.committed.has(id)) return { state: s, effects: [] };
-      const seq = s.seq + 1;
-      const committed = new Map(s.committed).set(id, seq);
-      if (committed.size > MAX_ITEMS) committed.delete(committed.keys().next().value as string);
-      return { state: { ...s, seq, committed }, effects: [] };
+      const state = id && !s.started.has(id) ? { ...s, started: bounded(new Map(s.started).set(id, s.tick)) } : s;
+      return { state, effects: [{ type: "state", state: "listening" }] };
     }
     case "conversation.item.input_audio_transcription.completed": {
       // The CEO's microphone, transcribed: the only Realtime text that can confirm.
       const text = str(raw.transcript).trim();
       if (!text) return { state: s, effects: [] };
-      const at = s.committed.get(str(raw.item_id)) ?? null;
       const effects: VoiceEffect[] = [{ type: "heard", text }];
-      const d = decide(s, text, at, now);
+      const d = decide(s, text, s.started.get(str(raw.item_id)) ?? null, now);
       if (d) effects.push(d);
       return { state: d ? settleProposal(s) : s, effects };
+    }
+    case "response.created": {
+      // The first response after the card opened is the one reading the readback.
+      const id = responseId(raw.response);
+      if (waiting && p && !p.replyId && id) return { state: { ...s, proposal: { ...p, replyId: id } }, effects: [] };
+      return { state: s, effects: [] };
     }
     case "response.function_call_arguments.done":
       return call(s, str(raw.call_id), str(raw.name), raw.arguments);
@@ -266,17 +306,25 @@ export function voiceStep(s: VoiceState, raw: unknown, now: number): { state: Vo
       const text = str(raw.transcript).trim();
       return { state: s, effects: text ? [{ type: "agent", text }] : [] };
     }
-    case "input_audio_buffer.speech_started":
-      return { state: s, effects: [{ type: "state", state: "listening" }] };
     case "input_audio_buffer.speech_stopped":
       return { state: s, effects: [{ type: "state", state: "thinking" }] };
     case "output_audio_buffer.started":
     case "response.audio.delta":
-    case "response.output_audio.delta":
-      return { state: s, effects: [{ type: "state", state: "speaking" }] };
-    case "output_audio_buffer.stopped":
-    case "response.done":
-      return { state: s, effects: [{ type: "state", state: "idle" }] };
+    case "response.output_audio.delta": {
+      const state = waiting && p && p.replyId && !p.replyAudio ? { ...s, proposal: { ...p, replyAudio: true } } : s;
+      return { state, effects: [{ type: "state", state: "speaking" }] };
+    }
+    case "output_audio_buffer.stopped": {
+      // The readback's audio finished playing in the room.
+      const rid = str(raw.response_id);
+      const ours = waiting && p !== null && p.replyId !== null && (!rid || rid === p.replyId);
+      return { state: ours ? readbackDone(s) : s, effects: [{ type: "state", state: "idle" }] };
+    }
+    case "response.done": {
+      // A readback with no audio at all (text only) is finished when its response is.
+      const ours = waiting && p !== null && p.replyId !== null && !p.replyAudio && responseId(raw.response) === p.replyId;
+      return { state: ours ? readbackDone(s) : s, effects: [{ type: "state", state: "idle" }] };
+    }
     case "error": {
       const err = isObj(raw.error) ? raw.error : {};
       return { state: s, effects: [{ type: "error", message: str(err.message) || "voice error" }] };
@@ -312,10 +360,13 @@ export const functionOutputEvents = (callId: string, output: string) => [
   { type: "response.create" },
 ];
 
-/** After a click or a spoken confirm: tell the model what the gateway did, so it can say so. */
-export const outcomeEvents = (text: string) => [
-  { type: "conversation.item.create", item: { type: "message", role: "system", content: [{ type: "input_text", text }] } },
-  { type: "response.create" },
+/**
+ * v1.8.1: after a confirm, a cancel or an expiry, tell the model what actually happened (a system
+ * item, then response.create) so the agent says it. Never a proposal_id: the model can't act on it.
+ */
+export const actionResultEvents = (summary: string, speak = true) => [
+  { type: "conversation.item.create", item: { type: "message", role: "system", content: [{ type: "input_text", text: `Action result: ${oneLine(summary)}` }] } },
+  ...(speak ? [{ type: "response.create" }] : []),
 ];
 
 // ------------------------------------------------------------------ hands-free announcements
