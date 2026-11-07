@@ -408,7 +408,7 @@ Each wake writes nothing extra; the session's own tool calls produce the events.
 Stand-in tonight (no Naïve until Saturday, design D26): the **local driver** receives the
 same messages and plays the agents' tool calls through `/mcp/<actor>` with their tokens.
 
-## 6b-bis. Naïve confirms (v1.9, design D29)
+## 6b-bis. Naïve confirms (v1.9, design D29): PROPOSED, not built until the owner approves
 
 - The gateway watches the U-Tax agents' sessions that are `idle` with
   `stop_reason: "awaiting_approval"`: those it started itself, plus a poll of
