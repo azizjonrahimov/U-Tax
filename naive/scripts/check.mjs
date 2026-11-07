@@ -358,7 +358,8 @@ else {
   if (listed.join() !== ceoTools.join()) fail(`prompts/ceo-voice.md: "Your tools" lists ${listed}, contract §5b has ${ceoTools}`);
   // anywhere in the prompt, a backticked call shape `name {...}` or `name args` must be a §5b tool,
   // and no gateway-only tool or never-by-voice route may be named at all
-  for (const m of raw.matchAll(/`([a-z]+(?:[_-][a-z]+)*) (?:\{|[a-z_]+\b)[^`]*`/gi))
+  // `name {...}` in any case; `name args` lowercase only, so a quoted line like `Action result: …` isn't a call
+  for (const m of [...raw.matchAll(/`([a-z]+(?:[_-][a-z]+)*) \{[^`]*`/gi), ...raw.matchAll(/`([a-z]+(?:[_-][a-z]+)*) [a-z_]+\b[^`]*`/g)])
     if (!ceoTools.includes(m[1])) fail(`prompts/ceo-voice.md: \`${m[1]}\` is not a §5b CEO tool`);
   // every gateway tool name has an underscore, so a plain-word match can't hit ordinary prose
   for (const t of GATEWAY_TOOLS)
