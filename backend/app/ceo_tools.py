@@ -524,6 +524,13 @@ _ECHO = re.compile(r"\bsay\s+confirm\b|\b(?:shall|should) i\b|\bdo you want\b"
                    r"|\bwould you like\b|\bwant me to\b", re.I)
 
 
+def _unreadable(heard: str) -> bool:
+    """A question mark of any script, or a letter outside a-z: the grammar can't read it,
+    so it never confirms (a "no" in another script would be stripped away)."""
+    return any(ch in "?¿？؟;" or (ch.isalpha() and not ch.isascii())
+               for ch in heard or "")
+
+
 def _speech(heard: str) -> str:
     """Lower case, punctuation gone (an apostrophe kept), one space between words."""
     text = (heard or "").lower().replace("\u2019", "'")
@@ -539,7 +546,7 @@ def heard_confirms(heard: str, tool: str | None = None, readback: str | None = N
     only an approve proposal; the readback echoed back (even a piece of it, like an order
     that says "go ahead"), or a question, never confirms."""
     words = _speech(heard)
-    if not words or "?" in (heard or "") or _ECHO.search(words):
+    if not words or _unreadable(heard) or _ECHO.search(words):
         return False
     body = _speech(re.sub(r"\s*say confirm\.?\s*$", "", readback or "", flags=re.I))
     if body and re.search(rf"(?:^| ){re.escape(words)}(?: |$)", body):

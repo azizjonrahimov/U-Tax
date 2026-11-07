@@ -3035,6 +3035,11 @@ class Gateway:
             to = self.state.trust_before_pause.get(action_type, "ASK") \
                 if current == "PAUSED" else current
         if current == to:
+            if to == "PAUSED":  # a repeat stop still stops what waits for a confirm (18b)
+                stopped = [self._proposal_cancel(p, "superseded", "click", "")
+                           for p in self._open_proposals()]
+                if stopped:
+                    self._emit(stopped)
             return {"action_type": action_type, "trust": to, "duplicate": True}
         waiting = self._pending_of(action_type) if to == "AUTO" else []
         released = self._released(action_type, current)

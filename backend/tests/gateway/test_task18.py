@@ -854,3 +854,42 @@ def test_a_confirm_word_inside_a_sentence_is_not_a_confirm(make_harness, heard):
         r = voice_confirm(client, proposal["proposal_id"], heard)
     assert r.status_code == 400 and r.json()["error"]["code"] == "not_a_confirm"
     assert all(a.decision is None for a in h.gw.state.approvals.values())
+
+
+@pytest.mark.parametrize("stop", ["social_post", "everything"])
+def test_a_repeat_pause_still_cancels_an_open_proposal(h, stop):
+    # 18b review: a STOP on a type already paused returned early and left it confirmable
+    h.ok("set_trust", action_type="social_post", state="PAUSED")
+    proposal = tool(h, "set_trust", action_type="social_post", state="RESUME").data
+    tool(h, "pause", action_type=stop)
+    assert h.events("ceo.cancelled")[-1].payload["reason"] == "superseded"
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+    assert h.gw.state.trust["social_post"] == "PAUSED"
+
+
+def test_a_resume_whose_held_approvals_moved_is_superseded(h):
+    _, first = pending_memo(h)
+    _, second = pending_memo(h, team=8)
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    h.ok("approve", approval_id=first, decision="allow")  # held by the pause
+    proposal = tool(h, "set_trust", action_type="email", state="RESUME").data
+    assert "carries out 1 approval held by the pause" in proposal["readback"]
+    h.ok("approve", approval_id=second, decision="allow")  # a second held, never read back
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+    assert h.gw.state.trust["email"] == "PAUSED"
+
+
+def test_a_waiting_case_flagged_after_the_readback_stops_the_approve(h):
+    pending_memo(h)
+    bad, other = pending_memo(h, team=8)
+    proposal = tool(h, "approve", approval="Team 1").data  # its AUTO flip would run Team #2's
+    h.ok("flag_case", case_id=bad, kind="possible_injection")
+    assert confirm(h, proposal["proposal_id"]).status == "refused"
+    assert h.gw.state.approvals[other].decision is None and h.gw.state.trust["email"] == "ASK"
+
+
+@pytest.mark.parametrize("heard", ["yes, 不要", "yes, нет", "yes ¿",
+                                   "confirm？", "sí, confirm"])
+def test_words_the_grammar_cannot_read_never_confirm(heard):
+    # 18b review: other scripts were stripped away, so "yes, <no in another script>" confirmed
+    assert not ceo_tools.heard_confirms(heard, "approve", "Approve x. Say confirm.")
