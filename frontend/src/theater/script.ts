@@ -182,6 +182,10 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   ["cost.booked", "rail"],
   ["tool.bought", "rail"],
   ["brief.generated", "rail"],
+  // v1.8 voice proposals: the touch that follows a confirm is what the rail shows; these draw nothing.
+  ["ceo.proposed", "rail"],
+  ["ceo.confirmed", "rail"],
+  ["ceo.cancelled", "rail"],
 ]);
 
 export const KNOWN_TYPES: readonly string[] = [...PANE_OF.keys()];
@@ -658,7 +662,16 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       const kind = suffix(ev.type);
       const approvalId = strOrNull(p, "approval_id");
       const actionType = approvalId !== null && Object.hasOwn(approvalTypes, approvalId) ? approvalTypes[approvalId] : null;
-      push({ target: "rail.touches", agent, action: "count", text: actionType ? `${kind} · ${words(actionType)}` : kind, meta: { kind, approval_id: approvalId, action_type: actionType } });
+      // v1.8: how the CEO gave it (absent on older events = click); the rail marks voice with a mic.
+      // An odd value never costs the touch itself: it just shows without the mic.
+      const channel = typeof p.channel === "string" ? p.channel : "click";
+      push({
+        target: "rail.touches",
+        agent,
+        action: "count",
+        text: actionType ? `${kind} · ${words(actionType)}` : kind,
+        meta: { kind, approval_id: approvalId, action_type: actionType, channel },
+      });
       break;
     }
     case "trust.changed": {
@@ -691,6 +704,11 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       });
       break;
     }
+    case "ceo.proposed":
+    case "ceo.confirmed":
+    case "ceo.cancelled":
+      str(p, "proposal_id");
+      break;
     case "brief.generated": {
       const text = str(p, "text");
       obj(p.counts, "counts");

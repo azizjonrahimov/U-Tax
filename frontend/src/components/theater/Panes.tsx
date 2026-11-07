@@ -8,6 +8,7 @@ import type { Cell, ScreenState } from "@/theater/screen";
 import type { Pane as PaneKey } from "@/theater/script";
 import { formatCents, formatClock, formatUsd } from "@/theater/format";
 import { assetAllowed, parseAssetHosts } from "@/theater/live";
+import { MicIcon } from "@/components/MicIcon";
 
 /** Text as it should show right now (a step being typed reveals progressively). */
 export type Typed = (target: string, full: string | undefined) => string | undefined;
@@ -365,6 +366,11 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
             {screen.rail.log.slice(-4).map((l) => (
               <div key={`${l.eventId}:${l.kind}`}>
                 <span className="h">{formatClock(l.ts)}</span>
+                {l.voice && (
+                  <span className="by-voice">
+                    <MicIcon label="by voice" />{" "}
+                  </span>
+                )}
                 {l.text}
               </div>
             ))}

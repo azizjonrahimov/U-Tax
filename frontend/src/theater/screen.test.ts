@@ -120,6 +120,23 @@ describe("review pass: rail and screen hardening", () => {
     expect(s.rail.trust).toEqual({});
   });
 
+  it("v1.8: a touch given by voice shows a mic on the rail log; click, typed and older touches don't", () => {
+    const skipped: string[] = [];
+    const evs = [
+      ev(1, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: "memo" }, { case_id: "case_1" }),
+      ev(2, "ceo.proposed", { proposal_id: "prop_1", tool: "approve", args: { approval: "apr_1" }, readback: "Approve it. Say confirm.", expires_at: "2026-11-07T21:01:00Z", source: "realtime" }, { actor: "ceo" }),
+      ev(3, "touch.training", { note: "allow", approval_id: "apr_1", channel: "voice" }, { actor: "ceo" }),
+      ev(4, "ceo.confirmed", { proposal_id: "prop_1", via: "voice", heard: "yes do it" }, { actor: "ceo" }),
+      ev(5, "touch.operating", { note: "pause", approval_id: null, channel: "click" }, { actor: "ceo" }),
+      ev(6, "touch.operating", { note: "x", approval_id: null }, { actor: "ceo" }),
+      ev(7, "touch.operating", { note: "y", approval_id: null, channel: 7 }, { actor: "ceo" }),
+      ev(8, "ceo.cancelled", { proposal_id: "prop_2", via: "click", heard: "", reason: "expired" }, { actor: "ceo" }),
+    ];
+    const s = applySteps(emptyScreen(), buildScript(evs, { ...quiet, log: (k) => skipped.push(`${k.eventId}:${k.reason}`) }).steps);
+    expect(s.rail.log.map((l) => [l.eventId, l.voice === true])).toEqual([[3, true], [5, false], [6, false], [7, false]]);
+    expect(skipped).toEqual([]); // the proposal events are known: no console noise, no steps
+  });
+
   it("a repeated approval request replaces its row instead of duplicating it", () => {
     const req = (id: number) => ev(id, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: `v${id}` });
     expect(fold([req(1), req(2)]).rail.pending).toEqual([{ approvalId: "apr_1", text: "email approval" }]);
