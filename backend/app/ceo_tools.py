@@ -21,13 +21,15 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any, Callable
 
-from app.gateway.projections import TRUST_TYPES  # noqa: E402 - one list for both
+from app.gateway.projections import TRUST_TYPES  # one list for the registry and the gateway
 
 FLAGGED = "flagged by QA, content hidden"
 PROPOSAL_TTL = timedelta(seconds=60)
 ORDER_MAX = 500
 ACTIVITY_DEFAULT, ACTIVITY_MAX = 60, 720
 ACTIVITY_ITEMS = 40
+ACTIVITY_SCAN = 2000  # events looked back over, at most (a busy log shortens the window)
+BRIEF_NEW_MAX = 1000
 HEARD_MAX = 200
 
 TRUST_WORDS = {"email": "emails", "social_post": "posting", "calendar_invite": "invites",
@@ -52,6 +54,8 @@ class CeoTool:
     read: Callable[[Any, dict], Any] | None = None
     pin: Callable[[Any, dict], tuple[dict, str]] | None = None  # -> (pinned args, readback)
     carry: Callable[[Any, dict], str] | None = None  # pinned args -> spoken summary
+    # at confirm: why the pinned target no longer matches what was read back, else None
+    stale: Callable[[Any, dict], str | None] | None = None
 
     def schema(self) -> dict:
         """The Realtime function schema."""
@@ -155,18 +159,27 @@ def trust_label(action_type: str) -> str:
 # ------------------------------------------------------------------ read tools
 
 
+def _summary(gw: Any, approval) -> str:
+    """An approval's code-built summary; a flagged case's reads as FLAGGED (§5b)."""
+    return FLAGGED if gw.flagged_injection(approval.case_id) else approval.summary
+
+
 def _case_view(gw: Any, case) -> dict:
     view = case.public()
     if gw.flagged_injection(case.case_id):
         view["note"] = FLAGGED
-    view["pending_approvals"] = [{"approval_id": a.approval_id, "summary": a.summary}
+    view["pending_approvals"] = [{"approval_id": a.approval_id, "summary": _summary(gw, a)}
                                  for a in pending_approvals(gw) if a.case_id == case.case_id]
     return view
 
 
 def read_brief(gw: Any, args: dict) -> dict:
     text, counts = gw._brief_text()
-    return {"text": text, "counts": counts, "last_event_id": gw.state.last_event_id}
+    out = {"text": text, "counts": counts, "last_event_id": gw.state.last_event_id}
+    since = args.get("since_id")
+    if since is not None:  # how much happened after the id the CEO last saw
+        out["new_events"] = sum(1 for _ in gw.store.since(max(0, since), limit=BRIEF_NEW_MAX))
+    return out
 
 
 def read_approvals(gw: Any, args: dict) -> list[dict]:
@@ -174,7 +187,7 @@ def read_approvals(gw: Any, args: dict) -> list[dict]:
     for a in pending_approvals(gw):
         case = gw.state.cases.get(a.case_id) if a.case_id else None
         out.append({"approval_id": a.approval_id, "action_type": a.action_type,
-                    "case": case.masked_name if case else "firm", "summary": a.summary})
+                    "case": case.masked_name if case else "firm", "summary": _summary(gw, a)})
     return out
 
 
@@ -211,12 +224,16 @@ def read_activity(gw: Any, args: dict) -> list[dict]:
     minutes = args.get("minutes") or ACTIVITY_DEFAULT
     minutes = max(1, min(int(minutes), ACTIVITY_MAX))
     cutoff = gw._now() - timedelta(minutes=minutes)
-    start = max(0, gw.state.last_event_id - 2000)  # a bounded window, newest last
+    start = max(0, gw.state.last_event_id - ACTIVITY_SCAN)  # a bounded window, newest last
     items = []
     for e in gw.store.since(start):
         if parse_ts(e.ts) < cutoff:
             continue
-        case = gw.state.cases.get(e.case_id) if e.case_id else None
+        case_id = e.case_id
+        approval = gw.state.approvals.get(e.payload.get("approval_id") or "")
+        if case_id is None and approval is not None:
+            case_id = approval.case_id  # touches and requests about a case's approval
+        case = gw.state.cases.get(case_id) if case_id else None
         item = {"id": e.id, "ts": e.ts, "type": e.type,
                 "case": case.masked_name if case else None}
         if case is not None and gw.flagged_injection(case.case_id):
@@ -248,8 +265,11 @@ def pin_decision(verb: str) -> Callable[[Any, dict], tuple[dict, str]]:
         if approval.decision is not None:
             raise ToolRefused("nothing_pending", f"{approval.approval_id} is already "
                                                  f"{approval.decision}")
+        also = ""
+        if verb == "Approve" and gw.state.trust.get(approval.action_type) == "ASK":
+            also = f" That also turns {trust_label(approval.action_type)} automatic."
         return ({"approval_id": approval.approval_id},
-                f"{verb} {approval.summary}. Say confirm.")
+                f"{verb} {approval.summary}.{also} Say confirm.")
     return pin
 
 
@@ -259,6 +279,9 @@ def carry_decision(decision: str) -> Callable[[Any, dict], str]:
         out = gw._approve({"approval_id": pinned["approval_id"], "decision": decision})
         if out.get("duplicate"):
             return f"Already {out.get('decision')}: {approval.summary}."
+        if decision == "allow" and approval.while_paused:  # recorded; runs on resume
+            return (f"Approved, held until {trust_label(approval.action_type)} resumes: "
+                    f"{approval.summary}.")
         return f"{'Approved' if decision == 'allow' else 'Denied'}: {approval.summary}."
     return carry
 
@@ -266,8 +289,18 @@ def carry_decision(decision: str) -> Callable[[Any, dict], str]:
 def pin_trust(gw: Any, args: dict) -> tuple[dict, str]:
     action_type, state = args["action_type"], args["state"]
     word = {"AUTO": "automatic", "ASK": "ask first", "RESUME": "what it was before the pause"}
+    also = ""
+    current = gw.state.trust.get(action_type)
+    if state == "AUTO":
+        waiting = len(gw._pending_of(action_type))
+        if waiting:
+            also = f" That also runs the {waiting} waiting {trust_label(action_type)}."
+    if current == "PAUSED" and state != "PAUSED":
+        held = len(gw._released(action_type, current))
+        if held:
+            also = f" That carries out {held} approval{'s' if held != 1 else ''} held by the pause."
     return ({"action_type": action_type, "state": state},
-            f"Set {trust_label(action_type)} to {word[state]}. Say confirm.")
+            f"Set {trust_label(action_type)} to {word[state]}.{also} Say confirm.")
 
 
 def carry_trust(gw: Any, pinned: dict) -> str:
@@ -284,8 +317,17 @@ def pin_unblock(gw: Any, args: dict) -> tuple[dict, str]:
     to = args.get("to") or targets[0]
     if to not in targets:
         raise ToolRefused("bad_args", f"{case.masked_name} can go to {', '.join(targets)}")
-    return ({"case_id": case.case_id, "to": to},
+    if to == "READY" and not case.facts:
+        raise ToolRefused("bad_args", f"{case.masked_name} has no facts yet; use INTAKE_PENDING")
+    return ({"case_id": case.case_id, "from": case.status, "to": to},
             f"Move {case.masked_name} from {case.status} to {to}. Say confirm.")
+
+
+def stale_unblock(gw: Any, pinned: dict) -> str | None:
+    case = gw.state.cases[pinned["case_id"]]
+    if case.status != pinned["from"]:
+        return f"{case.masked_name} moved from {pinned['from']} to {case.status}; ask again"
+    return None
 
 
 def carry_unblock(gw: Any, pinned: dict) -> str:
@@ -296,10 +338,20 @@ def carry_unblock(gw: Any, pinned: dict) -> str:
 
 def pin_candidate(gw: Any, args: dict) -> tuple[dict, str]:
     cand = find_candidate(gw, args.get("candidate"))
+    if cand.get("stage") in ("hired", "declined"):
+        raise ToolRefused("nothing_pending", f"{cand.get('name_masked')} is already "
+                                             f"{cand['stage']}")
     decision = args["decision"]
     return ({"candidate_id": cand["candidate_id"], "decision": decision},
             f"{decision.capitalize()} {cand.get('name_masked', cand['candidate_id'])}. "
             "Say confirm.")
+
+
+def stale_candidate(gw: Any, pinned: dict) -> str | None:
+    cand = gw.state.candidates[pinned["candidate_id"]]
+    if cand.get("stage") in ("hired", "declined"):
+        return f"{cand.get('name_masked')} is already {cand['stage']}; nothing to decide"
+    return None
 
 
 def carry_candidate(gw: Any, pinned: dict) -> str:
@@ -309,12 +361,11 @@ def carry_candidate(gw: Any, pinned: dict) -> str:
 
 
 def pin_order(gw: Any, args: dict) -> tuple[dict, str]:
-    from app.gateway.perform import clip
-
     text = " ".join(str(args["text"]).split())
     if not text:
         raise ToolRefused("bad_args", "order needs text")
-    return {"text": text}, f'Tell the Chief of Staff: "{clip(text, 160)}". Say confirm.'
+    # the whole order is read back: confirm never sends words the CEO didn't hear
+    return {"text": text}, f'Tell the Chief of Staff: "{text}". Say confirm.'
 
 
 def carry_order(gw: Any, pinned: dict) -> str:
@@ -339,7 +390,8 @@ REGISTRY: dict[str, CeoTool] = {t.name: t for t in (
     CeoTool("get_money", "read", "Tax saved and money spent.", read=read_money),
     CeoTool("get_trust", "read", "Each action type: AUTO, ASK or PAUSED.", read=read_trust),
     CeoTool("get_hiring", "read", "Hiring counts and candidates (masked).", read=read_hiring),
-    CeoTool("recent_activity", "read", "What happened in the last minutes (labels only).",
+    CeoTool("recent_activity", "read", "What happened in the last minutes (labels only; "
+            f"the newest {ACTIVITY_ITEMS} of at most {ACTIVITY_SCAN} events).",
             {"minutes": {"type": "integer", "description": "default 60, max 720"}},
             read=read_activity),
     CeoTool("pause", "stop", "Stop an action type now (or everything). Runs at once.",
@@ -358,12 +410,13 @@ REGISTRY: dict[str, CeoTool] = {t.name: t for t in (
     CeoTool("unblock_case", "start", "Propose moving a blocked (or sent) case on.",
             {"case": _CASE,
              "to": {"type": "string", "enum": ["INTAKE_PENDING", "READY", "NOT_ELIGIBLE"]}},
-            ("case",), pin=pin_unblock, carry=carry_unblock),
+            ("case",), pin=pin_unblock, carry=carry_unblock, stale=stale_unblock),
     CeoTool("decide_candidate", "start", "Propose hiring or declining a candidate.",
             {"candidate": {"type": "string", "maxLength": 40,
                            "description": 'cand_N or "Candidate B"'},
              "decision": {"type": "string", "enum": ["hire", "decline"]}},
-            ("candidate", "decision"), pin=pin_candidate, carry=carry_candidate),
+            ("candidate", "decision"), pin=pin_candidate, carry=carry_candidate,
+            stale=stale_candidate),
     CeoTool("order", "start", "Propose an order for the Chief of Staff.",
             {"text": {"type": "string", "maxLength": ORDER_MAX}}, ("text",), pin=pin_order,
             carry=carry_order),
@@ -376,19 +429,31 @@ def realtime_tools() -> list[dict]:
 
 # ------------------------------------------------------------------ confirm words
 
-_CONFIRM = re.compile(r"\b(confirm|yes|do it|approve it|go ahead)\b", re.I)
-_CANCEL = re.compile(r"\b(no|cancel|stop|wait)\b", re.I)
-_ECHO = re.compile(r"\bsay\s+confirm\b", re.I)  # v1.8.1: the readback's own words
+_CONFIRM = re.compile(r"\b(confirm|yes|do it|go ahead)\b", re.I)
+_APPROVE_IT = re.compile(r"\bapprove it\b", re.I)  # only ever confirms an approve
+# the contract's cancel words, plus negations: "don't do it" is never a confirm
+_CANCEL = re.compile(r"\b(no|nope|cancel|stop|wait|hold on|never ?mind|don'?t|do not|not|never)\b",
+                     re.I)
+# v1.8.1: the readback's own words, and the model asking, are never the CEO confirming
+_ECHO = re.compile(r"\bsay\s+confirm\b|\b(?:shall|should) i\b|\bdo you want\b"
+                   r"|\bwould you like\b|\bwant me to\b", re.I)
+
+
+def _speech(heard: str) -> str:
+    return (heard or "").replace("\u2019", "'")
 
 
 def heard_cancels(heard: str) -> bool:
-    return bool(_CANCEL.search(heard or ""))
+    return bool(_CANCEL.search(_speech(heard)))
 
 
-def heard_confirms(heard: str) -> bool:
-    """The confirm grammar (whole words, any case), never the readback echoed back."""
-    heard = heard or ""
-    return bool(_CONFIRM.search(heard)) and not _ECHO.search(heard)
+def heard_confirms(heard: str, tool: str | None = None) -> bool:
+    """The confirm grammar (whole words, any case). "approve it" confirms only an approve
+    proposal; the readback echoed back, or a question, never confirms."""
+    heard = _speech(heard)
+    if _ECHO.search(heard):
+        return False
+    return bool(_CONFIRM.search(heard)) or (tool == "approve" and bool(_APPROVE_IT.search(heard)))
 
 
 # ------------------------------------------------------------------ the fallback grammar
@@ -419,9 +484,11 @@ def parse(text: str) -> tuple[str, Any] | None:
     t = _norm(raw)
     if not t:
         return None
-    if re.fullmatch(r"(confirm|yes|do it|approve it|go ahead)", t):
+    if t == "approve it":  # a confirm for an open approve proposal, else "approve the latest"
+        return "approve_it", None
+    if re.fullmatch(r"(confirm|yes|do it|go ahead)", t):
         return "confirm", None
-    if re.fullmatch(r"(cancel|no|stop|wait|never mind)", t):
+    if re.fullmatch(r"(cancel|no|nope|stop|wait|hold on|never mind|don't|do not)", t):
         return "cancel", None
     m = re.fullmatch(r"tell (?:the )?chief of staff (?:to |that )?(.+)", t)
     if m:

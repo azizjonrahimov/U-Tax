@@ -640,7 +640,7 @@ class Gateway:
         with self._lock:
             self._pending_wakes = []
             try:
-                if name not in self.READ_ONLY:
+                if name not in self.READ_ONLY and not self._is_read(name, args):
                     self.store.ensure_writable()  # fail closed before any side effect
                 data = handler(args)
                 result = ToolResult("done", data=data)
@@ -2843,6 +2843,19 @@ class Gateway:
         finally:
             self._touch_channel = before
 
+    @staticmethod
+    def _is_read(name: str, args: dict) -> bool:
+        """A CEO read tool writes nothing: it works while the log can't be written."""
+        if name != "ceo_tool" or not isinstance(args.get("name"), str):
+            return False
+        from app.ceo_tools import REGISTRY
+
+        tool = REGISTRY.get(args["name"])
+        return tool is not None and tool.kind == "read"
+
+    # app/ceo_tools.py calls these internals (the same code as the §5 routes): _brief_text,
+    # _now, _set_trust, _approve, _unblock, _candidate_decision, _voice, _pending_of,
+    # _released, _touch_channel, flagged_injection, UNBLOCK_TARGETS. Rename with care.
     def _ceo_tool(self, args: dict) -> dict:
         """POST /api/ceo/tool: a read, a stop carried out at once, or a start proposed."""
         return self._ceo_run(_str(args, "name", max_len=40), args.get("args"), "realtime")
@@ -2902,8 +2915,8 @@ class Gateway:
         proposal_id = _str(args, "proposal_id", max_len=40)
         decision = _one_of(args, "decision", ("confirm", "cancel"))
         via = _one_of(args, "via", ("voice", "click"))
-        heard = clip(_str(args, "heard", required=False, max_len=2000) or "",
-                     ceo_tools.HEARD_MAX)
+        spoken_words = _str(args, "heard", required=False, max_len=2000) or ""
+        heard = clip(spoken_words, ceo_tools.HEARD_MAX)  # the log's copy
         proposal = self.state.proposals.get(proposal_id)
         if proposal is None:
             raise Refused("not_found", f"no proposal {proposal_id}")
@@ -2920,11 +2933,11 @@ class Gateway:
             self._emit([self._proposal_cancel(proposal, "expired", via, heard)])
             raise Refused("expired", f"{proposal_id} expired; ask again")
         spoken = via == "voice"
-        if decision == "cancel" or (spoken and ceo_tools.heard_cancels(heard)):
+        if decision == "cancel" or (spoken and ceo_tools.heard_cancels(spoken_words)):
             self._emit([self._proposal_cancel(proposal, "spoken" if spoken else "clicked",
                                               via, heard)])
             return {"kind": "done", "summary": "Cancelled."}
-        if spoken and not ceo_tools.heard_confirms(heard):
+        if spoken and not ceo_tools.heard_confirms(spoken_words, proposal["tool"]):
             raise Refused("not_a_confirm", "that was not a confirm: say confirm, or cancel")
         pinned = dict(proposal["args"])
         if proposal["tool"] in ("approve", "deny"):
@@ -2936,14 +2949,22 @@ class Gateway:
                                             + (f"decide {by} instead" if by else
                                                "the case changed; the crew asks again"),
                               {"approval_id": approval.approval_id, "superseded_by": by})
+        tool = ceo_tools.REGISTRY[proposal["tool"]]
+        why = tool.stale(self, pinned) if tool.stale else None
+        if why:  # the target moved after the readback: never act on what wasn't heard
+            self._emit([self._proposal_cancel(proposal, "superseded", via, heard)])
+            raise Refused("superseded", why)
         # used before it runs: a failure after this never lets the same words act twice
         self._emit([NewEvent(type="ceo.confirmed", actor="ceo",
                              payload={"proposal_id": proposal_id, "via": via, "heard": heard})])
         try:
             with self._channel(via):
-                summary = ceo_tools.REGISTRY[proposal["tool"]].carry(self, pinned)
+                summary = tool.carry(self, pinned)
         except ceo_tools.ToolRefused as err:
             raise Refused(err.code, err.message, err.data) from err
+        except EventWriteError as err:  # this proposal is used: a retry would answer "used"
+            raise ToolError("store_unavailable", "event log unavailable: the action may not "
+                                                 "have run; check, then ask again") from err
         return {"kind": "done", "summary": summary}
 
     def _ceo_command(self, args: dict) -> dict:
@@ -2955,9 +2976,14 @@ class Gateway:
         if parsed is None:
             return {"kind": "unknown", "say": ceo_tools.EXAMPLES}
         kind, value = parsed
+        live = [p for p in self._open_proposals() if not self._expired(p)]
+        if kind == "approve_it":  # confirms an open approve, else proposes the latest
+            if live and live[-1]["tool"] == "approve":
+                kind = "confirm"
+            else:
+                kind, value = "tool", ("approve", {"approval": "latest"})
         if kind == "tool":
             return self._ceo_run(value[0], value[1], "command")
-        live = [p for p in self._open_proposals() if not self._expired(p)]
         if not live:
             return {"kind": "unknown", "say": "Nothing is waiting for a confirm. "
                                               + ceo_tools.EXAMPLES}

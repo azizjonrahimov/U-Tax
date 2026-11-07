@@ -320,15 +320,20 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             raise APIError(400, "bad_input", 'mode must be "customer" or "ceo"')
         if mode == "ceo":
             require_admin(authorization)
-            ceo_mint_limiter.check("ceo")
-            return _mint(gw().settings.ceo_voice_prompt_path, ceo=True)
+            stamp = ceo_mint_limiter.check("ceo")
+            try:
+                return _mint(gw().settings.ceo_voice_prompt_path, ceo=True)
+            except APIError:  # no session came back: it doesn't use the CEO's 10 an hour
+                ceo_mint_limiter.refund("ceo", stamp)
+                raise
         _talk_limit(mint_limiter, MINT_LIMITS)
         mint_limiter.check(_client_ip(request))
         return _mint(gw().settings.voice_prompt_path, ceo=False)
 
     def _mint(prompt_path, *, ceo: bool) -> dict:
         """One paid Realtime session: the prompt from disk (none: refuse), the budget and the
-        hold before the call, booked only if a session comes back."""
+        hold before the call (the public mint also checks the /talk case and mint caps; the
+        CEO's has its own 10 an hour), booked only if a session comes back."""
         try:
             instructions = prompt_path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
