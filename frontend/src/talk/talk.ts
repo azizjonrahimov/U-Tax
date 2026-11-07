@@ -4,6 +4,7 @@
 
 import type { UTaxEvent } from "@/theater/events";
 import { formatCents } from "@/theater/format";
+import type { TalkPhrase } from "@/lib/tts";
 
 export type Speaker = "customer" | "agent";
 export interface Turn {
@@ -114,6 +115,21 @@ export const TYPED_SCRIPT: readonly string[] = [
   "Roughly what will the company's total assets be at the end of the year? And does any foreign person or company own 25% or more?",
   "Thanks. Type the email the estimate should go to in the box below, then press Send to U-Tax.",
 ];
+
+/**
+ * v1.10.2: the registry key for a script line (naive/prompts/talk-phrases.json renders it on the
+ * gateway; free text never goes to the public voice). Keys proposed by this lane: question.1-5.
+ */
+export const questionPhrase = (q: string): TalkPhrase | undefined => {
+  const i = TYPED_SCRIPT.indexOf(q);
+  return i >= 0 ? { phrase: `question.${i + 1}` } : undefined;
+};
+
+/** Is a scripted question waiting for its answer (the last turn is the agent's)? Only then is a heard phrase an answer. */
+export const awaitingAnswer = (turns: readonly Turn[]) => {
+  const last = turns.at(-1);
+  return last !== undefined && last.speaker === "agent";
+};
 
 /** The agent's next line in typed mode: one question per customer answer, then the email prompt. */
 export function nextTypedQuestion(turns: readonly Turn[]): string | null {
@@ -324,6 +340,28 @@ export function progressLine(p: CaseProgress): string {
     return `Your estimated Delaware franchise tax is ${formatCents(p.totalCents)}, using ${how}. ${tail}`;
   }
   return STAGES.find((s) => s.id === p.stage)?.label ?? "";
+}
+
+/**
+ * What to say aloud for the case's progress. The numbers go to the firm's voice as registry lines
+ * (v1.10.2: estimate.authorized / estimate.assumed_par with {total_cents}, then memo.on_its_way);
+ * any other line has no registry key, so it is read by the browser's own voice (never free text to
+ * the gateway). The screen keeps the full sentence either way.
+ */
+export function progressSpeech(p: CaseProgress): { text: string; phrase?: TalkPhrase }[] {
+  if (p.totalCents !== null && !p.notEligible && !p.blocked && !(p.askedFor.length && p.stage !== "sent")) {
+    const how = p.method === "authorized" ? "the authorized shares method" : "the assumed par value method";
+    const out: { text: string; phrase?: TalkPhrase }[] = [
+      {
+        text: `Your estimated Delaware franchise tax is ${formatCents(p.totalCents)}, using ${how}.`,
+        phrase: { phrase: p.method === "authorized" ? "estimate.authorized" : "estimate.assumed_par", args: { total_cents: p.totalCents } },
+      },
+    ];
+    if (p.stage === "checked" || p.stage === "sent") out.push({ text: "Your memo is on its way.", phrase: { phrase: "memo.on_its_way" } });
+    return out;
+  }
+  const line = progressLine(p);
+  return line ? [{ text: line }] : [];
 }
 
 // ------------------------------------------------------------------ errors

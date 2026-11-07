@@ -186,7 +186,23 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   ["ceo.proposed", "rail"],
   ["ceo.confirmed", "rail"],
   ["ceo.cancelled", "rail"],
+  // v1.9 §6b-bis: the gateway answered a Naïve tool confirm by itself (no human click).
+  ["naive.confirm", "rail"],
 ]);
+
+/** Seat → the name the projector uses (Theater's cursor labels). */
+const SEAT_NAME: Readonly<Record<string, string>> = Object.freeze({
+  cos: "Chief of Staff",
+  intake: "Intake",
+  tax: "Tax",
+  qa: "QA",
+  acct: "Accounting",
+  mkt: "Marketing",
+  hr: "HR",
+});
+
+/** A Naïve tool name as a short label: tool names come from the agent's request, so keep only safe characters. */
+const toolLabel = (t: string) => Array.from(t.replace(/[^\w.:-]/g, "")).slice(0, 40).join("") || "a tool";
 
 export const KNOWN_TYPES: readonly string[] = [...PANE_OF.keys()];
 
@@ -709,6 +725,22 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     case "ceo.cancelled":
       str(p, "proposal_id");
       break;
+    case "naive.confirm": {
+      // "Naïve check: board_write allowed for Chief of Staff": the firm vetting its own tools.
+      const decision = str(p, "decision");
+      if (decision !== "allow" && decision !== "deny") throw new PayloadError("decision: expected allow or deny");
+      const seat = str(p, "agent");
+      const who = Object.hasOwn(SEAT_NAME, seat) ? SEAT_NAME[seat] : "an agent";
+      const tool = toolLabel(str(p, "tool"));
+      push({
+        target: "rail.naive",
+        agent: null,
+        action: "appear",
+        text: `Naïve check: ${tool} ${decision === "allow" ? "allowed" : "denied"} for ${who}`,
+        meta: { decision, tool, agent: seat },
+      });
+      break;
+    }
     case "brief.generated": {
       const text = str(p, "text");
       obj(p.counts, "counts");

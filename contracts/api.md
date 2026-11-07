@@ -343,6 +343,25 @@ the tool names, kinds and args are fixed here:
   - Each call books an estimated `cost.booked`, provider `elevenlabs`.
   - Without a key: `503 voice_unavailable`, and the page falls back to `speechSynthesis`.
 - `GET /api/brief/audio` uses the same adapter.
+- v1.10.1 (the console's needs):
+  - **CORS:** allow `POST` with `Authorization` and `Content-Type` from `THEATER_ORIGIN`.
+  - **Success:** 200 `audio/mpeg`. The first byte should arrive within about 1–2 s, so stream
+    the ElevenLabs response through rather than buffering it. The console gives up at 10 s.
+  - **Budget:** a spent `talk` budget answers `429 rate_limited`, and a missing key `503
+    voice_unavailable`. On either, the page falls back to the browser's voice without a sound
+    of its own (on a 503 it stops using the gateway voice for 60 s).
+  - **Text length:** `/talk` sends pieces of ≤ 600 chars, split at sentence ends.
+- v1.10.2:
+  - **`purpose: "talk"` takes no free text.** The body is `{purpose: "talk", phrase:
+    "<key>", args: {...}}`. The gateway renders the line from a server-side registry: the
+    `/talk` script's questions, the number read-back template (numbers only, ≤ 12 digits each),
+    the "your memo is on its way" line, and the at-capacity line. An unknown key, extra args or
+    non-numeric args answer `400 bad_input`. That keeps the firm's voice from being an open relay,
+    and caps how fast the daily budget can drain. The frontend sends phrase keys only; the
+    registry lives in `naive/prompts/talk-phrases.json` (agents lane) and the gateway loads it
+    strictly.
+  - **`purpose: "ceo"` is spoken unmasked** (admin token only). The CEO hears exactly what the
+    card shows.
 - `/api/voice/session` is unchanged: with no Realtime provider it answers 503, and the
   pages use browser `SpeechRecognition` for listening (§8 fallback, now the main path).
   The confirm grammar and the echo guard (v1.8.1/v1.8.4) apply to that path too: the mic is
@@ -442,6 +461,9 @@ same messages and plays the agents' tool calls through `/mcp/<actor>` with their
   `POST /v1/sessions/{id}/tool_confirmations` `{tool_call_id, decision, reason}`:
   - `allow` (one call, no session scope) when `name` is `board_read`, `board_write`, or
     `utax.<tool>` with `<tool>` in that agent's own §6 column;
+  - v1.10.3 (owner: "allow handoffs"): for the **Chief of Staff only**, also `send_to_agent`,
+    `wait_for_agents` and `list_agents`, Naïve's coordinator tools, which hand work to our own
+    agents and reach no outside party. Any other agent asking for them is denied.
   - `deny` for anything else, with a CEO notice (`ceo.notified` reason `flagged`, summary
     "Naïve asked to run <name>; denied").
 - `kind: "question"` (`ask_operator`) is never answered by the gateway. It goes to the CEO
@@ -565,6 +587,12 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.10.3 (2026-11-07, owner "allow handoffs"): the confirm resolver also allows the CoS's coordinator tools.
+
+- v1.10.2 (2026-11-07, frontend review): /api/tts talk speaks phrase keys only (registry naive/prompts/talk-phrases.json); ceo is unmasked.
+
+- v1.10.1 (2026-11-07, frontend D30 build): /api/tts CORS, streaming, 429 on a spent talk budget.
 
 - v1.10 (2026-11-07, design D30): §5c speech output on ElevenLabs (`POST /api/tts`, `ADAPTER_VOICE=elevenlabs`); browser STT is the main listening path.
 

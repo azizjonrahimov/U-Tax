@@ -109,6 +109,14 @@ def run(gw, fake: FakeNaive, polls: int = 1) -> NaiveConfirmer:
     ("cos", "utax.ceo_confirm", "deny"), ("cos", "web_fetch", "deny"), ("cos", "bash", "deny"),
     ("mkt", "social_post", "deny"), ("cos", "utax.", "deny"), ("cos", "UTAX.get_case", "deny"),
     ("cos", "board_write ", "deny"), (None, "board_read", "deny"),
+    # v1.10.3: handoffs, the Chief of Staff only
+    ("cos", "send_to_agent", "allow"), ("cos", "wait_for_agents", "allow"),
+    ("cos", "list_agents", "allow"), ("tax", "send_to_agent", "deny"),
+    ("mkt", "list_agents", "deny"), ("hr", "wait_for_agents", "deny"),
+    ("cos", "send_to_agent ", "deny"), ("cos", " send_to_agent", "deny"),
+    ("cos", "Send_To_Agent", "deny"), ("cos", "SEND_TO_AGENT", "deny"),
+    ("cos", "send-to-agent", "deny"), ("cos", "utax.send_to_agent", "deny"),
+    ("cos", "send_to_agents", "deny"), (None, "send_to_agent", "deny"),
 ])
 def test_only_the_board_and_the_seats_own_tools_are_allowed(actor, name, decision):
     assert naive_decision(actor, name) == decision
