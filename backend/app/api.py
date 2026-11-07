@@ -28,6 +28,9 @@ from app.gateway.ports import NotConfigured, PortError
 log = logging.getLogger("utax.api")
 
 HEARTBEAT_SECONDS = 15.0
+# (per-IP, global) per minute, keyed by PUBLIC_MODE == "event"
+MINT_LIMITS = {False: (20, 120), True: (60, 360)}  # POST /api/voice/session (mints)
+SEND_LIMITS = {False: (30, 180), True: (90, 540)}  # POST /api/voice (customer Send)
 SSE_QUEUE_MAX = 2000
 
 # refused codes -> HTTP status (everything else refused is 409)
@@ -135,7 +138,11 @@ async def sse_events(gw: Gateway, after_id: int, *, is_disconnected: Callable[[]
 
 def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     router = APIRouter()
-    public_limiter = RateLimiter(limit=20, global_limit=120)
+    # Task 12: /talk Send and the voice-session mint have separate buckets, so a burst of
+    # voice tries at the venue can't 429 the judge's Send; Send gets 1.5x the mint budget.
+    # Values here are the normal mode; _talk_limit raises both in PUBLIC_MODE=event.
+    mint_limiter = RateLimiter(limit=MINT_LIMITS[False][0], global_limit=MINT_LIMITS[False][1])
+    send_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
     audio_limiter = RateLimiter(limit=30, global_limit=120)
     audio_cache: dict[int, bytes] = {}  # brief text never changes: one TTS call per brief
 
@@ -163,11 +170,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if settings.admin_token and not _same(_bearer(authorization), settings.admin_token):
             raise APIError(401, "unauthorized", "admin token required")
 
-    def _talk_limit(limiter: RateLimiter) -> None:
-        # PUBLIC_MODE=event: the finale crowd shares one venue IP, so 60/min per IP
-        event = gw().settings.public_mode == "event"
-        limiter.limit = 60 if event else 20
-        limiter.global_limit = 360 if event else 120  # the global cap keeps its 6x headroom
+    def _talk_limit(limiter: RateLimiter, limits: dict[bool, tuple[int, int]]) -> None:
+        # PUBLIC_MODE=event: the finale crowd shares one venue IP, so the per-IP cap rises
+        # (the global cap keeps its 6x headroom over it)
+        limiter.limit, limiter.global_limit = limits[gw().settings.public_mode == "event"]
 
     def act(name: str, args: dict[str, Any]) -> dict[str, Any]:
         return result_or_raise(gw().perform(name, args))
@@ -219,8 +225,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if body.get("speaker") == "ceo":
             require_admin(authorization)  # a typed order is the CEO's
         else:
-            _talk_limit(public_limiter)
-            public_limiter.check(_client_ip(request))  # the public /talk page
+            _talk_limit(send_limiter, SEND_LIMITS)
+            send_limiter.check(_client_ip(request))  # the public /talk page's Send
         return act("voice", _pick(body, "text", "channel", "speaker", "reply_email", "turns",
                                   "request_id"))
 
@@ -244,8 +250,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
 
     @router.post("/api/voice/session")
     def voice_session(request: Request):
-        _talk_limit(public_limiter)
-        public_limiter.check(_client_ip(request))
+        _talk_limit(mint_limiter, MINT_LIMITS)
+        mint_limiter.check(_client_ip(request))
         prompt_path = gw().settings.voice_prompt_path
         try:
             instructions = prompt_path.read_text(encoding="utf-8").strip()
