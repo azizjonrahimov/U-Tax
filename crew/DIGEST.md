@@ -3,11 +3,15 @@
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (now): start the tunnel in your own PowerShell and paste its https URL: `& "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --no-autoupdate --url http://localhost:8000` (the gateway is already running on this laptop)
-- B (then): `powershell -ExecutionPolicy Bypass -File .\crew\scripts\naive-up.ps1 -Url <that URL>` (dry run) and paste the output
-- C (after the event): rotate the utax-gateway key (it was pasted in chat)
+- A (now): the tunnel is DOWN (cloudflared not running). Restart it and paste the new URL: `& "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --no-autoupdate --url http://localhost:8000`. I re-run naive up with it.
+- B: decide D29 (Naïve data-leak confirms): A = the gateway resolves them with an allowlist (rec), B = click each in Naïve, C = ask the Naïve team
+- C: sponsor keys via `crew/scripts/set-key.ps1 <NAME>`: AGENTMAIL_API_KEY first, then OPENAI_API_KEY
+- D (later): change the Naïve password; delete the utax-up key after the event
 
 ## New
+
+- backend · 0m · MERGED 17b (1106 tests); Monid hold lifted; lane free for the AgentMail swap
+- captain · 10m · LIVE: naive up done (7 agents; engine bug worked around in 2 phases); the CoS ran through the tunnel; D29 found and proposed
 
 - captain · 0m · Naïve: org U-Tax live, Pro plan active, both models exist; gateway key saved + verified; gateway running locally; tunnel = owner step (classifier)
 - backend · 10m · MERGED task 18 CEO voice gateway (1077 tests); 18b started

@@ -135,7 +135,7 @@ def test_a_key_can_go_unsure_again_after_a_not_charged_resolution(h):
     r = buy(h.gw)
     assert r.status == "refused" and "may already be charged" in r.error["message"]
     assert len(unsure_events(h, "k1")) == 2
-    h.ok("resolve_purchase", key="k1", cost_usd="0.0400")
+    h.ok("resolve_purchase", key="k1", cost_usd="0.0400", episode=1)  # 17b: named
     assert h.gw.state.spent_by_provider["monid"] == Decimal("0.0400")
     assert buy(h.gw).data["duplicate"] is True
 
@@ -647,7 +647,8 @@ def test_a_second_episode_charged_after_a_day_change_and_restart(make_harness):
     gw = h.restart()
     assert "buy:k1" not in fresh._unsure
     assert buy(gw).status == "refused" and fresh.calls == []
-    assert gw.perform("resolve_purchase", {"key": "k1", "cost_usd": "0.0400"}).status == "done"
+    assert gw.perform("resolve_purchase", {"key": "k1", "cost_usd": "0.0400",
+                                           "episode": 1}).status == "done"
     assert buy(gw).data["duplicate"] is True and fresh.calls == []
     assert gw.perform("resolve_purchase", {"key": "k1", "cost_usd": None}).status == "refused"
     assert len([e for e in h.events("cost.booked") if e.provider == "monid"]) == 1
@@ -662,7 +663,8 @@ def test_a_boot_leftover_after_a_not_charged_episode(make_harness):
     h.ports.toolbuy = monid()
     gw = h.restart()
     assert len(unsure_events(h, "c1")) == 2
-    assert gw.perform("resolve_purchase", {"key": "c1", "cost_usd": None}).status == "done"
+    assert gw.perform("resolve_purchase", {"key": "c1", "cost_usd": None,
+                                           "episode": 1}).status == "done"
     assert buy(gw, key="c1").status == "done"
 
 
@@ -874,11 +876,11 @@ def test_a_resolution_whose_commit_ack_was_lost_still_reaches_the_adapter(h):
         assert again.error["code"] == "wrong_status" and f"buy:{key}" not in port._unsure
 
 
-def test_a_cost_that_rounds_to_nothing_is_not_charged(h):
+def test_a_cost_that_rounds_to_nothing_is_booked_as_the_smallest_unit(h):
     h.gw.ports.toolbuy = monid(lost)
     buy(h.gw)
     r = h.gw.perform("resolve_purchase", {"key": "k1", "charged": True, "cost_usd": "0.00004"})
-    assert r.status == "refused" and r.error["code"] == "bad_input"
+    assert r.status == "done" and h.gw.state.spent_usd() == Decimal("0.0001")  # 17b
 
 
 def test_a_charge_whose_events_failed_is_resolved_by_the_ceo_after_a_restart(make_harness):
