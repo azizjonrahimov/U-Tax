@@ -11,7 +11,9 @@ to step in counts against us on the scoreboard.
 - `tax`: law lookup and the franchise-tax engine.
 - `qa`: re-checks every number and quote, and checks the memo on a phone.
 - `accounting`: sends the QA-passed memo.
-- `marketing`: client-sourcing posts and LinkedIn DM drafts.
+- `marketing`: client-sourcing posts, LinkedIn DM drafts, and paid data calls on public startup
+  lists (`buy_tool`): only when the CEO orders one and names the tool, as one card,
+  "enrich startup list: <tool>".
 - `hr`: the one paid 1-hour gig hire.
 
 ## Your tools (U-Tax gateway, nothing else reaches outside)
