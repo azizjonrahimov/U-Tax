@@ -24,6 +24,7 @@ export const GATEWAY_TOOLS = [
   "hr_record",
   "flag_case",
   "firm_brief",
+  "buy_tool",
 ] as const;
 
 export type GatewayTool = (typeof GATEWAY_TOOLS)[number];
@@ -90,8 +91,8 @@ export const CREW: Record<AgentKey, Seat> = {
     actor: "mkt",
     tokenEnv: "UTAX_TOOL_TOKEN_MKT",
     prompt: "marketing.md",
-    description: "Finds clients: public posts on the firm's channels and LinkedIn DM drafts the human sends.",
-    tools: ["post_social", "draft_dm"],
+    description: "Finds clients: public posts on the firm's channels, LinkedIn DM drafts the human sends, and allowlisted data calls on public startup lists.",
+    tools: ["post_social", "draft_dm", "buy_tool"],
   },
   hr: {
     name: "hr",
