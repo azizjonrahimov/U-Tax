@@ -54,17 +54,17 @@ const speech = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-// The gateway's grammar (backend app/ceo_tools.py heard_confirms / heard_cancels), mirrored so the
-// console never sends a confirm the gateway would refuse, and stricter where it fails closed.
+// Contract v1.8.4's spoken grammar, identical to the gateway's (backend app/ceo_tools.py
+// heard_confirms / heard_cancels), so the console never sends a confirm the gateway would refuse.
 const FILLER = "(?:(?:ok|okay|alright|so|um|uh|yes|yeah|please) )*";
 const CONFIRM_RE = new RegExp(`^${FILLER}(?:confirm|yes|confirm it|do it|go ahead|yes please)(?: please)?$`);
 const APPROVE_IT_RE = new RegExp(`^${FILLER}approve it(?: please)?$`);
-/** The contract's cancel words plus negations ("can't", "won't": stricter than the gateway). */
-const CANCEL_RE = /\b(no|nope|cancel|stop|wait|hold on|hang on|never ?mind|don'?t|do not|not|never|can'?t|cannot|won'?t)\b/;
+/** v1.8.4's cancel words, exactly ("I can't confirm that" is no cancel and no confirm: not_a_confirm). */
+const CANCEL_RE = /\b(no|nope|cancel|stop|wait|hold on|never ?mind|don'?t|do not|not|never)\b/;
 /** The readback's own words and the model asking are never the CEO confirming. */
 const ECHO_RE = /\bsay confirm\b|\b(?:shall|should) i\b|\bdo you want\b|\bwould you like\b|\bwant me to\b/;
 /** Only a cancel and nothing else: anything more ("stop everything", "stop posting") is also a command. */
-const BARE_CANCEL_RE = /^(?:(?:ok|okay|oh|please|no) )*(?:no|nope|cancel|cancel it|cancel that|stop|stop it|wait|hold on|hang on|never ?mind)(?: please| wait| thanks)?$/;
+const BARE_CANCEL_RE = /^(?:(?:ok|okay|oh|please|no) )*(?:no|nope|cancel|cancel it|cancel that|stop|stop it|wait|hold on|never ?mind)(?: please| wait| thanks)?$/;
 
 export interface ConfirmContext {
   /** The proposal's tool: "approve it" confirms only an approve. */
@@ -75,7 +75,7 @@ export interface ConfirmContext {
 
 /**
  * The CEO's words → confirm, cancel, or nothing. A cancel word or a negation always wins
- * ("yes, wait" cancels; "I can't confirm that" cancels). A confirm must be the whole utterance
+ * ("yes, wait" cancels). A confirm must be the whole utterance
  * (fillers allowed), not a question, not an echo, not a piece of the readback.
  */
 export function matchConfirm(text: string, ctx: ConfirmContext = {}): "confirm" | "cancel" | null {
@@ -271,8 +271,6 @@ export interface VoiceState {
     playing: ReadonlyMap<string, number>;
     /** Recent finished stretches of agent audio, [from, to] in ms. */
     windows: readonly (readonly [number, number])[];
-    /** This session reports output_audio_buffer.* (WebRTC): only those end the model's audio. */
-    buffered: boolean;
   };
 }
 
@@ -280,7 +278,7 @@ export const emptyVoice = (): VoiceState => ({
   started: new Map(),
   calls: new Set(),
   proposal: null,
-  audio: { playing: new Map(), windows: [], buffered: false },
+  audio: { playing: new Map(), windows: [] },
 });
 
 /** Keep the item maps bounded on a long session. */
@@ -463,12 +461,13 @@ export function voiceStep(s: VoiceState, raw: unknown, now: number): { state: Vo
     case "input_audio_buffer.speech_stopped":
       return { state: s, effects: [{ type: "state", state: "thinking" }] };
     case "output_audio_buffer.started": {
-      const st = markAudio(agentAudio({ ...s, audio: { ...s.audio, buffered: true } }, "model", true, now));
+      const st = markAudio(agentAudio(s, "model", true, now));
       return { state: st, effects: [{ type: "state", state: "speaking" }] };
     }
     case "response.audio.delta":
     case "response.output_audio.delta":
-      return { state: markAudio(agentAudio(s, "model", true, now)), effects: [{ type: "state", state: "speaking" }] };
+      // Audio is being made; over WebRTC only output_audio_buffer.* say when it plays in the room.
+      return { state: markAudio(s), effects: [{ type: "state", state: "speaking" }] };
     case "output_audio_buffer.stopped":
     case "output_audio_buffer.cleared": {
       // The model's audio ended in the room (stopped), or the CEO cut it off (cleared, a barge-in:
@@ -479,14 +478,13 @@ export function voiceStep(s: VoiceState, raw: unknown, now: number): { state: Vo
     case "response.done": {
       const r = raw.response;
       const id = responseId(r);
-      let st = s.audio.buffered ? s : agentAudio(s, "model", false, now); // no buffer events: the response's end is the audio's end
+      let st = s;
       const q = st.proposal;
       if (q && q.heardAt === null && q.replyId && q.replyId !== "local" && q.replyId === id) {
         const said = spoke(r);
-        if (said.audio || q.replyAudio) {
-          st = { ...st, proposal: { ...q, replyAudio: true } };
-          if (!s.audio.buffered) st = readbackEnded(st, id, now);
-        } else if (said.message) st = { ...st, proposal: { ...q, heardAt: now } }; // a text-only readback
+        // An audio reply is heard only when its audio stops playing (output_audio_buffer.stopped/cleared).
+        if (said.audio || q.replyAudio) st = { ...st, proposal: { ...q, replyAudio: true } };
+        else if (said.message) st = { ...st, proposal: { ...q, heardAt: now } }; // a text-only readback
         else st = { ...st, proposal: { ...q, replyId: null } }; // only function calls: the readback is still to come
       }
       return { state: st, effects: [{ type: "state", state: "idle" }, { type: "response", active: false }] };
