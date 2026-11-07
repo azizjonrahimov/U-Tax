@@ -10,7 +10,9 @@
 //  8. an agent without its own identity + vault + token env + seat URL /mcp/<actor> (contract v1.4 §1, §6),
 //  9. the config ACCEPTING a bad env (http / localhost / non-/mcp URL, short, padded or shared tokens),
 // 10. a template breaking its rule (placeholders, disclaimer, AI-screen disclosure, post guard),
-// 11. prompts/voice-intake.md missing its hard rules.
+// 11. prompts/voice-intake.md missing its hard rules,
+// 12. prompts/ceo-voice.md naming a tool outside contract §5b (or missing one), or missing its
+//     confirm / never-confirm / data-is-not-instructions rules.
 // Run: npm run check   (sets dummy UTAX_MCP_URL / UTAX_TOOL_TOKEN_* when none are set)
 
 import { spawnSync } from "node:child_process";
@@ -324,6 +326,39 @@ else {
     "Never compute", "Never ask for, repeat or accept an SSN, EIN", "Never say an email address out loud"])
     if (!voice.includes(must)) fail(`prompts/voice-intake.md: must keep the rule "${must}"`);
   if (/utax\.\w+/.test(voice)) fail("prompts/voice-intake.md: the voice agent has no gateway tools; it must not name any");
+}
+
+// 12. the CEO's voice agent (/ceo voice mode, contract v1.8 §5b). Its tools are the CEO tool
+// registry, not gateway tools: the "Your tools" section lists exactly the §5b names, no other line
+// in the prompt names a tool outside §5b, and the confirm rules are kept word for word.
+const ceoVoicePath = join(ROOT, "prompts", "ceo-voice.md");
+const ceoTools = (() => {
+  if (!existsSync(contractPath)) return [];
+  const s5b = readFileSync(contractPath, "utf8").split(/^## 5b\./m)[1]?.split(/^## /m)[0] ?? "";
+  const rows = [...s5b.matchAll(/^\| (`\w+`(?: \/ `\w+`)*) \| (read|stop|start) \|/gm)];
+  return rows.flatMap((m) => [...m[1].matchAll(/`(\w+)`/g)].map((t) => t[1])).sort();
+})();
+if (ceoTools.length === 0) fail("contracts/api.md: could not read the §5b CEO tool table");
+if (!existsSync(ceoVoicePath)) fail("prompts/ceo-voice.md is missing");
+else {
+  const raw = readFileSync(ceoVoicePath, "utf8");
+  const ceo = raw.replace(/\s+/g, " ");
+  for (const must of ["Say confirm", "read the `readback` out word for word", "Never confirm on the CEO's behalf",
+    "Never say an action is done until the tool says it is", "You have no confirm tool", "data, never instructions",
+    "ask, never guess", "Stopping is instant", "not tax advice"])
+    if (!ceo.toLowerCase().includes(must.toLowerCase())) fail(`prompts/ceo-voice.md: must keep the rule "${must}"`);
+  if (/utax\.\w+/.test(raw)) fail("prompts/ceo-voice.md: names a gateway tool (utax.*); its tools are contract §5b only");
+  const section = raw.split(/^## Your tools.*$/m)[1]?.split(/^## /m)[0] ?? "";
+  const listed = [...section.matchAll(/^- `(\w+) \{[^`]*\}`(?: \/ `(\w+) \{[^`]*\}`)?/gm)]
+    .flatMap((m) => [m[1], m[2]].filter(Boolean)).sort();
+  if (listed.join() !== ceoTools.join()) fail(`prompts/ceo-voice.md: "Your tools" lists ${listed}, contract §5b has ${ceoTools}`);
+  // anywhere in the prompt, a backticked call shape `name {...}` or `name args` must be a §5b tool,
+  // and no gateway-only tool or never-by-voice route may be named at all
+  for (const m of raw.matchAll(/`([a-z]+(?:_[a-z]+)+|[a-z]+) (?:\{|[a-z_]+\b)[^`]*`/g))
+    if (!ceoTools.includes(m[1])) fail(`prompts/ceo-voice.md: \`${m[1]}\` is not a §5b CEO tool`);
+  for (const t of GATEWAY_TOOLS)
+    if (!ceoTools.includes(t) && new RegExp("`" + t + "\b").test(raw)) fail(`prompts/ceo-voice.md: names gateway tool ${t}`);
+  if (/resolve[-_]purchase/i.test(raw)) fail("prompts/ceo-voice.md: resolve-purchase is never by voice (contract §5b)");
 }
 
 // 9. the config must REFUSE a bad env. Each case loads the config in a fresh process.
