@@ -2926,7 +2926,10 @@ class Gateway:
         return {"image_url": image_url}
 
     SOURCE_TOOL = "candidate_search"  # the MONID_TOOLS entry source_candidates buys
-    SOURCE_ROLE = "CPA or enrolled agent, Delaware franchise tax, freelance"
+    # ploid /linkedin/search (monid inspect, 2026-11-07): {filters: {keywords, title, ...},
+    # limit 1-100}, nothing else; $0.01 a person, so limit = count keeps it at max_usd
+    SOURCE_FILTERS = {"keywords": "Delaware franchise tax",
+                      "title": ["CPA", "Enrolled Agent", "Tax Accountant"]}
 
     def _source_fetch(self, args: dict) -> dict:
         """v1.11 (hr), before the lock: a Monid public search through buy_tool's money-safe
@@ -2939,8 +2942,9 @@ class Gateway:
             return {"off": True}
         # its own namespace (never an mkt buy_tool key); a new key each minute, so a
         # refused or unsure one never blocks every later search
-        sub = {"tool": self.SOURCE_TOOL, "input": {"query": self.SOURCE_ROLE},
-               "key": f"hr_source_{iso_ts(self._now())[:16].replace(':', '')}"}
+        sub = {"tool": self.SOURCE_TOOL,
+               "input": {"filters": dict(self.SOURCE_FILTERS), "limit": count},
+               "key": f"hr_source_{count}_{iso_ts(self._now())[:16].replace(':', '')}"}
         fetched = self._buy_fetch(sub)
         if sub.get("_buy_reserved"):
             args["_buy_reserved"] = sub["_buy_reserved"]
@@ -2965,16 +2969,40 @@ class Gateway:
                 "note": "public leads only: no address, so hr_outreach can't email them"}
 
     @staticmethod
+    def _rows_of(result: Any, depth: int = 0) -> list:
+        """The list of people in a search result, whichever key the provider uses (a
+        non-empty list first; at most 3 levels deep)."""
+        if isinstance(result, list):
+            return result
+        if not isinstance(result, dict) or depth > 3:
+            return []
+        for key in ("results", "people", "profiles", "items", "data"):
+            value = result.get(key)
+            if isinstance(value, list) and value:
+                return value
+            if isinstance(value, dict):
+                inner = Gateway._rows_of(value, depth + 1)
+                if inner:
+                    return inner
+        return []
+
+    @staticmethod
     def _public_leads(result: Any, count: int) -> list[dict]:
         """Masked public leads from a Monid result: a headline and a public https URL,
         never an email, a phone or a name."""
-        rows = result.get("results") if isinstance(result, dict) else result
+        rows = Gateway._rows_of(result)
         leads: list[dict] = []
-        for row in rows if isinstance(rows, list) else []:
+        for row in rows:
             if not isinstance(row, dict):
                 continue
-            url = str(row.get("url") or row.get("public_url") or "")
-            headline = strip_contacts(str(row.get("title") or row.get("headline") or ""))
+            # strings only: an object's repr could carry a name or more
+            url = next((v for k in ("url", "profileUrl", "profile_url", "linkedinUrl",
+                                    "linkedin_url", "public_url")
+                        if isinstance(v := row.get(k), str) and v), "")
+            # a headline (role and firm), never the person's name field
+            headline = strip_contacts(next(
+                (v for k in ("headline", "title", "position", "jobTitle")
+                 if isinstance(v := row.get(k), str) and v.strip()), ""))
             headline = " ".join(redact_ids(headline)[0].split())[:120]
             if not url.startswith("https://") or has_email(url) or not headline:
                 continue
