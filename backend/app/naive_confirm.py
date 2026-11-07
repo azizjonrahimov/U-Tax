@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from typing import Any
 
 from app.gateway.perform import TOOL_ACTORS, Gateway
@@ -73,6 +74,9 @@ class NaiveConfirmer:
         self._turn = 0  # which agent goes first: rotated, so none starves the others
         self._quiet: dict[str, float] = {}  # session id -> rest until
         self._unlogged: dict[str, tuple[str, dict]] = {}  # answered, its event not written yet
+        # 19b: Naive re-asks with the SAME tool_call_id after a retry; each ask is answered
+        # (Naive is the dedup) and logged as its own attempt
+        self._attempts: dict[tuple[str, str], int] = {}
 
     async def boot(self) -> dict[str, str]:
         """Resolve the 7 agent ids by name. naive.config.ts also stamps each agent with
@@ -167,22 +171,29 @@ class NaiveConfirmer:
                             kind, session_id)
                 continue
             decision = naive_decision(actor, name)
+            # still pending = not answered yet, whatever we sent before: answer it again.
+            # A key per ask (the action's seq when Naive gives one): a key per call id made
+            # Naive replay the first answer and the re-ask waited forever
+            ask = action.get("seq") or action.get("confirm_seq") or uuid.uuid4().hex
             await self.client.confirm_tool(
                 session_id, tool_call_id=call_id, decision=decision, scope="call",
                 reason=("the U-Tax gateway checks this tool itself" if decision == "allow"
                         else "not a U-Tax tool for this agent"),
-                idempotency_key=f"utax-confirm:{session_id}:{call_id}:{decision}")
+                idempotency_key=f"utax-confirm:{session_id}:{call_id}:{ask}")
             answered += 1
+            attempt = self._attempts.get((session_id, call_id), 0) + 1
+            self._attempts[(session_id, call_id)] = attempt
             read_people = bool(session.get("read_people") or action.get("read_people"))
             await self._record("naive_confirm", {
                 "session_id": session_id, "agent": actor, "tool": name, "decision": decision,
-                "read_people": read_people, "tool_call_id": call_id})
+                "read_people": read_people, "tool_call_id": call_id,
+                "attempt": action.get("seq") or attempt})
         return answered
 
     async def _record(self, action: str, args: dict[str, Any]) -> None:
         """The decision onto the log. A store error keeps it for the next pass: the answer
         already reached Naïve, and the session no longer waits to remind us."""
-        key = f"{action}:{args['session_id']}:{args['tool_call_id']}"
+        key = f"{action}:{args['session_id']}:{args['tool_call_id']}:{args.get('attempt', '')}"
         result = await asyncio.to_thread(self.gw.perform, action, dict(args))
         if result.status == "error":
             log.error("naive confirms: %s not logged (%s); retried next pass", key,

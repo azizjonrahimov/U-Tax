@@ -3047,8 +3047,10 @@ class Gateway:
         the CEO about a deny (at most once per agent and tool every 10 minutes)."""
         session_id = _str(args, "session_id", max_len=80)
         call_id = _str(args, "tool_call_id", max_len=120)
-        # per session: a provider's call ids ("call_0") may repeat across sessions
-        key = f"naive.confirm:{session_id}:{call_id}"
+        # per session: a provider's call ids ("call_0") may repeat across sessions; per
+        # attempt (19b): Naive re-asks with the same call id, and each ask is its own event
+        attempt = str(args.get("attempt") or 1)[:40]
+        key = f"naive.confirm:{session_id}:{call_id}" + (f":{attempt}" if attempt != "1" else "")
         if self._done_from(key) is not None:
             return {"duplicate": True}
         agent = _one_of(args, "agent", AGENTS)
@@ -3064,7 +3066,7 @@ class Gateway:
                 self._naive_noticed[(agent, tool)] = self._now()
                 self._notify_ceo("flagged", clip(f"Naïve tool denied: {tool}", 120),
                                  f"Naïve asked to run {tool}; denied",
-                                 key=f"ceo:naive-deny:{session_id}:{call_id}")
+                                 key=f"ceo:naive-deny:{session_id}:{call_id}:{attempt}")
         return {"decision": decision}
 
     def _naive_question(self, args: dict) -> dict:
