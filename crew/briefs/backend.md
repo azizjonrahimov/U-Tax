@@ -288,3 +288,10 @@ The owner wants to run the whole firm by voice. Build the gateway half:
    - A restart mid-proposal.
 
 Touch backend/ only, run /review to convergence, then READY.
+
+## Task 21: ElevenLabs speech (contract v1.10 §5c, design D30). After tasks 19 and 20
+An ElevenLabs VoicePort adapter for TTS only, built from the official docs (POST
+/v1/text-to-speech/{voice_id}, header xi-api-key). Add POST /api/tts with the §5c caps, and point
+/api/brief/audio at it. The key is ELEVENLABS_API_KEY in backend/.env; a live read of
+GET /v1/user/subscription returned 200, tier grant. Tests use MockTransport. One live smoke test,
+skipped without a key, that synthesizes a 5-word line. Touch backend/ only, then READY.

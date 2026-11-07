@@ -116,3 +116,12 @@ and use a mock gateway in the tests until backend task 18 merges.
    - Accessibility: the mic state is announced, and every action can also be clicked.
 
 Touch frontend/ only, then READY.
+
+## Task: ElevenLabs voice on /ceo and /talk (contract v1.10 §5c, design D30)
+- Listening is browser SpeechRecognition (the existing fallback, now the main path).
+- Speaking: POST /api/tts, then play the audio/mpeg. On a 503, fall back to speechSynthesis.
+- The echo guard: the mic is muted while TTS audio plays, plus an 800 ms tail. A readback's
+  "Say confirm" must never confirm itself.
+- /talk uses purpose "talk", and the CEO console uses "ceo".
+- The brief already plays from /api/brief/audio.
+Test with a mocked /api/tts until backend task 21 merges. Touch frontend/ only, then READY.
