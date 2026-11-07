@@ -163,7 +163,8 @@ For Replay mode and catch-up. Ordered by `id`.
   doesn't. No event is written for a supersede tonight: on `409 superseded` the console drops the
   entry and refetches `/api/state`. (Post-hackathon: an `approval.superseded` event.)
   Writes `touch.training` (first approval of an action type) or `touch.operating`, plus
-  `trust.changed` when the type flips. Idempotent by `approval_id`.
+  `trust.changed` when the type flips. Idempotent by `approval_id`. Any approval of an ASK type
+  flips it to AUTO, including after a manual `trust` ASK (reason `approved again`; v1.8.3 states the code's rule).
 - `POST /api/voice` `{text, channel: "voice"|"typed", speaker: "customer"|"ceo", reply_email}` →
   writes `voice.command`. `speaker: "customer"` (the `/talk` page, design D23): opens a
   **fast-path case** from the transcript (priority, no queue), memo goes to `reply_email`;
@@ -481,6 +482,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.8.3 (2026-11-07, agents task 5 question): an approval flips an ASK type to AUTO even after a manual ASK.
 
 - v1.8.2 (2026-11-07, backend task 17): resolve-purchase is per episode, with stricter args and 409s; buy_tool store_unavailable; Monid held local until 17b.
 

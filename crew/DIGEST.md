@@ -9,6 +9,8 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- agents · 0m · MERGED task 5: the CEO voice agent prompt + check rule 12 + the 20-second demo voice beat
+- backend · 10m · MERGED task 17 (964 tests, CI green); 17b open (8 items), Monid held local; task 18 (CEO voice) started
 - backend · 0m · task 17 TIMEBOXED (auto): READY at its green head, open items → 17b; Monid stays local until 17b; task 18 (CEO voice) next
 - captain · 5m · contract v1.8.1: /ceo echo guard for voice confirms; the action result goes back to the model (from agents review)
 - captain · 0m · PLAN D28: the CEO runs the firm by voice (contract v1.8, faa2fad). Frontend (/ceo voice) and agents (task 5) started; backend task 18 queued after 17
@@ -27,5 +29,5 @@ Captain (naive-yc-hackathon-99)
 | Thread | Owns | State | Last report |
 |---|---|---|---|
 | frontend | `frontend/` | building /ceo voice mode (D28) | 0m |
-| backend | `backend/`, `fixtures/`, `db/` | task 17 wrapping up (timeboxed), then task 18 CEO voice | 0m |
-| agents | `naive/` | building task 5: CEO voice prompt (D28); then `naive up` at the event | 0m |
+| backend | `backend/`, `fixtures/`, `db/` | building task 18: CEO voice gateway (D28) | 0m |
+| agents | `naive/` | done (task 5 merged); resting until `naive up` (task 3) | 0m |
