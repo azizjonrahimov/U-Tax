@@ -40,7 +40,7 @@ SSE_QUEUE_MAX = 2000
 # refused codes -> HTTP status (everything else refused is 409)
 _REFUSED_STATUS = {
     "not_found": 404, "bad_input": 400, "unknown_action": 404, "not_local": 403,
-    "tool_not_allowed": 403, "wrong_status": 409, "paused": 409, "denied": 409,
+    "tool_not_allowed": 403, "wrong_status": 409, "paused": 409, "denied": 409, "superseded": 409,
     "qa_gate": 409, "at_capacity": 429, "too_long": 400,
 }
 _ERROR_STATUS = {"store_unavailable": 503, "internal_error": 500}
