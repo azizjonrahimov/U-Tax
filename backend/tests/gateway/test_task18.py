@@ -123,7 +123,7 @@ def test_the_grammar(text, expected):
     ("nope, do it", False, True), ("hold on, yes", False, True),
     ("would you like me to go ahead", False, False), ("should I confirm", False, False),
     ("never mind", False, True), ("nevermind", False, True), ("yes please", True, False),
-    ("Okay, yes, confirm.", True, False),
+    ("Okay, yes, confirm.", True, False), ("Confirm?", False, False), ("Yes?", False, False),
 ])
 def test_the_confirm_words(heard, confirms, cancels):
     assert ceo_tools.heard_confirms(heard) is confirms
@@ -171,7 +171,7 @@ def test_a_start_tool_proposes_and_carries_out_nothing(h):
     assert r.data["readback"].endswith("Say confirm.") and "Team #1" in r.data["readback"]
     assert h.gw.state.approvals[approval_id].decision is None  # nothing carried out
     [proposed] = h.events("ceo.proposed")
-    assert proposed.payload["args"] == {"approval_id": approval_id, "trust": "ASK", "others": 0}
+    assert proposed.payload["args"] == {"approval_id": approval_id, "trust": "ASK", "others": []}
     assert proposed.payload["source"] == "realtime"
 
 
@@ -772,3 +772,54 @@ def test_a_proposal_id_is_never_reused_after_a_lost_write_reply(h):
     second = tool(h, "approve", approval="latest").data["proposal_id"]
     ids = [e.payload["proposal_id"] for e in h.events("ceo.proposed")]
     assert len(ids) == 2 and len(set(ids)) == 2 and second == ids[-1]
+
+
+# ---------------------------------------------------------------- review 3
+
+
+def test_an_approve_that_would_run_a_flagged_cases_approval_is_refused(h):
+    pending_memo(h)
+    bad, _ = pending_memo(h, team=8)
+    h.ok("flag_case", case_id=bad, kind="possible_injection")
+    r = tool(h, "approve", approval="Team 1")  # its AUTO flip would also send Team #2's
+    assert r.status == "refused" and r.error["code"] == "flagged"
+    t = tool(h, "set_trust", action_type="email", state="AUTO")
+    assert t.status == "refused" and t.error["code"] == "flagged"
+
+
+def test_a_swapped_waiting_approval_supersedes_the_proposal(h):
+    pending_memo(h)
+    _, other = pending_memo(h, team=8)
+    proposal = tool(h, "approve", approval="Team 1").data  # "runs the 1 other": Team #2's
+    h.ok("approve", approval_id=other, decision="deny")
+    pending_memo(h, team=9)  # a different one waits now: the count is the same
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+
+
+def test_an_approve_whose_trust_moved_is_superseded(h):
+    pending_memo(h)
+    pending_memo(h, team=8)
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    proposal = tool(h, "approve", approval="latest").data  # paused: no AUTO flip read back
+    h.ok("set_trust", action_type="email", state="RESUME")  # back to ASK
+    r = confirm(h, proposal["proposal_id"])
+    assert r.error["code"] == "superseded" and h.gw.state.trust["email"] == "ASK"
+
+
+def test_a_pause_cancels_a_candidate_decision_too(h):
+    h.ok("inject_email", **{"from": "ann.lee@example.com", "subject": "gig", "inbox": "hiring",
+                            "body": "EA."})
+    proposal = tool(h, "decide_candidate", candidate="Candidate A", decision="hire").data
+    tool(h, "pause", action_type="everything")
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+    assert h.gw.state.candidates["cand_1"]["stage"] != "hired"
+
+
+def test_a_resume_whose_target_moved_is_superseded(h):
+    h.ok("set_trust", action_type="social_post", state="PAUSED")  # from ASK
+    proposal = tool(h, "set_trust", action_type="social_post", state="RESUME").data
+    assert "back to ask first" in proposal["readback"]
+    h.gw.state.trust_before_pause["social_post"] = "AUTO"  # a cap pause from AUTO since
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+    assert h.gw.state.trust["social_post"] == "PAUSED"
+

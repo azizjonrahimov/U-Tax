@@ -280,16 +280,29 @@ def pin_decision(verb: str) -> Callable[[Any, dict], tuple[dict, str]]:
             raise ToolRefused("flagged", FLAGGED_DECISION)
         label = trust_label(approval.action_type)
         trust = gw.state.trust.get(approval.action_type)
-        others = len(gw._pending_of(approval.action_type, exclude=approval.approval_id))
+        others = _waiting_ids(gw, approval.action_type, exclude=approval.approval_id)
         also = ""
         if verb == "Approve" and trust == "ASK":
+            # the AUTO flip runs every other waiting one: never a flagged case's by voice
+            _refuse_flagged(gw, others)
             also = f" That also turns {label} automatic"
-            also += f" and runs the {others} other waiting {label}." if others else "."
+            also += f" and runs the {len(others)} other waiting {label}." if others else "."
         pinned = {"approval_id": approval.approval_id}
         if verb == "Approve":  # its side effects hang on these: pinned, re-checked at confirm
             pinned.update(trust=trust, others=others)
         return pinned, f"{verb} {approval.summary}.{also} Say confirm."
     return pin
+
+
+def _waiting_ids(gw: Any, action_type: str, exclude: str | None = None) -> list[str]:
+    return sorted(a.approval_id for a in gw._pending_of(action_type, exclude=exclude))
+
+
+def _refuse_flagged(gw: Any, approval_ids: list[str]) -> None:
+    if any(gw.flagged_injection(gw.state.approvals[i].case_id) for i in approval_ids):
+        raise ToolRefused("flagged", "a waiting one is from a case QA flagged as a possible "
+                                     "injection, and this would run it too: decide in the "
+                                     "console")
 
 
 DECIDED = {"allow": "approved", "deny": "denied", "superseded": "replaced"}
@@ -306,10 +319,13 @@ def stale_decision(gw: Any, pinned: dict) -> str | None:
     if "trust" not in pinned:  # a deny: nothing else rides on it
         return None
     trust = gw.state.trust.get(approval.action_type)
-    others = len(gw._pending_of(approval.action_type, exclude=approval.approval_id))
-    if trust != pinned["trust"] or others != pinned["others"]:
+    others = _waiting_ids(gw, approval.action_type, exclude=approval.approval_id)
+    if trust != pinned["trust"] or others != pinned["others"]:  # the exact ones read back
         return (f"{trust_label(approval.action_type)} changed since the readback "
-                f"({trust}, {others} other waiting); ask again")
+                f"({trust}, {len(others)} other waiting); ask again")
+    if trust == "ASK" and any(gw.flagged_injection(gw.state.approvals[i].case_id)
+                              for i in others):
+        return FLAGGED_DECISION
     return None
 
 
@@ -336,15 +352,17 @@ def pin_trust(gw: Any, args: dict) -> tuple[dict, str]:
     if state == "RESUME":
         target = gw.state.trust_before_pause.get(action_type, "ASK") \
             if current == "PAUSED" else current
-    waiting = len(gw._pending_of(action_type)) if target == "AUTO" else 0
-    held = len(gw._released(action_type, current)) if current == "PAUSED" != target else 0
+    waiting = _waiting_ids(gw, action_type) if target == "AUTO" else []
+    _refuse_flagged(gw, waiting)  # AUTO runs them all: never a flagged case's by voice
+    held = sorted(a.approval_id for a in gw._released(action_type, current))         if current == "PAUSED" != target else []
     also = ""
     if waiting:
-        also += f" That also runs the {waiting} waiting {label}."
+        also += f" That also runs the {len(waiting)} waiting {label}."
     if held:
-        also += f" That carries out {held} approval{'s' if held != 1 else ''} held by the pause."
+        also += (f" That carries out {len(held)} approval{'s' if len(held) != 1 else ''} "
+                 "held by the pause.")
     said = f"back to {word[target]}" if state == "RESUME" else word[target]
-    return ({"action_type": action_type, "state": state, "trust": current,
+    return ({"action_type": action_type, "state": state, "trust": current, "target": target,
              "waiting": waiting, "held": held},
             f"Set {label} {said}.{also} Say confirm.")
 
@@ -352,9 +370,12 @@ def pin_trust(gw: Any, args: dict) -> tuple[dict, str]:
 def stale_trust(gw: Any, pinned: dict) -> str | None:
     action_type = pinned["action_type"]
     current = gw.state.trust.get(action_type)
-    fresh, _ = pin_trust(gw, {"action_type": action_type, "state": pinned["state"]})
-    if (fresh["trust"], fresh["waiting"], fresh["held"]) != (
-            pinned["trust"], pinned["waiting"], pinned["held"]):
+    try:
+        fresh, _ = pin_trust(gw, {"action_type": action_type, "state": pinned["state"]})
+    except ToolRefused as err:  # a waiting one was flagged since
+        return err.message
+    keys = ("trust", "target", "waiting", "held")  # the exact ones read back
+    if tuple(fresh[k] for k in keys) != tuple(pinned.get(k) for k in keys):
         return f"{trust_label(action_type)} changed since the readback ({current}); ask again"
     return None
 
