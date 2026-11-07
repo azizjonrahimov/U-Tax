@@ -419,6 +419,23 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 
 `get_candidate` adds `offered_slots`, and `/api/state` hiring counts `sourced` and `contacted`.
 
+v1.11.1, event payloads (the frontend's proposal, adopted):
+- `ad.created` (mkt): `{kind: "client"|"hiring", headline, image_url}`. `image_url` is https on the gateway's own host.
+- `hr.sourced` (hr): `{count, source: "monid"|"none"}`. Counts only: no lead labels or URLs on the public log.
+- `hr.outreach` (hr): `{candidate_id, label, slot}`. `label` is the gateway's letter, "Candidate A"; never a name or email.
+- `client.followed_up` (intake): `{kind}`, with `case_id` in the envelope.
+- `call.booked` gains an optional `kind: "client"|"candidate"` (absent = client). A candidate call has
+  `case_id` null and `invitee_masked` set to the label.
+- **Order linking:**
+  - The CEO-order wake becomes `CEO order_<id>: <text>`, where `<id>` is the order's
+    `voice.command` event id.
+  - The Chief of Staff copies `order_<id>` into each card's body, and agents pass
+    `order_id: "order_<id>"` on the tools they call for that card.
+  - Every §6 tool accepts an optional `order_id`, matching `^order_[0-9]+$` and referring to an
+    existing CEO `voice.command`, else it's ignored. The gateway stamps it into the event payload.
+  - The theater groups steps by `order_id`, and falls back to matching by department when it's
+    absent.
+
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
 `gross_assets`, `foreign_owner_25`. Optional (never required to finish a case, asked once
 at most): `gross_receipts` (cents) and `years_with_receipts` (int), used only for the R&D
@@ -598,6 +615,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.11.1 (2026-11-07, frontend D31 proposal): payloads for ad.created, hr.sourced, hr.outreach, client.followed_up; call.booked kind; order_id linking (wake `CEO order_<id>: <text>`).
 
 - v1.11 (2026-11-07, design D31): tools make_ad, source_candidates, hr_outreach, follow_up; HR_CANDIDATES; events ad.created, hr.sourced, hr.outreach, client.followed_up.
 
