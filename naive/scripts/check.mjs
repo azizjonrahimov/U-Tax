@@ -176,6 +176,7 @@ const TEMPLATE_RULES = {
   "sourcing-posts.md": { posts: true, placeholders: [] },
   "job-post.md": { posts: true, placeholders: [] },
   "demo-script.md": {}, // presenter notes
+  "demo-video.md": {}, // the submission video's shot list
   "backup-slide.md": {}, // presenter notes
 };
 

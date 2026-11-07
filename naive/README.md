@@ -40,7 +40,8 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 a port of the gateway's post guard over them: only $85,165 / $400 / $450 / $50, no links, @handles,
 emails, phone numbers or case names; X posts ≤ 255 characters so the appended link fits). The
 Discord/Slack sections are for the owner to post by hand.
-`demo-script.md` and `backup-slide.md` are for the presenter.
+`demo-script.md` and `backup-slide.md` are for the presenter; `demo-video.md` is the submission
+video's shot list.
 
 ## Env vars (see `.env.example`)
 `NAIVE_API_KEY`, `UTAX_MCP_URL` (required; public HTTPS base ending in `/mcp`; each agent uses `<base>/<actor>`), one token per agent
