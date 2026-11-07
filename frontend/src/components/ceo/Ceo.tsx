@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
-import { briefAudioUrl, eventsUrl, fetchAllEvents, type Endpoints } from "@/theater/live";
+import { briefAudioUrl, fetchAllEvents, type Endpoints } from "@/theater/live";
 import {
   ACTION_LABEL,
   ACTION_TYPES,
@@ -31,6 +31,7 @@ import {
   TOKEN_KEY,
   UNBLOCK,
   type ActionType,
+  type Approval,
   type Brief,
   type Console,
   type LogView,
@@ -129,6 +130,8 @@ interface Confirm {
   prompt: string;
   label: string;
   run: () => void;
+  /** An Approve confirm: its prompt is recomputed on every render, and it disarms if its row goes outdated. */
+  approval?: Approval;
 }
 
 export function Ceo() {
@@ -143,6 +146,7 @@ export function Ceo() {
   const [error, setError] = useState<string | null>(null);
   /** The last action's error: stays until the next action (a refresh never hides it). */
   const [actionError, setActionError] = useState<string | null>(null);
+  const [briefError, setBriefError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
@@ -182,6 +186,7 @@ export function Ceo() {
       setLog(logRef.current);
       setError(null);
       setActionError(null);
+      setBriefError(null);
       setNotice(null);
       setUpdatedAt(null);
       setBusy(null);
@@ -236,20 +241,25 @@ export function Ceo() {
       try {
         const st = consoleFromState(await authJson<unknown>(tok, `${API}/state`));
         if (mine !== session.current) return;
-        let reset = st !== null && logWasReset(st.lastEventId, logRef.current.lastId);
-        if (!reset && logRef.current.lastId > 0) {
-          // A reset whose new log already grew past ours keeps the ids: check the event we stopped at.
-          const page = await authJson<unknown>(tok, eventsUrl(NO_QUERY_TOKEN, logRef.current.lastId - 1, 1));
-          if (mine !== session.current) return;
-          reset = !logStillMatches(logRef.current, page);
-        }
-        if (reset) {
+        const restart = () => {
+          // Ids are reused after a reset: the old rows go off screen right away, before the reload.
           logRef.current = emptyLog();
+          setLog(logRef.current);
+          setView(null);
           setConfirm(null);
           setNotice("The gateway's log restarted, so the console reloaded it. Check the lists before acting.");
-        }
-        const { events } = await fetchAllEvents(NO_QUERY_TOKEN, (url) => authJson<unknown>(tok, url), logRef.current.lastId, 200);
+        };
+        if (st !== null && logWasReset(st.lastEventId, logRef.current.lastId)) restart();
+        const getJson = (url: string) => authJson<unknown>(tok, url);
+        // One read: from the event we stopped at (it must still be the same one), then everything after it.
+        const from = logRef.current.lastId;
+        let { events } = await fetchAllEvents(NO_QUERY_TOKEN, getJson, Math.max(0, from - 1), 200);
         if (mine !== session.current) return;
+        if (from > 0 && !logStillMatches(logRef.current, { data: events })) {
+          restart(); // a reset that already regrew past our id
+          ({ events } = await fetchAllEvents(NO_QUERY_TOKEN, getJson, 0, 200));
+          if (mine !== session.current) return;
+        }
         logRef.current = foldLog(logRef.current, events as UTaxEvent[]);
         setLog(logRef.current);
         if (st) setView(st);
@@ -293,7 +303,10 @@ export function Ceo() {
     session.current += 1;
     const mine = session.current;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let briefing = false;
     const briefOnce = async () => {
+      if (briefing) return;
+      briefing = true;
       try {
         const st = consoleFromState(await authJson<unknown>(token, `${API}/state`));
         const b = await loadBrief(token, st?.lastEventId ?? null);
@@ -301,13 +314,18 @@ export function Ceo() {
         briefRef.current = b;
         setBrief(b);
         rememberSeen(b);
+        setBriefError(null);
         void playBrief(b, token);
       } catch (e) {
-        if (mine === session.current) fail(e);
+        if (mine !== session.current) return;
+        if (e instanceof ApiError && e.status === 401) fail(e);
+        else setBriefError(`${errorOf(e)} Retrying.`);
+      } finally {
+        briefing = false;
       }
     };
     const tick = async () => {
-      if (!briefRef.current && mine === session.current) await briefOnce(); // retried until it lands
+      if (!briefRef.current && mine === session.current) void briefOnce(); // retried each poll until it lands, never blocking the lists
       await refreshNow(mine, token);
       if (mine === session.current) timer = setTimeout(() => void tick(), POLL_MS);
     };
@@ -431,12 +449,26 @@ export function Ceo() {
   const stale = updatedAt !== null && now - updatedAt > STALE_MS;
   const working = (key: string) => busy === key;
 
+  /** The Approve prompt from what is waiting right now (never a count from when the confirm opened). */
+  const approvePrompt = (a: Approval) => {
+    const label = ACTION_LABEL[a.actionType as ActionType] ?? a.actionType;
+    const rel = approveReleases(pending, a, view?.trust[a.actionType as ActionType], outdated);
+    if (!rel) return "Approve it?";
+    const kind = label.toLowerCase();
+    const one = rel.others === 1;
+    return (
+      `Approve it? ${label} then run on their own, and the ${one ? "1 other waiting " + kind.replace(/s$/, "") + " goes" : `${rel.others} other waiting ${kind} go`} out now` +
+      (rel.outdated ? `, including ${rel.outdated} outdated. Deny the outdated ones first if their figures are wrong.` : ".")
+    );
+  };
+  // An Approve confirm disarms when its approval is decided or goes outdated (a newer version arrived).
+  const live = confirm && (!confirm.approval || (log.pending.has(confirm.approval.approvalId) && !outdated.has(confirm.approval.approvalId))) ? confirm : null;
   const confirmRow = (key: string) =>
-    confirm?.key === key ? (
+    live?.key === key ? (
       <div className="confirm" role="group" aria-label="Confirm">
-        <span>{confirm.prompt}</span>
-        <button className="danger" autoFocus onClick={() => confirm.run()} disabled={!!busy}>
-          {confirm.label}
+        <span>{live.approval ? approvePrompt(live.approval) : live.prompt}</span>
+        <button className="danger" autoFocus onClick={() => live.run()} disabled={!!busy}>
+          {live.label}
         </button>
         <button className="secondary" onClick={() => setConfirm(null)}>
           Cancel
@@ -462,7 +494,10 @@ export function Ceo() {
         </p>
         {actionError && (
           <p className="error banner" role="alert">
-            {actionError}
+            {actionError}{" "}
+            <button className="ghost inline" onClick={() => setActionError(null)}>
+              Dismiss
+            </button>
           </p>
         )}
         {error && (
@@ -488,6 +523,10 @@ export function Ceo() {
                 Play the brief
               </button>
             </>
+          ) : briefError ? (
+            <p className="error" role="status">
+              {briefError}
+            </p>
           ) : (
             <p className="dim">Loading the brief…</p>
           )}
@@ -526,17 +565,8 @@ export function Ceo() {
                             disabled={!!busy}
                             onClick={() => {
                               const approve = () => void act(key, "/approve", { approval_id: a.approvalId, decision: "allow", note: "" }, `Approved: ${what}`);
-                              const rel = approveReleases(pending, a, view?.trust[a.actionType as ActionType], outdated);
-                              if (!rel) return approve();
-                              const kind = (ACTION_LABEL[a.actionType as ActionType] ?? a.actionType).toLowerCase();
-                              ask({
-                                key,
-                                prompt:
-                                  `Approve it? ${ACTION_LABEL[a.actionType as ActionType] ?? a.actionType} then run on their own, and the ${rel.others} other waiting ${kind} go out now` +
-                                  (rel.outdated ? `, including ${rel.outdated} outdated. Deny the outdated ones first if their figures are wrong.` : "."),
-                                label: "Approve and let them run",
-                                run: approve,
-                              });
+                              if (!approveReleases(pending, a, view?.trust[a.actionType as ActionType], outdated)) return approve();
+                              ask({ key, prompt: "", label: "Approve and let them run", run: approve, approval: a });
                             }}
                           >
                             {working(key) ? "Working…" : "Approve"}
