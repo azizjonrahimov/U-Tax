@@ -9,6 +9,9 @@
 // THEATER_TOKEN (default theater-test) may read state, events and the stream, as the projector does.
 // Dev-only extras: POST /api/dev/approval {summary, case_id}, POST /api/dev/block {case_id, reason},
 // POST /api/dev/naive-confirm {agent, tool, decision}.
+// D31 (v1.11.1): a confirmed CEO order (or POST /api/dev/order {text}) emits the CEO's voice.command, then
+// plays each named department's steps with order_id ("advertise" → Marketing, "hire" → HR, "follow up" →
+// Intake), MOCK_PACE ms apart (default 1600). The ad image is served at GET /assets/ad_<n>.svg.
 
 import { createServer } from "node:http";
 
@@ -133,6 +136,8 @@ function command(text) {
   if (has(text, "approve")) return tool("approve", { approval: "latest" }, "command");
   if (has(text, "deny")) return tool("deny", { approval: "latest" }, "command");
   if (has(text, "money")) return tool("get_money", {}, "command");
+  // D31: an order for the firm ("advertise our firm on LinkedIn and X", "hire 2 people", "follow up with the customer").
+  if (/^(?:tell the chief of staff to |please )?(advertis|hire|recruit|follow up|post)/.test(w)) return tool("order", { text: text.trim().slice(0, 200) }, "command");
   if (has(text, "overnight") || has(text, "brief") || has(text, "happened")) return tool("get_brief", {}, "command");
   return [200, { kind: "unknown", say: "Try: what happened overnight? · approve the memo for Team 7 · stop posting · stop everything." }];
 }
@@ -165,9 +170,73 @@ function confirm(body) {
     emit("trust.changed", { action_type: t, from: trust[t], to, reason: "ceo" });
     trust[t] = to;
     summary = `${t.replace(/_/g, " ")} is now ${to}.`;
+  } else if (p.name === "order") {
+    order(String(p.args.text), body.via);
+    summary = "The Chief of Staff has it.";
   } else summary = `${p.name.replace(/_/g, " ")} done.`;
   emit("ceo.confirmed", { proposal_id: p.id, via: body.via, heard }, { actor: "ceo" });
   return [200, { kind: "done", summary }];
+}
+
+// ------------------------------------------------------------------ D31: the live CEO orders
+const PACE = Number(process.env.MOCK_PACE || 1600);
+let ads = 0;
+let candidates = 0;
+
+/** The CEO's order on the log, then the firm acting on it, one step every PACE ms. */
+function order(text, via) {
+  const o = emit("voice.command", { text, channel: via === "voice" ? "voice" : "typed", speaker: "ceo", case_id: null, masked_name: null }, { actor: "ceo" });
+  const ref = `order_${o.id}`;
+  const steps = [];
+  const at = (fn) => steps.push(fn);
+  const handoff = (seat, tool) => {
+    at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: "cos", tool: "send_to_agent", decision: "allow", read_people: false }));
+    at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: seat, tool, decision: "allow", read_people: false }));
+  };
+  const w = words(text);
+  if (/advertis|\bads?\b|post|linkedin|market/.test(w)) {
+    handoff("mkt", "make_ad");
+    at(() => {
+      const n = ++ads;
+      emit("ad.created", { kind: "client", headline: "Your Delaware franchise tax, done right", image_url: `http://127.0.0.1:${PORT}/assets/ad_${n}.svg`, order_id: ref }, { actor: "mkt" });
+    });
+    for (const channel of ["x", "linkedin"]) {
+      at(() =>
+        emit("post.published", { channel, text: "Delaware sent you an $85,165 franchise tax bill? Most startups owe $450. U-Tax checks yours free.", url: `https://${channel}.com/utax/status/${events.length}`, image_url: `http://127.0.0.1:${PORT}/assets/ad_${ads}.svg`, order_id: ref }, { actor: "mkt" }),
+      );
+    }
+  }
+  if (/\bhir|recruit|candidate|people/.test(w)) {
+    const want = Math.min(5, Number((/\b([1-5])\b/.exec(w) || [])[1] || 2));
+    handoff("hr", "source_candidates");
+    at(() => emit("tool.bought", { tool: "monid.search", provider: "monid", order_id: ref }, { actor: "hr", cost_usd: "0.05" }));
+    at(() => emit("hr.sourced", { count: 3, source: "monid", order_id: ref }, { actor: "hr" }));
+    for (let i = 0; i < want; i++) {
+      const label = `Candidate ${String.fromCharCode(65 + (candidates++ % 26))}`;
+      const id = `cand_${candidates}`;
+      const start = new Date(Date.now() + 86400000 + i * 3600000).toISOString();
+      at(() => emit("hr.outreach", { candidate_id: id, label, slot: start, order_id: ref }, { actor: "hr" }));
+      at(() => emit("call.booked", { start, minutes: 20, invitee_masked: label, kind: "candidate", order_id: ref }, { actor: "hr" }));
+    }
+  }
+  if (/follow|customer|client|remind/.test(w)) {
+    handoff("intake", "follow_up");
+    at(() => emit("client.followed_up", { kind: "memo_check", order_id: ref }, { actor: "intake", case_id: "case_7" }));
+  }
+  steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
+  return o.id;
+}
+
+/** The ad as the gateway would render it (an SVG stand-in for its PNG): firm name, headline, the real example. */
+function adSvg(n) {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="628" viewBox="0 0 1200 628">
+<rect width="1200" height="628" fill="#07070b"/><rect x="40" y="40" width="1120" height="548" rx="28" fill="#0f0f16" stroke="#ff4d3d" stroke-width="4"/>
+<text x="90" y="150" fill="#ff4d3d" font-family="Inter,Arial" font-size="56" font-weight="800">U-Tax</text>
+<text x="90" y="260" fill="#ecebf5" font-family="Inter,Arial" font-size="58" font-weight="800">Your Delaware franchise tax,</text>
+<text x="90" y="330" fill="#ecebf5" font-family="Inter,Arial" font-size="58" font-weight="800">done right.</text>
+<text x="90" y="470" fill="#a3a2ba" font-family="Inter,Arial" font-size="64" text-decoration="line-through">$85,165</text>
+<text x="400" y="470" fill="#3ddc84" font-family="Inter,Arial" font-size="72" font-weight="800">→ $450</text>
+<text x="1110" y="560" fill="#85849f" font-family="Inter,Arial" font-size="24" text-anchor="end">ad ${n} · mock</text></svg>`;
 }
 
 /** A silent 8 kHz mono 8-bit WAV of `ms` milliseconds (a playable stand-in for the TTS audio). */
@@ -221,6 +290,8 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
   };
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
+  const ad = req.method === "GET" && /^\/assets\/ad_([0-9]{1,6})\.svg$/.exec(url.pathname);
+  if (ad) return res.writeHead(200, { ...cors, "Content-Type": "image/svg+xml", "Cache-Control": "no-store" }).end(adSvg(ad[1]));
   // The customer mint (/talk) is public, like the gateway's; with no voice provider it is 503 (D30).
   if (req.method === "POST" && url.pathname === "/api/voice/session" && (!body || body.mode !== "ceo")) {
     return out(503, { error: { code: "voice_unavailable", message: "no Realtime provider" } });
@@ -310,6 +381,7 @@ const server = createServer(async (req, res) => {
     const e = emit("naive.confirm", { session_id: `ses_${events.length}`, agent: String(body.agent || "cos"), tool: String(body.tool || "board_write"), decision: body.decision === "deny" ? "deny" : "allow", read_people: false });
     return out(200, { id: e.id });
   }
+  if (req.method === "POST" && p === "/api/dev/order") return out(200, { id: order(String(body.text || "Advertise our firm on LinkedIn and X"), "typed") });
   if (req.method === "POST" && p === "/api/dev/block") {
     const c = cases.find((x) => x.case_id === body.case_id);
     if (c) c.status = "BLOCKED";

@@ -123,6 +123,8 @@ export function numbersFromState(raw: unknown): FirmNumbers | null {
       shortlisted,
       hired,
       declined,
+      ...(typeof hiring.sourced === "number" ? { sourced: int(hiring.sourced) } : {}),
+      ...(typeof hiring.contacted === "number" ? { contacted: int(hiring.contacted) } : {}),
       awaiting: typeof hiring.awaiting === "number" ? int(hiring.awaiting) : Math.max(0, shortlisted - hired - declined),
     },
     queue: { waiting: int(queue.waiting), blocked: int(queue.blocked) },
@@ -206,7 +208,9 @@ export function assetAllowed(url: string | undefined, hosts: readonly string[]):
   if (!url) return false;
   try {
     const u = new URL(url);
-    return u.protocol === "https:" && hosts.includes(u.hostname.toLowerCase());
+    // https, or a gateway on this machine during a rehearsal (loopback http); either way the host must be listed.
+    const local = u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+    return (u.protocol === "https:" || local) && !u.username && !u.password && hosts.includes(u.hostname.toLowerCase());
   } catch {
     return false;
   }

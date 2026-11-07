@@ -13,7 +13,7 @@ export interface FirmNumbers {
   touches: { training: number; operating: number; engineering: number };
   money: { tax_saved_cents: number; spent_usd: string };
   /** Counts only: the projector never shows candidate names (contract v1.6). */
-  hiring: { applicants: number; screened: number; shortlisted: number; hired: number; declined?: number; awaiting?: number };
+  hiring: { applicants: number; screened: number; shortlisted: number; hired: number; declined?: number; awaiting?: number; sourced?: number; contacted?: number };
   queue: { waiting: number; blocked: number };
 }
 
@@ -64,7 +64,9 @@ const num = (v: unknown) => (typeof v === "number" && Number.isSafeInteger(v) ? 
 export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<number> = new Set()): FirmNumbers {
   const clients = new Set<string>();
   const touches = { training: 0, operating: 0, engineering: 0 };
-  const hiring = { applicants: 0, screened: 0, shortlisted: 0, hired: 0, declined: 0, awaiting: 0 };
+  const hiring: FirmNumbers["hiring"] & { declined: number; awaiting: number } = { applicants: 0, screened: 0, shortlisted: 0, hired: 0, declined: 0, awaiting: 0 };
+  let sourced = 0; // v1.11.1: public leads HR found (hr.sourced counts)
+  const contacted = new Set<string>(); // v1.11.1: candidates HR emailed (hr.outreach)
   // Hiring mirrors the gateway projection: each candidate counts once per stage
   // reached, and stages only move forward (a questionnaire reply re-sends
   // hr.applicant for an existing candidate; it must not demote them).
@@ -126,6 +128,14 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
       case "case.blocked":
         if (c) status.set(c, "BLOCKED");
         break;
+      case "hr.sourced": {
+        const n = num(p.count);
+        if (n !== null && n >= 0) sourced += n;
+        break;
+      }
+      case "hr.outreach":
+        if (candidate) contacted.add(candidate);
+        break;
     }
   }
 
@@ -136,6 +146,9 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
     if (stages.has("hired")) hiring.hired += 1;
     if (stages.has("declined")) hiring.declined += 1;
   }
+  // Only once D31 hiring happened, so the pre-D31 rail shape is unchanged.
+  if (sourced > 0) hiring.sourced = sourced;
+  if (contacted.size > 0) hiring.contacted = contacted.size;
   hiring.awaiting = [...furthest.values()].filter((r) => r === STAGE_RANK.shortlisted).length;
 
   let saved = 0;

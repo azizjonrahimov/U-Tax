@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseJsonl, type UTaxEvent } from "./events";
 import { humanTouches, railFromEvents, sumUsd } from "./rail";
-import { applyStep, applySteps, emptyScreen } from "./screen";
+import { applyStep, applySteps, emptyScreen, visibleOrders } from "./screen";
 import { buildScript, type CursorStep } from "./script";
 import { MOVE_MS, movesCursor, stepHoldMs } from "./timing";
 
@@ -298,5 +298,133 @@ describe("rail numbers (fixture projection of /api/state)", () => {
     expect(sumUsd(["0.1", "0.2"])).toBe("0.3");
     expect(sumUsd(["0.0021", "0.0034", "1E-7", "oops"])).toBe("0.0055001");
     expect(sumUsd([])).toBe("0");
+  });
+});
+
+describe("D31 / v1.11.1: the live CEO orders", () => {
+  const ev = (id: number, type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent => ({
+    id, ts: `2026-11-07T21:00:${String(id).padStart(2, "0")}.000Z`, type, actor: "system", case_id: null, provider: null, status: "ok", payload,
+    tokens_in: null, tokens_out: null, cost_usd: null, ...extra,
+  });
+  const run = (evs: UTaxEvent[]) => {
+    const skipped: string[] = [];
+    const s = applySteps(emptyScreen(), buildScript(evs, { ...quiet, log: (k) => skipped.push(`${k.eventId}:${k.reason}`) }).steps);
+    return { s, skipped };
+  };
+  const ceo = (id: number, text: string) => ev(id, "voice.command", { text, channel: "voice", speaker: "ceo", case_id: null, masked_name: null }, { actor: "ceo" });
+  const post = (id: number, channel: string, extra: Record<string, unknown> = {}) =>
+    ev(id, "post.published", { channel, text: "t", url: null, image_url: null, ...extra }, { actor: "mkt" });
+  const lines = (s: ReturnType<typeof emptyScreen>, i: number) => s.orders[i].lines.map((l) => (l.times ? `${l.seat}: ${l.text} x${l.times}` : `${l.seat}: ${l.text}`));
+
+  it("an order fills with each department's steps in time order, as plain lines", () => {
+    const { s, skipped } = run([
+      ceo(1, "Advertise our firm on LinkedIn and X"),
+      ev(2, "naive.confirm", { session_id: "a", agent: "cos", tool: "send_to_agent", decision: "allow" }),
+      ev(3, "naive.confirm", { session_id: "b", agent: "cos", tool: "send_to_agent", decision: "allow" }),
+      ev(4, "ad.created", { kind: "client", headline: "Your Delaware tax, done right", image_url: "https://gw.example/assets/ad_1.png", order_id: "order_1" }, { actor: "mkt" }),
+      post(5, "x", { order_id: "order_1" }),
+      post(6, "linkedin", { order_id: "order_1" }),
+    ]);
+    expect(skipped).toEqual([]);
+    expect(s.orders).toHaveLength(1);
+    expect(s.orders[0]).toMatchObject({ id: 1, text: "Advertise our firm on LinkedIn and X" });
+    expect(lines(s, 0)).toEqual([
+      "cos: Chief of Staff handed it to the team x2",
+      "mkt: Marketing made an ad image",
+      "mkt: Marketing posted to X",
+      "mkt: Marketing posted to LinkedIn",
+    ]);
+    expect(s.orders[0].lines[1].image).toBe("https://gw.example/assets/ad_1.png");
+    expect(s.social.image).toBe("https://gw.example/assets/ad_1.png");
+  });
+
+  it("order_id wins; without one a step joins the newest order naming its department, else (D31 actions) the newest", () => {
+    const { s } = run([
+      ceo(1, "Hire 2 people for the tax gig"),
+      ceo(2, "Advertise our firm on X"),
+      ceo(3, "Follow up with the customer"),
+      ev(4, "hr.outreach", { candidate_id: "cand_1", label: "Candidate A", slot: "2026-11-08T15:00:00Z" }, { actor: "hr" }),
+      post(5, "x", { order_id: "order_2" }),
+      ev(6, "client.followed_up", { kind: "memo_check" }, { actor: "intake", case_id: "case_7" }),
+      // An order id that names no order on screen: kept off the strip.
+      ev(7, "tool.bought", { tool: "monid.search", provider: "monid", order_id: "order_99" }, { actor: "hr", cost_usd: "0.05" }),
+      // Normal case flow with no order word: not filed under an order.
+      ev(8, "memo.sent", { to_masked: "f***@x", subject: "s", body: "b", message_id: "m", seconds_since_last_fact: 4, memo_ref: null }, { actor: "acct", case_id: "case_7" }),
+    ]);
+    expect(lines(s, 0)).toEqual(["hr: HR emailed Candidate A with a call invite"]);
+    expect(lines(s, 1)).toEqual(["mkt: Marketing posted to X"]);
+    expect(lines(s, 2)).toEqual(["intake: Intake followed up with New client (memo check)"]);
+  });
+
+  it("before any order, steps never make a card; a malformed order_id is just ignored", () => {
+    expect(run([post(1, "x")]).s.orders).toEqual([]);
+    const { s, skipped } = run([ceo(1, "post on X"), post(2, "x", { order_id: "1; drop" })]);
+    expect(skipped).toEqual([]);
+    expect(lines(s, 0)).toEqual(["mkt: Marketing posted to X"]);
+  });
+
+  it("hiring stays counts and letters: never a lead, a name or an address", () => {
+    const { s, skipped } = run([
+      ceo(1, "hire 2 people"),
+      ev(2, "hr.sourced", { count: 3, source: "monid", order_id: "order_1" }, { actor: "hr" }),
+      ev(3, "hr.outreach", { candidate_id: "cand_1", label: "Jane Doe <jane@x.com>", slot: "s", order_id: "order_1" }, { actor: "hr" }),
+      ev(4, "call.booked", { start: "2026-11-08T15:00:00Z", minutes: 20, invitee_masked: "Candidate B", kind: "candidate", order_id: "order_1" }, { actor: "hr" }),
+      ev(5, "hr.sourced", { count: -1, source: "monid" }, { actor: "hr" }),
+    ]);
+    expect(skipped).toEqual(["5:bad_payload"]);
+    expect(lines(s, 0)).toEqual([
+      "hr: HR found 3 public profiles",
+      "hr: HR emailed a candidate with a call invite",
+      "hr: HR booked a 20-min call with Candidate B",
+    ]);
+    expect(JSON.stringify(s)).not.toMatch(/Jane|jane@/);
+    expect(s.search.results).toEqual(["3 public profiles found · names stay off screen"]);
+    expect(s.calendar.blocks.at(-1)?.text).toBe("Candidate B · 20-min call");
+  });
+
+  it("the rail counts leads found and candidates emailed (each candidate once)", () => {
+    const evs = [
+      ev(1, "hr.sourced", { count: 3, source: "monid" }, { actor: "hr" }),
+      ev(2, "hr.outreach", { candidate_id: "cand_1", label: "Candidate A", slot: "s" }, { actor: "hr" }),
+      ev(3, "hr.outreach", { candidate_id: "cand_1", label: "Candidate A", slot: "s2" }, { actor: "hr" }),
+      ev(4, "hr.outreach", { candidate_id: "cand_2", label: "Candidate B", slot: "s" }, { actor: "hr" }),
+    ];
+    expect(railFromEvents(evs).hiring).toMatchObject({ sourced: 3, contacted: 2, applicants: 0 });
+  });
+
+  it("a follow-up shows in the client's mail thread; a client call keeps its review label", () => {
+    const { s } = run([
+      ev(1, "email.received", { masked_name: "Team #1", from_masked: "f***@t1.dev", subject: "s", body: "b" }, { actor: "intake", case_id: "case_1" }),
+      ev(2, "client.followed_up", { kind: "call_reminder" }, { actor: "intake", case_id: "case_1" }),
+      ev(3, "call.booked", { start: "2026-11-08T15:00:00Z", minutes: 15, invitee_masked: "f***@t1.dev" }, { actor: "intake", case_id: "case_1" }),
+    ]);
+    expect(s.cases.case_1.mail.compose).toMatchObject({ header: "Follow-up to Team #1 · call reminder", sent: "✓ Follow-up sent" });
+    expect(s.calendar.blocks.at(-1)?.text).toBe("Team #1 · 15-min review");
+  });
+
+  it("desks light for the agent that acted, including a Naïve check's seat; the CEO has no desk", () => {
+    const { s } = run([ceo(1, "advertise"), ev(2, "naive.confirm", { session_id: "a", agent: "hr", tool: "source_candidates", decision: "allow" }), post(3, "x")]);
+    expect(Object.keys(s.desks).sort()).toEqual(["hr", "mkt"]);
+    const again = run([post(3, "x"), post(4, "linkedin")]).s;
+    expect(again.desks.mkt.startsWith("4:")).toBe(true); // a new key re-lights it
+  });
+
+  it("an ad image off https (or loopback http) never reaches the screen", () => {
+    const { s } = run([ceo(1, "advertise"), ev(2, "ad.created", { kind: "hiring", headline: "We are hiring", image_url: "javascript:alert(1)" }, { actor: "mkt" })]);
+    expect(s.social.image).toBeUndefined();
+    expect(s.orders[0].lines[0]).toMatchObject({ text: "Marketing made a hiring ad image" });
+    expect(s.orders[0].lines[0].image).toBeUndefined();
+    const local = run([ceo(1, "advertise"), ev(2, "ad.created", { kind: "client", headline: "h", image_url: "http://127.0.0.1:8000/assets/ad_1.png" }, { actor: "mkt" })]).s;
+    expect(local.orders[0].lines[0].image).toBe("http://127.0.0.1:8000/assets/ad_1.png");
+    const remoteHttp = run([ceo(1, "advertise"), ev(2, "ad.created", { kind: "client", headline: "h", image_url: "http://evil.example/a.png" }, { actor: "mkt" })]).s;
+    expect(remoteHttp.orders[0].lines[0].image).toBeUndefined();
+  });
+});
+
+describe("D31: the night replay keeps its look", () => {
+  it("the fixture's 'open the firm' never leaves an orders band (no step files under it, and it goes stale)", () => {
+    const end = applySteps(emptyScreen(), steps);
+    expect(end.orders.map((o) => o.lines.length)).toEqual(end.orders.map(() => 0));
+    expect(visibleOrders(end)).toEqual([]);
   });
 });

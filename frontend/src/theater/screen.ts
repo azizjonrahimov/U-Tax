@@ -56,7 +56,31 @@ export interface LogLine {
   voice?: boolean;
 }
 
+/** D31: one step of a CEO order, as a plain line ("Marketing posted to X"). */
+export interface OrderLine {
+  key: string;
+  seat: string;
+  text: string;
+  /** The ad thumbnail (still gated by NEXT_PUBLIC_ASSET_HOSTS where it renders). */
+  image?: string;
+  /** The same line again in a row ("×3"), e.g. several handoffs. */
+  times?: number;
+}
+
+/** D31: a CEO order (a `voice.command` with speaker ceo) and the steps that followed it. */
+export interface OrderCard {
+  /** The order's voice.command event id (what `order_id` points at). */
+  id: number;
+  ts: string;
+  text: string;
+  lines: OrderLine[];
+}
+
 export interface ScreenState {
+  /** D31: CEO orders, oldest first (the newest few). */
+  orders: OrderCard[];
+  /** D31: seat → key of its latest step; a changed key re-lights the desk. */
+  desks: Record<string, string>;
   /**
    * Cases flagged possible_injection (contract §8): their mail body and subject are
    * never shown, including later emails on the same case. Kept on the screen, not
@@ -90,6 +114,8 @@ export interface ScreenState {
 }
 
 export const emptyScreen = (): ScreenState => ({
+  orders: [],
+  desks: {},
   flagged: [],
   camera: null,
   mailCase: null,
@@ -106,6 +132,37 @@ export const emptyScreen = (): ScreenState => ({
 });
 
 const MAX_LOG = 12;
+/** Orders kept on screen, and lines kept per order (the card shows the newest). */
+const MAX_ORDERS = 6;
+const MAX_ORDER_LINES = 16;
+/** Without an order_id, a step can join one of the newest few orders only. */
+const OPEN_ORDERS = 4;
+
+/** Words in a CEO order that name a department's work (the fallback when a step has no order_id). */
+const SEAT_WORDS: Readonly<Record<string, RegExp>> = Object.freeze({
+  mkt: /\b(advertis\w*|ads?|post\w*|linkedin|x|twitter|market\w*|promot\w*|social|campaign\w*|brand\w*)\b/i,
+  hr: /\b(hir\w*|recruit\w*|candidates?|interview\w*|people|person|jobs?|applicants?|staff|talent)\b/i,
+  intake: /\b(follow\w*|customers?|clients?|remind\w*|check in|teams?)\b/i,
+  tax: /\b(tax\w*|estimat\w*|comput\w*|franchise)\b/i,
+  acct: /\b(memos?|invoic\w*|accounting)\b/i,
+  qa: /\b(qa|check\w*|review\w*|verif\w*)\b/i,
+});
+
+/** An order with no steps yet stays on screen this many events (then only orders the firm acted on show). */
+const FRESH_EVENTS = 15;
+
+/** The orders worth a card: the firm acted on them, or they were just given. */
+export const visibleOrders = (s: Pick<ScreenState, "orders" | "lastEventId">) =>
+  s.orders.filter((o) => o.lines.length > 0 || s.lastEventId - o.id <= FRESH_EVENTS);
+
+/** Which order a step belongs to: its order_id, else the newest open order naming its department, else (loose) the newest. */
+export function orderFor(orders: readonly OrderCard[], seat: string, orderId: number | null, loose: boolean): number {
+  if (orderId !== null) return orders.findIndex((o) => o.id === orderId);
+  const words = Object.hasOwn(SEAT_WORDS, seat) ? SEAT_WORDS[seat] : null;
+  const first = Math.max(0, orders.length - OPEN_ORDERS);
+  for (let i = orders.length - 1; i >= first; i--) if (words?.test(orders[i].text)) return i;
+  return loose ? orders.length - 1 : -1;
+}
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
 
@@ -141,6 +198,30 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
 
   const [area, sub, ...rest] = step.target.split(".");
   const key = rest.join(".");
+
+  // D31: a desk lights up whenever its agent acts (a Naïve check names the seat in meta).
+  const seat = step.agent ?? (step.target === "rail.naive" ? str(meta.agent) : undefined);
+  if (seat && seat !== "ceo" && step.action !== "focus" && step.action !== "switch") s.desks = { ...s.desks, [seat]: step.key };
+
+  // D31: a CEO order opens a card; later steps carrying an order line fill it.
+  if (step.target === "rail.voice" && meta.speaker === "ceo" && text) {
+    s.orders = [...s.orders, { id: step.eventId, ts: step.ts, text, lines: [] }].slice(-MAX_ORDERS);
+  }
+  const line = str(meta.order_line);
+  if (line && s.orders.length) {
+    const orderId = typeof meta.order_id === "number" ? meta.order_id : null;
+    const i = orderFor(s.orders, str(meta.order_seat) ?? "", orderId, meta.order_loose === true);
+    if (i >= 0) {
+      const o = s.orders[i];
+      const last = o.lines.at(-1);
+      const image = str(meta.order_image);
+      const lines =
+        last && last.text === line && !image
+          ? [...o.lines.slice(0, -1), { ...last, times: (last.times ?? 1) + 1 }]
+          : [...o.lines, { key: step.key, seat: str(meta.order_seat) ?? "", text: line, ...(image ? { image } : {}) }].slice(-MAX_ORDER_LINES);
+      s.orders = s.orders.map((x, j) => (j === i ? { ...o, lines } : x));
+    }
+  }
 
   switch (step.action) {
     case "focus":

@@ -28,10 +28,10 @@ import {
   type Source,
 } from "@/theater/live";
 import { humanTouches, railFromEvents, type FirmNumbers } from "@/theater/rail";
-import { applyStep, emptyScreen, flaggedInLog, seedScreen, type ScreenState } from "@/theater/screen";
+import { applyStep, emptyScreen, flaggedInLog, seedScreen, visibleOrders, type ScreenState } from "@/theater/screen";
 import { appendEvents, startScript, type CursorStep, type Pane, type ScriptCursor } from "@/theater/script";
 import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
-import { CalendarPane, MailPane, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
+import { CalendarPane, MailPane, OrdersStrip, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
 import { PaneBoundary } from "./PaneBoundary";
 import "./theater.css";
 
@@ -780,6 +780,9 @@ export function Theater() {
     error: "NO LOG",
   };
   const blinking = status === "live" || status === "playing";
+  // D31: the orders band shows while an order is fresh or the firm acted on one (the night replay's
+  // "open the firm" doesn't keep an empty band on screen).
+  const hasOrders = visibleOrders(screen).length > 0;
 
   const overlay =
     status === "error"
@@ -797,7 +800,7 @@ export function Theater() {
   const onReplay = () => (source === "live" ? setOverride("replay") : setRun((r) => r + 1));
 
   return (
-    <div className={`theater${stage ? " stage" : ""}${finale?.lined ? " lined" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
+    <div className={`theater${stage ? " stage" : ""}${finale?.lined ? " lined" : ""}${hasOrders ? " has-orders" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
       <header>
         <span className="logo">U</span>
         <span className="title">U-Tax</span>
@@ -821,6 +824,12 @@ export function Theater() {
           </span>
         </div>
       </header>
+
+      {hasOrders && (
+        <PaneBoundary resetKey={screen.lastEventId}>
+          <OrdersStrip screen={screen} />
+        </PaneBoundary>
+      )}
 
       <PaneBoundary resetKey={screen.lastEventId}>
         <main data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined}>
