@@ -1,4 +1,4 @@
-# API contract (v1.8): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.9): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -408,6 +408,24 @@ Each wake writes nothing extra; the session's own tool calls produce the events.
 Stand-in tonight (no Naïve until Saturday, design D26): the **local driver** receives the
 same messages and plays the agents' tool calls through `/mcp/<actor>` with their tokens.
 
+## 6b-bis. Naïve confirms (v1.9, design D29)
+
+- The gateway watches the U-Tax agents' sessions that are `idle` with
+  `stop_reason: "awaiting_approval"`: those it started itself, plus a poll of
+  `GET /v1/sessions` every 5 s, filtered to the 7 U-Tax agent ids.
+- For each `pending_actions[]` entry of `kind: "tool"`, it calls
+  `POST /v1/sessions/{id}/tool_confirmations` `{tool_call_id, decision, reason}`:
+  - `allow` (one call, no session scope) when `name` is `board_read`, `board_write`, or
+    `utax.<tool>` with `<tool>` in that agent's own §6 column;
+  - `deny` for anything else, with a CEO notice (`ceo.notified` reason `flagged`, summary
+    "Naïve asked to run <name>; denied").
+- `kind: "question"` (`ask_operator`) is never answered by the gateway. It goes to the CEO
+  as a notice.
+- Event `naive.confirm` (actor `system`):
+  `{session_id, agent, tool, decision: "allow"|"deny", read_people}`. Idempotency key:
+  `tool_call_id`.
+- Needs `NAIVE_API_KEY` with `sessions:read` and `sessions:write`.
+
 ## 6c. Two inboxes
 
 `MAIL_INBOX_CLIENTS` (checkups) and `MAIL_INBOX_HIRING` (applicants), two AgentMail inboxes
@@ -522,6 +540,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.9 (2026-11-07, design D29): §6b-bis, the gateway resolves Naïve data-leak confirms (allowlist: board + the seat's own utax tools; otherwise deny); event `naive.confirm`.
 
 - v1.8.6 (2026-11-07, backend 18c as built): post readback text+link+channel (private); `409 console_only`; order public readback literal.
 
