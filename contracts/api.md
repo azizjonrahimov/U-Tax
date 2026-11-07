@@ -280,6 +280,33 @@ the tool names, kinds and args are fixed here:
 - `POST /api/trust` `{action_type: "*", state: "PAUSED"}` pauses every action type
   (`"everything"`). Only `PAUSED` is accepted with `"*"`.
 - Never in the CEO tool set: `resolve-purchase`, keys, deploys, `/api/dev/*`.
+- v1.8.4 (backend task 18, as built), on top of the rules above:
+  - **Spoken confirm grammar** (server and console, identical):
+    - The whole utterance must *be* a confirm phrase: `confirm`, `yes`, `do it`, `go ahead`,
+      `confirm it`, `yes please`. Fillers are allowed: ok, okay, alright, so, um, uh, yeah, please.
+    - `approve it` confirms an approve proposal only.
+    - Any of `no`, `nope`, `cancel`, `stop`, `wait`, `hold on`, `never mind`, `don't`, `do not`,
+      `not`, `never` cancels.
+    - Never a confirm: a question (`?`), the readback's own words, or `say confirm`, `shall I`,
+      `should I`, `do you want`, `would you like`, `want me to`. These answer `400 not_a_confirm`.
+  - **409 `flagged`:** by voice, approving or denying a flagged case is refused ("decide in
+    the console"). So is an approve or AUTO change that would also run a flagged case's waiting
+    approval.
+  - **409 `superseded`** also covers a pin that moved and a proposal cancelled by a pause. It has
+    no §5 body unless another approval superseded this one.
+  - **`/api/ceo/command`:**
+    - With an approve proposal open, `approve it` answers
+      `{kind: "confirm", proposal_id, readback}`; otherwise it proposes "approve the latest".
+    - A stop sent through it writes channel `typed`.
+  - **`/api/ceo/tool`** takes an optional `channel: "voice"|"click"` (default `voice`), so the
+    STOP button logs `click` (backend 18b).
+  - **Proposals:**
+    - `ceo.proposed` carries `case_id`.
+    - The order text and `heard` are masked like a CEO order.
+    - Proposal ids are random (`prop_<hex>`).
+    - Pinned args may carry extra keys.
+    - A pause from any path cancels open proposals.
+  - **`get_brief`** returns `new_events` when `since_id` is given.
 - Open proposals are gateway state rebuilt from `ceo.proposed|confirmed|cancelled` events.
   After a restart, an expired one is cancelled with `reason: "expired"`.
 
@@ -482,6 +509,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.8.4 (2026-11-07, backend task 18): strict spoken-confirm grammar; 409 flagged; ceo/command confirm shape; optional channel on /api/ceo/tool.
 
 - v1.8.3 (2026-11-07, agents task 5 question): an approval flips an ASK type to AUTO even after a manual ASK.
 
