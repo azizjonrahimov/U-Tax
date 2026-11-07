@@ -1,0 +1,12 @@
+{
+  "question.1": "Is your company a Delaware corporation, an Inc. or Corp., not an LLC?",
+  "question.2": "How many shares is the company authorized to issue, and how many are issued?",
+  "question.3": "Do you know the par value per share? If not, that's fine.",
+  "question.4": "Roughly what will the company's total assets be at the end of the year? And does any foreign person or company own 25% or more?",
+  "question.5": "Please type the email the estimate should go to in the box on the page.",
+  "estimate.authorized": "Your estimated Delaware franchise tax is about {total_cents}, using the authorized shares method. It's an educational estimate, not tax advice.",
+  "estimate.assumed_par": "Your estimated Delaware franchise tax is about {total_cents}, using the assumed par value method. It's an educational estimate, not tax advice.",
+  "memo.on_its_way": "Your memo is on its way.",
+  "at_capacity": "We're at capacity for voice checkups right now. Please email your numbers to utax-clients@agentmail.to and the firm will reply with your estimate.",
+  "goodbye": "Thanks for talking with U-Tax. Goodbye!"
+}
