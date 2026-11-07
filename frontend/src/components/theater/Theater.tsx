@@ -12,6 +12,7 @@ import { formatClock } from "@/theater/format";
 import {
   backlogSpeed,
   briefAudioUrl,
+  eventsUrl,
   fetchAllEvents,
   HttpError,
   isAuthError,
@@ -148,11 +149,13 @@ interface Feed {
   seed: ((s: ScreenState) => ScreenState) | null;
   /** Steps dropped from the head (live only), so progress stays meaningful. */
   dropped: number;
+  /** Live, after a reload: the gateway's last event, so the clock has a time before the next event plays. */
+  clockSeed: number;
   /** Highest event id the player has finished (live clock trimming never drops events still to play). */
   playedId: number;
   wake: (() => void) | null;
 }
-const newFeed = (): Feed => ({ steps: [], accepted: [], times: new Map(), maxAcceptedId: 0, skipped: 0, ended: false, seed: null, dropped: 0, playedId: 0, wake: null });
+const newFeed = (): Feed => ({ steps: [], accepted: [], times: new Map(), maxAcceptedId: 0, skipped: 0, ended: false, seed: null, dropped: 0, playedId: 0, clockSeed: 0, wake: null });
 
 /** Chain screen seeds: the feed holds one, and several sources can add to it before the player applies it. */
 const addSeed = (feed: Feed, next: (s: ScreenState) => ScreenState) => {
@@ -493,6 +496,20 @@ export function Theater() {
           // Cards for cases already open, so a reload shows rows that match the rail's numbers.
           addSeed(feed, (sc) => seedScreen(sc, seed.cases));
           feed.wake?.();
+          if (seed.lastId) {
+            // The clock shows the last event's time right away (else "--:--:--" until the next one plays).
+            const lastId = seed.lastId;
+            void getJson(eventsUrl(GATEWAY, lastId - 1, 1))
+              .then((page) => {
+                const e = (page as { data?: { id?: unknown; ts?: unknown }[] }).data?.[0];
+                if (alive && e?.id === lastId && typeof e.ts === "string") {
+                  feed.times.set(lastId, e.ts);
+                  feed.clockSeed = lastId;
+                  setFeedVersion((v) => v + 1);
+                }
+              })
+              .catch(() => console.warn("[theater] no time for the last event; the clock waits for the next one"));
+          }
           const n = numbersFromState(s);
           if (n) setLiveNumbers(n);
           setStatus("waiting");
@@ -746,7 +763,7 @@ export function Theater() {
     [typing],
   );
 
-  const clock = formatClock(feed.times.get(screen.lastEventId), true) || "--:--:--";
+  const clock = formatClock(feed.times.get(screen.lastEventId || feed.clockSeed), true) || "--:--:--";
   const skippedCount = feed.skipped;
   const loaded = feed.ended || source === "live";
   const empty = source !== "live" && feed.ended && feed.steps.length === 0;
@@ -862,9 +879,15 @@ export function Theater() {
         </div>
       </footer>
 
-      {/* Always mounted, so screen readers announce each caption as it changes. */}
+      {/* Always mounted, so screen readers announce each change: captions, the overlay, the finale. */}
       <div className="sr-only" role="status" aria-live="polite">
-        {caption ? `${caption.label}: ${caption.text}` : ""}
+        {caption
+          ? `${caption.label}: ${caption.text}`
+          : overlay
+            ? `${overlay.title}. ${overlay.sub}`
+            : finale?.banner
+              ? `Night shift replayed. ${finale.banner}`
+              : ""}
       </div>
       {caption && (
         <div className="caption" aria-hidden>
@@ -874,14 +897,14 @@ export function Theater() {
       )}
 
       {finale && (
-        <div className={`banner${finale.banner ? " show" : ""}`} role="status" aria-hidden={!finale.banner}>
+        <div className={`banner${finale.banner ? " show" : ""}`} aria-hidden>
           Night shift replayed
           <small>{finale.banner}</small>
         </div>
       )}
 
       {overlay && (
-        <div className="overlay" role="status">
+        <div className="overlay" aria-hidden>
           <div>
             {overlay.title}
             <small>{overlay.sub}</small>

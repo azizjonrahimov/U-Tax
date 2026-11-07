@@ -100,10 +100,32 @@ async function authJson<T>(token: string, url: string, init: RequestInit = {}): 
   }
   const body: unknown = await r.json().catch(() => null);
   if (!r.ok) {
-    const err = typeof body === "object" && body !== null ? (body as { error?: { code?: unknown; message?: unknown } }).error : undefined;
-    throw new ApiError(r.status, typeof err?.code === "string" ? err.code : "http_error", typeof err?.message === "string" ? err.message : `HTTP ${r.status}`);
+    const top = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+    const err = typeof top.error === "object" && top.error !== null ? (top.error as Record<string, unknown>) : {};
+    throw new GatewayError(
+      r.status,
+      typeof err.code === "string" ? err.code : "http_error",
+      typeof err.message === "string" ? err.message : `HTTP ${r.status}`,
+      { ...top, ...err }, // extra fields (v1.7.8 superseded: approval_id, superseded_by), wherever the gateway puts them
+    );
   }
   return body as T;
+}
+
+/** A gateway refusal with its extra fields. */
+class GatewayError extends ApiError {
+  constructor(status: number, code: string, message: string, readonly details: Record<string, unknown>) {
+    super(status, code, message);
+  }
+}
+
+/** The newer approval after a 409 superseded: from the body when the gateway sends it, else from the message. */
+function newerApproval(e: ApiError): string | null {
+  if (e instanceof GatewayError && "superseded_by" in e.details) {
+    const by = e.details.superseded_by;
+    return typeof by === "string" && /^apr_[A-Za-z0-9_-]{1,40}$/.test(by) ? by : null;
+  }
+  return supersededBy(e.message);
 }
 
 /** The rows a confirm can belong to, from fresh data. */
@@ -399,7 +421,7 @@ export function Ceo() {
         if (e instanceof ApiError && e.status === 401) signOut(errorOf(e));
         else if (e instanceof ApiError && e.code === "superseded" && typeof id === "string") {
           // v1.7.8: drop the stale entry and point at the newer one (the gateway writes no event for it).
-          const by = supersededBy(e.message);
+          const by = newerApproval(e);
           setDismissed((d) => new Set(d).add(id));
           setHighlight(by);
           setActionError(
