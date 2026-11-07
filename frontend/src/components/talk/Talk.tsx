@@ -16,11 +16,14 @@ import {
   addTurn,
   canSend,
   caseDone,
+  customerChars,
+  dropPending,
   emptyProgress,
   fillTurn,
   followCase,
   friendlyError,
   isEmail,
+  MAX_CUSTOMER_CHARS,
   MAX_TURN_CHARS,
   nextTypedQuestion,
   parseVoiceSession,
@@ -97,6 +100,8 @@ export function Talk() {
   const [progress, setProgress] = useState<CaseProgress | null>(null);
   const [caseName, setCaseName] = useState<string | null>(null);
   const [streamDown, setStreamDown] = useState(false);
+  /** A send that may have reached the gateway (timeout, network, 5xx): a retry returns that case, so edits are locked. */
+  const [mayHaveLanded, setMayHaveLanded] = useState(false);
   /** Stream start: the last event id before our case opened (so we don't replay the night). */
   const [followFrom, setFollowFrom] = useState(0);
   /** The turns as of the last change: handlers read this, never a state updater with side effects. */
@@ -135,7 +140,9 @@ export function Talk() {
 
   // A new step takes focus, so keyboard and screen-reader users land on it.
   useEffect(() => {
-    focusRef.current?.focus();
+    // Only when focus was lost with the old step: never pull a caller out of the field they're typing in.
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) focusRef.current?.focus();
   }, [phase, mode]);
 
   useEffect(() => {
@@ -177,6 +184,11 @@ export function Talk() {
     const c = callRef.current;
     callRef.current = null;
     if (!c) return;
+    const kept = dropPending(turnsRef.current);
+    if (kept.length !== turnsRef.current.length) {
+      turnsRef.current = kept;
+      setTurns(kept);
+    }
     c.mic.getTracks().forEach((t) => t.stop());
     c.pc.close();
     c.audio.pause();
@@ -256,17 +268,29 @@ export function Talk() {
       return;
     }
 
-    const pc = new RTCPeerConnection();
+    let opened = false;
+    later(() => {
+      if (!stale() && !opened) fail("Voice couldn't connect on this network, so let's type. Same questions, same estimate.");
+    }, CHANNEL_MS);
+    let pc: RTCPeerConnection;
+    let dc: RTCDataChannel;
     const audio = new Audio();
     audio.autoplay = true;
     audio.muted = !soundRef.current;
-    callRef.current = { pc, mic, audio };
-    pc.ontrack = (e) => {
-      audio.srcObject = e.streams[0];
-    };
-    mic.getTracks().forEach((t) => pc.addTrack(t, mic));
-    const dc = pc.createDataChannel("oai-events");
-    let opened = false;
+    try {
+      pc = new RTCPeerConnection();
+      callRef.current = { pc, mic, audio };
+      pc.ontrack = (e) => {
+        audio.srcObject = e.streams[0];
+      };
+      mic.getTracks().forEach((t) => pc.addTrack(t, mic));
+      dc = pc.createDataChannel("oai-events");
+    } catch (e) {
+      // WebRTC off in this browser: release the mic before falling back.
+      console.warn("[talk] WebRTC unavailable", e);
+      if (!callRef.current) mic.getTracks().forEach((t) => t.stop());
+      return fail("Voice isn't supported in this browser, so let's type. Same questions, same estimate.");
+    }
     dc.onopen = () => {
       if (stale()) return;
       opened = true;
@@ -286,7 +310,10 @@ export function Talk() {
       }
       if (!sig) return;
       if (sig.kind === "turn") push(sig.speaker, sig.text);
-      else if (sig.kind === "reserve") setAll(reserveTurn(turnsRef.current, sig.id), false);
+      else if (sig.kind === "reserve") {
+        const next = reserveTurn(turnsRef.current, sig.id);
+        setAll(next, customerChars(next) >= MAX_CUSTOMER_CHARS);
+      }
       else if (sig.kind === "fill") {
         const r = fillTurn(turnsRef.current, sig.id, sig.text);
         setAll(r.turns, r.full);
@@ -305,10 +332,6 @@ export function Talk() {
         }, DISCONNECT_GRACE_MS);
       }
     };
-    later(() => {
-      if (!stale() && !opened) fail("Voice couldn't connect on this network, so let's type. Same questions, same estimate.");
-    }, CHANNEL_MS);
-
     try {
       const offer = await pc.createOffer();
       if (stale()) return;
@@ -348,9 +371,14 @@ export function Talk() {
     // The last spoken answer is still being transcribed for a moment after it was said.
     for (let waited = 0; callRef.current && pendingTurns(turnsRef.current) > 0 && waited < TRANSCRIPT_WAIT_MS; waited += 100) await sleep(100);
     const wasVoice = mode === "voice";
+    const lost = pendingTurns(turnsRef.current);
     hangUp();
     hush();
-    if (wasVoice) setMode("typed"); // the call is over either way; a failed send continues by typing
+    if (wasVoice) {
+      setMode("typed"); // the call is over either way; a failed send continues by typing
+      scriptFrom.current = null; // ...without the scripted questions
+    }
+    if (lost) setNotice("Your last spoken answer didn't come through in time. If it mattered, type it after sending, or reply to the memo.");
 
     requestId.current ??= newRequestId();
     // Where the stream should start: just before our case opens. Measured once per request id.
@@ -375,6 +403,7 @@ export function Talk() {
         signal: AbortSignal.timeout(SEND_MS),
       });
       if (typeof res.case_id !== "string") throw new ApiError(500, "bad_response", "no case id");
+      setMayHaveLanded(false);
       setCaseName(typeof res.masked_name === "string" ? res.masked_name : null);
       setFollowFrom(requestAfter.current);
       setProgress({ ...emptyProgress(res.case_id), lastId: requestAfter.current });
@@ -382,11 +411,15 @@ export function Talk() {
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
       setError(friendlyError(status, e instanceof ApiError ? e.code : "network_error"));
-      // A clear refusal saved nothing: the next try is a new request. Otherwise (timeout, network,
-      // 5xx) the case may exist, so the same id comes back with the same case.
-      if (status >= 400 && status < 500) {
+      // Only a refusal of the content proves nothing was saved: the next try is a new request.
+      // Anything else (429, timeout, network, 5xx) may follow a send that landed, so the same id
+      // must come back for the same case, and the conversation is locked so nothing is silently dropped.
+      const code = e instanceof ApiError ? e.code : "";
+      if (code === "bad_input" || code === "too_long") {
         requestId.current = null;
         requestAfter.current = null;
+      } else if (status !== 429) {
+        setMayHaveLanded(true);
       }
       if (wasVoice) setNotice("The voice call ended. You can still type and send.");
       go("talk");
@@ -446,6 +479,7 @@ export function Talk() {
     setNotice(null);
     setError(null);
     setStreamDown(false);
+    setMayHaveLanded(false);
     setMode("typed");
     go("consent");
   };
@@ -543,9 +577,9 @@ export function Talk() {
                 maxLength={MAX_TURN_CHARS}
                 placeholder={mode === "voice" ? "Or type an answer…" : "Type your answer…"}
                 autoComplete="off"
-                disabled={full || phase === "sending"}
+                disabled={full || phase === "sending" || mayHaveLanded}
               />
-              <button className="secondary" type="submit" disabled={!draft.trim() || full || phase === "sending"}>
+              <button className="secondary" type="submit" disabled={!draft.trim() || full || phase === "sending" || mayHaveLanded}>
                 Answer
               </button>
             </form>
@@ -571,7 +605,7 @@ export function Talk() {
                   maxLength={320}
                   aria-invalid={emailBad || undefined}
                   aria-describedby="email-hint"
-                  disabled={phase === "sending"}
+                  disabled={phase === "sending" || mayHaveLanded}
                 />
                 <button className="primary" type="submit" disabled={!ready || phase === "sending" || !HAS_GATEWAY}>
                   {phase === "sending" ? "Sending…" : "Send to U-Tax"}
@@ -583,6 +617,7 @@ export function Talk() {
               {error && (
                 <p className="error" role="alert">
                   {error}
+                  {mayHaveLanded ? " It may already have reached U-Tax; sending again won't open a second case." : ""}
                 </p>
               )}
             </form>
@@ -601,7 +636,7 @@ export function Talk() {
             </h1>
             {!ended && (
               <div className="estimate">
-                {progress.totalCents !== null ? (
+                {progress.totalCents !== null && !progress.askedFor.length ? (
                   <>
                     <small>Estimated Delaware franchise tax</small>
                     <b>{formatCents(progress.totalCents)}</b>

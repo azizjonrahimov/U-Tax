@@ -17,8 +17,12 @@ export interface Turn {
 export const MAX_TURN_CHARS = 1000;
 /** The gateway refuses a customer transcript over 4000 characters (too_long). */
 export const MAX_CUSTOMER_CHARS = 4000;
-/** The gateway keeps 60 turns of context; past that, agent turns go first (customer turns never). */
-export const MAX_TURNS = 60;
+/**
+ * Turns the page keeps. Nothing is ever removed (so positions never shift); past the cap, new agent
+ * lines just aren't stored. Customer turns always are: they are the facts, bounded by the character
+ * cap, and the gateway reads every one (it keeps the first 60 turns as context).
+ */
+export const MAX_TURNS = 200;
 
 const clipChars = (s: string, n: number) => {
   const cps = Array.from(s);
@@ -41,35 +45,29 @@ export function addTurn(turns: readonly Turn[], speaker: Speaker, raw: string): 
     if (room <= 0) return { turns: [...turns], full: true };
     next = clipChars(text, room);
   }
+  if (speaker === "agent" && turns.length >= MAX_TURNS) return { turns: [...turns], full: customerChars(turns) >= MAX_CUSTOMER_CHARS };
   const out = [...turns, { speaker, text: next }];
-  return { turns: trimAgents(out), full: customerChars(out) >= MAX_CUSTOMER_CHARS };
-}
-
-/** Over MAX_TURNS: drop the oldest agent turns. Customer turns are the facts and are bounded by the character cap. */
-function trimAgents(turns: Turn[]): Turn[] {
-  let extra = turns.length - MAX_TURNS;
-  if (extra <= 0) return turns;
-  return turns.filter((t) => {
-    if (t.speaker === "agent" && extra > 0) {
-      extra -= 1;
-      return false;
-    }
-    return true;
-  });
+  return { turns: out, full: customerChars(out) >= MAX_CUSTOMER_CHARS };
 }
 
 /** Voice: hold the customer's place when they stop speaking; the transcript arrives later. */
 export function reserveTurn(turns: readonly Turn[], id: string): Turn[] {
-  if (turns.some((t) => t.id === id)) return [...turns];
-  return trimAgents([...turns, { speaker: "customer", text: "", id }]);
+  if (turns.some((t) => t.id === id) || pendingTurns(turns) >= MAX_PENDING) return [...turns];
+  return [...turns, { speaker: "customer", text: "", id }];
 }
+
+/** Slots still waiting at once; more means transcription isn't arriving, so stop reserving. */
+const MAX_PENDING = 3;
+
+/** Drop slots whose transcript never came (the call ended). */
+export const dropPending = (turns: readonly Turn[]) => turns.filter((t) => t.speaker === "agent" || t.text);
 
 /** Fill a reserved slot (or append when none was reserved). Empty or over-cap text removes the slot. */
 export function fillTurn(turns: readonly Turn[], id: string, raw: string): { turns: Turn[]; full: boolean } {
   const at = turns.findIndex((t) => t.id === id);
   const others = at < 0 ? [...turns] : turns.filter((_, i) => i !== at);
   const placed = addTurn(others, "customer", raw); // clipped and capped against the other turns
-  const added = placed.turns.length > others.length || placed.turns.at(-1) !== others.at(-1) ? placed.turns.at(-1) : undefined;
+  const added = placed.turns.length > others.length ? placed.turns.at(-1) : undefined;
   if (!added || added.speaker !== "customer") return { turns: at < 0 ? [...turns] : others, full: placed.full };
   const turn = { ...added, id };
   if (at < 0) return { turns: [...placed.turns.slice(0, -1), turn], full: placed.full };

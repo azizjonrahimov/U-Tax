@@ -4,6 +4,7 @@ import {
   addTurn,
   canSend,
   caseDone,
+  dropPending,
   fillTurn,
   pendingTurns,
   reserveTurn,
@@ -56,13 +57,21 @@ describe("turns and the request body (contract §6e)", () => {
     expect(addTurn(t, "agent", "Thanks!").turns).toHaveLength(t.length + 1); // the agent can still speak
   });
 
-  it("past 60 turns drops the oldest agent turns, never a customer answer", () => {
+  it("never removes a turn (positions stay put); past the cap only new agent lines are skipped", () => {
     let t = addTurn([], "customer", "yes, Delaware Inc").turns;
-    for (let i = 0; i < MAX_TURNS + 5; i++) t = addTurn(t, i % 2 ? "customer" : "agent", `t${i}`).turns;
-    expect(t).toHaveLength(MAX_TURNS);
+    for (let i = 0; i < MAX_TURNS + 6; i++) t = addTurn(t, i % 2 ? "customer" : "agent", `t${i}`).turns;
     expect(t[0].text).toBe("yes, Delaware Inc");
-    expect(t.filter((x) => x.speaker === "customer")).toHaveLength(1 + Math.floor((MAX_TURNS + 5) / 2));
-    expect(t.at(-1)?.text).toBe(`t${MAX_TURNS + 4}`);
+    expect(t.filter((x) => x.speaker === "customer")).toHaveLength(1 + (MAX_TURNS + 6) / 2); // every answer kept
+    expect(t.at(-1)).toEqual({ speaker: "customer", text: `t${MAX_TURNS + 5}` });
+    expect(addTurn(t, "agent", "one more question").turns).toHaveLength(t.length);
+  });
+
+  it("stops reserving when transcripts stop arriving, and drops unfilled slots at hang-up", () => {
+    let t: Turn[] = [];
+    for (let i = 0; i < 6; i++) t = reserveTurn(t, `it_${i}`);
+    expect(pendingTurns(t)).toBe(3);
+    t = fillTurn(t, "it_0", "Delaware Inc").turns;
+    expect(dropPending(t)).toEqual([{ speaker: "customer", text: "Delaware Inc", id: "it_0" }]);
   });
 
   it("voice: a reserved slot keeps the customer's place until the transcript lands (a bare No. keeps its question)", () => {
