@@ -367,7 +367,11 @@ class Gateway:
             "ceo_tool": self._ceo_tool,
             "ceo_confirm": self._ceo_confirm,
             "ceo_command": self._ceo_command,
+            # v1.9 §6b-bis: Naïve's data-leak confirms (app/naive_confirm.py), never an agent's
+            "naive_confirm": self._naive_confirm,
+            "naive_question": self._naive_question,
         }
+        self._naive_noticed: dict[tuple[str, str], datetime] = {}
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
         # reads that touch a slow port run before the lock is taken (contract §6f)
@@ -2973,6 +2977,49 @@ class Gateway:
         self._emit(events)
         return {"kind": "proposal", "proposal_id": proposal_id, "readback": readback,
                 "expires_at": expires_at}
+
+    NAIVE_NOTICE_EVERY = timedelta(minutes=10)  # one CEO mail per agent and denied tool
+
+    @staticmethod
+    def _naive_tool(args: dict) -> str:
+        """A Naïve tool name as the log shows it: its own charset, never free text."""
+        return re.sub(r"[^A-Za-z0-9._:-]", "?", _str(args, "tool", max_len=120))
+
+    def _naive_confirm(self, args: dict) -> dict:
+        """app/naive_confirm.py answered a Naïve confirm: log it once per tool call, and tell
+        the CEO about a deny (at most once per agent and tool every 10 minutes)."""
+        call_id = _str(args, "tool_call_id", max_len=120)
+        key = f"naive.confirm:{call_id}"
+        if self._done_from(key) is not None:
+            return {"duplicate": True}
+        agent = _one_of(args, "agent", AGENTS)
+        tool = self._naive_tool(args)
+        decision = _one_of(args, "decision", ("allow", "deny"))
+        self._emit([NewEvent(type="naive.confirm", actor="system", payload={
+            "session_id": _str(args, "session_id", max_len=80), "agent": agent, "tool": tool,
+            "decision": decision, "read_people": args.get("read_people") is True},
+            idempotency_key=key)])
+        if decision == "deny":
+            last = self._naive_noticed.get((agent, tool))
+            if last is None or self._now() - last >= self.NAIVE_NOTICE_EVERY:
+                self._naive_noticed[(agent, tool)] = self._now()
+                self._notify_ceo("flagged", clip(f"Naïve tool denied: {tool}", 120),
+                                 f"Naïve asked to run {tool}; denied",
+                                 key=f"ceo:naive-deny:{call_id}")
+        return {"decision": decision}
+
+    def _naive_question(self, args: dict) -> dict:
+        """§6b-bis: an agent's ask_operator question is never answered by the gateway; the
+        CEO hears about it once."""
+        call_id = _str(args, "tool_call_id", max_len=120)
+        key = f"ceo:naive-question:{call_id}"
+        if self._done_from(key) is not None:
+            return {"duplicate": True}
+        agent = _one_of(args, "agent", AGENTS)
+        self._notify_ceo("flagged", f"Naïve question from {agent}",
+                         f"An agent ({agent}) asked a question in Naïve; answer it there",
+                         key=key)
+        return {"noticed": True}
 
     def _ceo_confirm(self, args: dict) -> dict:
         """POST /api/ceo/confirm: carry out a proposal's pinned action, once, within 60 s,

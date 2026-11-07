@@ -56,6 +56,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "screen.call": ("candidate_id", "transcript_excerpt", "seconds"),
     "voice.command": ("text", "channel", "speaker", "case_id", "masked_name"),  # v1.6.4
     "ceo.notified": ("channel", "subject", "summary", "reason"),
+    "naive.confirm": ("session_id", "agent", "tool", "decision", "read_people"),  # v1.9 §6b-bis
     "approval.requested": ("approval_id", "action_type", "summary"),
     "touch.training": _TOUCH,
     "touch.operating": _TOUCH,
