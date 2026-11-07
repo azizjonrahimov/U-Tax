@@ -82,7 +82,9 @@ describe("Realtime: who can confirm", () => {
   it("the CEO's own transcript after the card appeared confirms, with via voice and what was heard", () => {
     const { effects, state } = run(armed(), [committed("item_2"), heard("item_2", "Yes, do it.")]);
     expect(confirms(effects)).toEqual([{ type: "confirm", proposalId: "prop_1", decision: "confirm", heard: "Yes, do it." }]);
-    expect(state.proposal?.settling).toBe(true);
+    // Regression: ISSUE-001 — the console refused its own reducer's confirm because the card was already settling.
+    // Found by /qa on 2026-11-07. The handshake: the reducer claims the card it names; the console sends for that id.
+    expect(state.proposal).toMatchObject({ proposalId: "prop_1", settling: true });
   });
 
   it("a model message saying 'confirmed' does nothing", () => {

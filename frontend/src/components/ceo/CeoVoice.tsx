@@ -338,13 +338,22 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     [handle, post, send, unauthorized],
   );
 
-  /** Confirm or cancel the open card. `via: "voice"` only with the CEO's own transcribed words. */
+  /**
+   * Confirm or cancel the open card. `via: "voice"` only with the CEO's own transcribed words.
+   * `claimed`: the Realtime reducer already decided and marked this card settling (its id); a click
+   * or typed words claim the card here instead.
+   */
   const settle = useCallback(
-    async (decision: "confirm" | "cancel", via: "voice" | "click", heard: string) => {
+    async (decision: "confirm" | "cancel", via: "voice" | "click", heard: string, claimed?: string) => {
       const p = vs.current.proposal;
-      if (!p || p.settling) return;
-      if (decision === "confirm" && Date.now() >= p.expiresAt) return;
-      vs.current = settleProposal(vs.current);
+      if (!p) return;
+      if (claimed !== undefined) {
+        if (p.proposalId !== claimed || !p.settling) return;
+      } else {
+        if (p.settling) return;
+        if (decision === "confirm" && Date.now() >= p.expiresAt) return;
+        vs.current = settleProposal(vs.current);
+      }
       setCard((c) => (c && c.proposalId === p.proposalId ? { ...c, sending: true } : c));
       try {
         const r = await post("/ceo/confirm", { proposal_id: p.proposalId, decision, via, heard });
@@ -415,7 +424,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
             send(functionOutputEvents(ef.callId, ef.output));
             break;
           case "confirm":
-            void settle(ef.decision, "voice", ef.heard);
+            void settle(ef.decision, "voice", ef.heard, ef.proposalId);
             break;
           case "heard":
             addLine("you", ef.text);
