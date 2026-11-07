@@ -154,6 +154,12 @@ For Replay mode and catch-up. Ordered by `id`.
 ## 5. Control endpoints (admin token)
 
 - `POST /api/approve` `{approval_id, decision: "allow"|"deny", note}` → `200 {"ok": true}`.
+  A new approval request for the same case and kind **supersedes** older pending ones (they answer
+  `409 superseded` `{approval_id, superseded_by}`, newest pending id or null), so the CEO can never
+  approve a figure they didn't see. A case reopen (CEO unblock, client mail on an open case, new
+  `facts.extracted`) also supersedes that case's pending approvals; a reply with no changed facts
+  doesn't. No event is written for a supersede tonight: on `409 superseded` the console drops the
+  entry and refetches `/api/state`. (Post-hackathon: an `approval.superseded` event.)
   Writes `touch.training` (first approval of an action type) or `touch.operating`, plus
   `trust.changed` when the type flips. Idempotent by `approval_id`.
 - `POST /api/voice` `{text, channel: "voice"|"typed", speaker: "customer"|"ceo", reply_email}` →
@@ -166,7 +172,9 @@ For Replay mode and catch-up. Ordered by `id`.
   `413 too_large` (body over 1 MB), `400 too_long` (customer text over 4000 chars). A retried
   `request_id` returns the same case and never counts against the cap. `speaker: "ceo"`: an optional typed order
   from `/ceo`, forwarded to the Chief of Staff once Naïve is wired (stand-in: log only).
-- `POST /api/trust` `{action_type, state: "PAUSED"|"AUTO"}` (admin) → the CEO's standing
+- `POST /api/trust` `{action_type, state: "PAUSED"|"AUTO"|"ASK"|"RESUME"}` (admin; `RESUME` returns
+  the type to the state it had before it was paused, and approvals allowed while it was paused are
+  then carried out) → the CEO's standing
   order as gateway state ("stop posting" = `social_post` PAUSED); writes `trust.changed`
   and `touch.operating`. `perform()` refuses PAUSED types until resumed.
 - `POST /api/cases/{case_id}/unblock` `{to: "INTAKE_PENDING"|"READY"|"NOT_ELIGIBLE", note}` (admin)
@@ -379,6 +387,11 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.8 (2026-11-07, backend task 14): supersede triggers and `superseded_by`; console refetches on 409.
+
+- v1.7.7 (2026-11-07, frontend /ceo review): superseded approvals; `/api/trust` ASK and RESUME;
+  allowed-while-paused approvals carried out on resume; event mode refuses empty admin/theater tokens.
 
 - v1.7.6 (2026-11-07, backend task 13): `/api/voice` refusals `429 at_capacity`, `413 too_large`,
   `400 too_long`; public daily case cap; voice spend booked as estimates with a hold.
