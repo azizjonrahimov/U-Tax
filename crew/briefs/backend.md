@@ -206,3 +206,11 @@ Add to task 9 (contract v1.7.1, from the frontend's slice 3 review):
   constant, so a later GA switch changes only the gateway.
 - Add `OPENAI_TRANSCRIBE_MODEL` to .env.example. Mocked test only; the real call is UNVERIFIED
   until a key exists.
+
+## Task 12: two small fixes (2026-11-07, from the frontend's /talk work)
+1. Separate rate limiters: `/api/voice` (customer Send) gets its own limiter, apart from
+   `/api/voice/session` (mints), so 30 voice tries at the venue can't 429 the judge's Send.
+   Keep the per-IP and global caps; reserve headroom for Send.
+2. v1.7.4 bug: projections and the digest period sum every cost_usd except tool.bought. Sum
+   **cost.booked only** (contract §4). Add a test with a cost-carrying law.searched that must
+   not be counted.
