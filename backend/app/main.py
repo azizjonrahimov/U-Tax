@@ -78,7 +78,8 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
             from app.naive_waker import NaiveWaker
 
             _show_utax_logs()
-            waker = NaiveWaker(gw.settings.naive_api_key, gw.settings.naive_api_base)
+            waker = NaiveWaker(gw.settings.naive_api_key, gw.settings.naive_api_base,
+                               trigger_of=gw.wake_trigger)
             unwake = gw.on_wake(waker)
             log.info("WAKE: the Naïve Chief of Staff receives the gateway's wakes")
         state["waker"] = waker

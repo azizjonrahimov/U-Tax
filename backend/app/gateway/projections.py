@@ -72,6 +72,7 @@ class Case:
     def revisions(self) -> int:
         return max(0, self.memos_sent - 1)
     message_ids: list[str] = field(default_factory=list)
+    last_inbound_id: int = 0  # 22b: the latest email.received / customer voice event
     facts: dict[str, Any] | None = None
     quotes: dict[str, str] = field(default_factory=dict)
     assumed: list[str] = field(default_factory=list)
@@ -268,6 +269,12 @@ class State:
 
     def _on_email_received(self, e: Event) -> None:
         self._open_case(e, text=e.payload["body"], subject=e.payload["subject"])
+        self._inbound(e)
+
+    def _inbound(self, e: Event) -> None:
+        case = self.cases.get(e.case_id) if e.case_id else None
+        if case is not None:
+            case.last_inbound_id = max(case.last_inbound_id, e.id)
 
     def _on_voice_command(self, e: Event) -> None:
         if e.payload.get("speaker") == "customer" and e.case_id:
@@ -275,6 +282,7 @@ class State:
                 day = e.ts[:10]
                 self.public_cases_by_day[day] = self.public_cases_by_day.get(day, 0) + 1
             self._open_case(e, text=e.payload["text"], subject="Voice case", priority=True)
+            self._inbound(e)
 
     def _open_case(self, e: Event, *, text: str, subject: str, priority: bool = False) -> None:
         private = e.private or {}
@@ -545,6 +553,8 @@ class State:
             cand["reply_to"] = private.get("reply_to")
         if private.get("listed"):  # v1.11: from the CEO's HR_CANDIDATES (no questionnaire)
             cand["listed"] = True
+        if stage == "applicant":  # 22b: the applicant's latest mail wakes HR anew
+            cand["last_event_id"] = max(cand.get("last_event_id", 0), e.id)
         if stage == "applicant" and private.get("text"):
             if cand.get("texts"):  # every mail after the first is an answer
                 cand["answers"] = cand.get("answers", 0) + 1
