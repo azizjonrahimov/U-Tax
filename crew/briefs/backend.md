@@ -237,3 +237,6 @@ Mocked tests, quick /review, one READY.
 ## Task 15 (tiny, 2026-11-07): approval summaries clip at a word boundary with "…"
 The frontend's /design-review saw "whether a foreign o" in /ceo. Use the same clip helper as
 subjects for approval.requested summaries and ceo.notified summaries.
+Add to task 15: `409 superseded` must carry `{approval_id, superseded_by}` in the error body
+(contract v1.7.8). Today result_or_raise drops the Refused data, so the console parses the
+message text.
