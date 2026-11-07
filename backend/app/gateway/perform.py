@@ -385,6 +385,7 @@ class Gateway:
         self._public_cap_retry_at = 0.0  # task 13: next try of a failed at-capacity notice
         self._voice_pending: dict[str, int] = {}  # task 13: paid voice calls in flight
         self._voice_pending_usd = Decimal(0)
+        self._tts_talk_pending = 0  # v1.10 §5c: /talk TTS characters in flight
         # failed wake deliveries: (message, waker, attempt, due monotonic time)
         self._wake_retries: list[tuple[str, Callable[[str], None], int, float]] = []
 
@@ -593,6 +594,53 @@ class Gateway:
                 "cost_usd": str(VOICE_USD[kind]), "estimated": True})
         if result.status != "done":
             log.error("voice %s spend not booked after the call: %s", kind, result.error)
+
+    def reserve_tts(self, purpose: str, chars: int) -> str | None:
+        """v1.10 §5c: hold a /api/tts call before the paid request. "talk_budget" when /talk's
+        TTS_PUBLIC_CHARS_PER_DAY would be passed (in-flight calls count), else the
+        voice_refusal reasons ("budget", "unbooked"). A None must be settled (settle_tts)."""
+        refusal = self.reserve_voice("tts", paid=True, public=purpose == "talk")
+        if refusal:
+            return refusal
+        if purpose != "talk":
+            return None
+        with self._lock:
+            day = iso_ts(self._now())[:10]
+            used = self.state.tts_talk_chars_by_day.get(day, 0) + self._tts_talk_pending
+            if used + chars > self.settings.tts_public_chars_per_day:
+                self._release_voice("tts")
+                return "talk_budget"
+            self._tts_talk_pending += chars
+        return None
+
+    def settle_tts(self, purpose: str, chars: int, provider: str, model: str, *,
+                   ok: bool) -> None:
+        """Release a reserve_tts hold; book an estimated cost.booked (chars in tokens_in)
+        only when the provider answered with audio."""
+        from app.gateway.pricing import ELEVENLABS_USD_PER_1K_CHARS, VOICE_USD
+
+        with self._lock:
+            if purpose == "talk":
+                self._tts_talk_pending = max(0, self._tts_talk_pending - chars)
+            self._release_voice("tts")
+            if not ok:
+                return
+            cost = (ELEVENLABS_USD_PER_1K_CHARS * chars / 1000 if provider == "elevenlabs"
+                    else VOICE_USD["tts"])
+            result = self.perform("book_spend", {
+                "provider": provider if provider in PROVIDERS else "unknown",
+                "model": f"tts:{purpose}:{model}"[:120], "tokens_in": chars,
+                "cost_usd": str(max(cost, Decimal("0.0001")).quantize(Decimal("0.0001"))),
+                "estimated": True})
+        if result.status != "done":
+            log.error("tts spend not booked after the call: %s", result.error)
+
+    def _release_voice(self, kind: str) -> None:
+        from app.gateway.pricing import VOICE_USD
+
+        with self._lock:
+            self._voice_pending[kind] = max(0, self._voice_pending.get(kind, 0) - 1)
+            self._voice_pending_usd = max(Decimal(0), self._voice_pending_usd - VOICE_USD[kind])
 
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The

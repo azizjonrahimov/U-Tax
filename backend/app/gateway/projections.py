@@ -162,6 +162,7 @@ class State:
     cost_keys: set[str] = field(default_factory=set)  # applied cost.booked keys (17b)
     public_cases_by_day: dict[str, int] = field(default_factory=dict)  # task 13: UTC date -> n
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
+    tts_talk_chars_by_day: dict[str, int] = field(default_factory=dict)  # v1.10 §5c budget
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
                                                            "shortlisted": 0, "hired": 0,
@@ -244,6 +245,10 @@ class State:
             if model.startswith("realtime:") and not model.startswith(f"realtime:{CEO_MINT}"):
                 day = e.ts[:10]
                 self.voice_mints_by_day[day] = self.voice_mints_by_day.get(day, 0) + 1
+            if model.startswith("tts:talk:"):  # v1.10 §5c: /talk's daily character budget
+                day = e.ts[:10]
+                self.tts_talk_chars_by_day[day] = (self.tts_talk_chars_by_day.get(day, 0)
+                                                   + int(e.tokens_in or 0))
         for action_type, types in CAP_EVENTS.items():
             if e.type in types and e.status == "ok":
                 # sends for anonymous /talk cases have their own bucket (never pause the firm)

@@ -37,6 +37,11 @@ class Settings:
     admin_token: str = ""
     theater_origin: str = ""
     openai_api_key: str = ""
+    elevenlabs_api_key: str = ""  # v1.10 §5c (ADAPTER_VOICE=elevenlabs)
+    elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    tts_public_chars_per_day: int = 200000
+    talk_phrases_path: Path = REPO_ROOT / "naive" / "prompts" / "talk-phrases.json"
     cap_per_hour: int = 10
     # task 13: /talk cases a UTC day before "at capacity"; None = 50, or 200 in event mode
     public_cases_per_day: int | None = None
@@ -108,6 +113,12 @@ class Settings:
             admin_token=_env("ADMIN_TOKEN"),
             theater_origin=_env("THEATER_ORIGIN"),
             openai_api_key=_env("OPENAI_API_KEY"),
+            elevenlabs_api_key=_env("ELEVENLABS_API_KEY"),
+            elevenlabs_voice_id=_env("ELEVENLABS_VOICE_ID") or "EXAVITQu4vr4xnSDxMaL",
+            elevenlabs_model=_env("ELEVENLABS_MODEL") or "eleven_flash_v2_5",
+            tts_public_chars_per_day=int(_env("TTS_PUBLIC_CHARS_PER_DAY") or 200000),
+            talk_phrases_path=Path(_env("UTAX_TALK_PHRASES")
+                                   or REPO_ROOT / "naive" / "prompts" / "talk-phrases.json"),
             cap_per_hour=int(_env("CAP_PER_HOUR") or 10),
             public_cases_per_day=(int(_env("PUBLIC_CASES_PER_DAY"))
                                   if _env("PUBLIC_CASES_PER_DAY") else None),
