@@ -7,8 +7,9 @@ Voice: Chrome's speech recognition listens, and the gateway turns the words into
 fixed list of phrases, so **say the phrases exactly as written here** ("approve the latest", not
 "approve the memo for Team 7"). The firm answers with ElevenLabs once the D30 build is deployed
 (`POST /api/tts`), else with the browser's own voice. Until then keep `ADAPTER_VOICE=none`: on an
-older build `elevenlabs` stops the gateway from starting, and `openai` with a key switches `/ceo`
-to a free-form model where this phrase list doesn't apply.
+older build `elevenlabs` stops the gateway from starting. `openai` with a key is a trade: it gives
+`/talk` its spoken intake, but switches `/ceo` to a free-form model where this phrase list doesn't
+apply. Without it, the judge types on `/talk` (card 4).
 Each card has the time, what's on screen, what the presenter says (plain text) and what to click.
 Every number on screen comes from the event log; say "estimated" for money the firm spent.
 
@@ -53,17 +54,20 @@ in a browser tab (its link is the `url` of the newest `post.published`).
 **Say:** "Seven agents, one per department, like a real firm: Intake, Tax, QA, Accounting,
 Marketing, HR, and a Chief of Staff running them. N clients served, K human touches. Marketing
 finds clients the way a firm does: here's its post from last night."
-**Do:** point at the cursors' name tags, then the bottom bar, then switch to the post tab.
+**Do:** point at the cursors' name tags, then the bottom bar, then switch to the post tab (opened
+signed out, or cropped to the post, so no other people's names or replies show).
 **If it fails** (no live post): skip the tab and point at the Social pane when Marketing's cursor
 posts in card 5's replay.
 
 ## Card 3a · 0:30–0:50 · The CEO runs the firm by voice
 **Screen:** `/ceo` voice mode on the laptop (mic on), the theater on the projector with stage
 mode **off** (press S: the Stage button goes dark).
-**Say (to the console, in this order, word for word):**
+**Say (to the console, in this order, word for word; tap the mic before each phrase: with
+hands-free off it closes after every reply):**
 1. "Stop posting." It pauses at once (stopping never asks for a confirm): `/ceo`'s Standing orders
    show social posts "paused", and the theater's Operating count ticks up.
-2. "Approve the latest." (Team #7's memo is the only approval waiting.) The firm reads it back,
+2. "Approve the latest." (Team #7's memo is the only approval waiting; Team #7 stands for whichever
+   case you staged, see the checklist.) The firm reads it back,
    for example: "Approve memo email: Team #7, $85,165 → $450. That also turns emails automatic.
    Say confirm." The confirm card shows the same sentence.
 3. "Confirm." The touches log adds a line with a mic icon (an Operating touch; Training if it's
@@ -72,11 +76,11 @@ mode **off** (press S: the Stage button goes dark).
 **Say after:** "Stopping is instant. Anything that starts work, the firm reads back and waits for
 my own voice."
 **Never press Esc on `/ceo`:** it's STOP EVERYTHING, which also pauses email and invites, and the
-judge's memo in card 4 couldn't send. If it happens, Resume each kind in Standing orders
-("Resume…", then "Resume").
+judge's memo in card 4 couldn't send. If it happens, Resume email, calendar invites and voice
+screens in Standing orders ("Resume…", then "Resume"), and leave social posts paused.
 **If it fails** (a phrase isn't understood, the firm reads its list of example phrases back): in
-`/ceo`, Pause social posts only (not STOP EVERYTHING), then Approve on Team #7's card. The same
-two touches, clicked instead of spoken.
+`/ceo`, Pause social posts only (not STOP EVERYTHING), then Approve on the only card under
+approvals. The same two touches, clicked instead of spoken.
 
 ## Card 3b · 0:50–1:05 · HR shortlists, the human hires
 **Screen:** `/ceo`, the hiring shortlist (the CEO was emailed when HR shortlisted). The theater's
@@ -84,15 +88,16 @@ Hiring pane reads "Shortlist ready · waiting on CEO".
 **Say:** "HR ran a disclosed AI screen for a paid one-hour gig, a CPA to review our memos. The AI
 never hires and never declines. I do."
 **Do:** click Hire on the shortlisted candidate, then Hire again on the confirm row ("It sends the
-offer email"). Switch to the theater: the CEO's white cursor appears, the Operating count ticks up
+offer email"). Switch to the theater: the CEO's white cursor leaves its desk, the Operating count ticks up
 and the Hiring pane reads "1 hired". Then press S to turn stage mode back on (Stage button lit).
 
 ## Card 4 · 1:05–2:35 · Finale: a judge becomes a client
 **Screen:** `/talk` on the judge's phone or laptop, the theater on the projector in stage mode.
 **Say:** "Judge, you're a Delaware C-corp. Tell U-Tax your numbers. Make them up if you like."
-**Do:** the judge says yes to the transcription notice, answers four short questions, types an
-email into the box, and confirms the read-back. Stay quiet near the mic until the page says the
-intake is sent.
+**Do:** the judge says yes to the transcription notice and answers four short questions: by voice
+if the page offers it, or typed ("I agree, type instead") when it shows "Voice isn't available".
+Then the judge types an email into the box and confirms. Stay quiet near the mic until the page
+says the intake is sent.
 **Say, one line per department as its cursor moves:**
 1. Intake fills the fact cells: "Intake is onboarding you: every fact comes from your own answers."
 2. Tax searches and fills the sheet: "Tax is preparing it. The AI only points at the numbers;
@@ -102,9 +107,11 @@ intake is sent.
 4. Accounting types and sends: "Accounting releases the memo, and only after QA signs off. Our
    Chief of Staff handed it from desk to desk; no human touched it."
 **Payoff:** the memo lands in the judge's inbox in under 45 seconds, for example
-"$85,165 → $450". Shortly after, Intake drops a review-call block on the Calendar pane (calendar
-invites must already run on their own, or the block waits for a click) and the Phone pane shows
-"Memo checked on a cloud phone".
+"$85,165 → $450" (a real inbox needs AgentMail; on the local mail adapter, point at the theater's
+"✓ Sent" line instead). Shortly after, Intake drops a review-call block on the Calendar pane
+(calendar invites must already run on their own, or the block waits for a click). With Mobilerun,
+the Phone pane shows "Memo checked on a cloud phone"; on the local device adapter it shows the
+same words, so don't point at it then.
 **If it fails:** the judge emails the firm instead (the client inbox), and you narrate the same
 cursors. If the theater's live view breaks but the gateway still answers, click 16× and press
 Replay (the full-log replay, with the judge's case at the end). If the gateway or tunnel is down,
@@ -129,23 +136,29 @@ mattered. Educational estimates, not tax advice."
 **The login brief (card 1)**
 - [ ] After the evening before, don't open `/ceo` in the stage browser: the brief covers what
       happened since that browser's last visit. Do every `/ceo` test (sound check, voice) in a
-      **separate Chrome profile or incognito window**, and leave a minute before card 1 (the
-      gateway reuses a brief for 60 s)
+      **separate Chrome profile or incognito window**. Afterwards, wait a minute **and** let at
+      least one new event land before card 1 (the gateway reuses its last brief for 60 s, and
+      for as long as nothing new has happened)
 - [ ] If the stage browser opened `/ceo` anyway: on the `/ceo` page open DevTools, run
       `localStorage.removeItem("utax.ceo.lastSeen")` and `sessionStorage.removeItem("utax.ceo.token")`,
-      then **close the tab without reloading** (a reload signs back in and uses up the brief).
-      The brief then covers the whole log
+      then **close the tab without reloading**. The brief then covers the whole log
 
 **Trust, in this order** (`/ceo` Standing orders read "asks you first", "runs on its own" or
 "paused"; approving one action of a kind is what makes it run on its own)
 - [ ] Hiring first: an applicant's questionnaire mail is an email, and approving it makes email
       run on its own. Get a candidate shortlisted and waiting in `/ceo` (or skip card 3b and say why)
 - [ ] Calendar invites: approve one rehearsal invite, so card 4's review call books by itself
-- [ ] Social posts on "asks you first" or "runs on its own", not "paused"
-- [ ] Last, put email back to "asks you first" (the console has no button for it):
-      `curl -X POST <gateway>/api/trust -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"action_type":"email","state":"ASK"}'`.
-      Then let Team #7's case reach its memo, so the memo waits: it must be the **only** approval
-      waiting, or "approve the latest" picks another one
+- [ ] The `/talk` test run (10 AM) done now, before the next step
+- [ ] Social posts on "runs on its own" (Resume them if needed). On "asks you first", each new
+      post waits as an approval, and "approve the latest" could pick it
+- [ ] Last, put email back to "asks you first" (the console has no button for it). In Git Bash,
+      with `ADMIN_TOKEN` exported:
+      `curl -X POST <gateway>/api/trust -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"action_type":"email","state":"ASK"}'`
+      (in PowerShell use `curl.exe` and `$env:ADMIN_TOKEN`). Check that Standing orders now show
+      email "asks you first". Then let the staged case reach its memo, so the memo waits, and note
+      its Team number. No other client traffic until card 3a: any new email waits as an approval
+- [ ] Just before card 3a, say "what's pending" in the test profile: exactly one item, the staged
+      memo
 - [ ] After card 3a, check that Standing orders show email "runs on its own" (the approval earns
       it), or card 3b's hire mail and card 4's memo wait. If it doesn't, approve Team #7's memo
       on its card. Let Team #7's memo send before card 4
@@ -155,14 +168,16 @@ mattered. Educational estimates, not tax advice."
 - [ ] Card 2: the newest post open in a browser tab, and it's the firm's own (the gateway appended
       the Talk to U-Tax link)
 - [ ] Card 3a rehearsed in the separate profile with the **exact** phrases ("what's pending",
-      "stop posting", "approve the latest"), saying "cancel" at each readback, and "resume
-      posting" afterwards. If Chrome writes number words or sound-alikes, use the click fallback.
+      "stop posting", "approve the latest"), saying "cancel" at each approve readback. Then say
+      "resume posting" and "confirm", and check Standing orders show social posts running on
+      their own again. If Chrome writes number words or sound-alikes, use the click fallback.
       Hands-free **off**, the laptop's speaker low and away from the mic (the firm's own voice must
       not reach it)
 - [ ] The gateway voice: if `/api/tts` isn't live, the console uses the browser's voice. Don't say
       "ElevenLabs" on stage then
-- [ ] `/talk` open on a second device; mic permission granted; a test run done at 10 AM
-- [ ] Card 5 rehearsed: the full-log replay at 16× ends within about 20 s. If it doesn't, start it
-      earlier
+- [ ] `/talk` open on a second device; mic permission granted; check whether it offers voice or
+      typing, and brief the judge to match
+- [ ] Card 5 rehearsed: the full-log replay at 16× ends within about 20 s. If it doesn't, skip the
+      replay and point at the stage box's "Saved vs spent" instead
 - [ ] Backup: the 9 AM recording (or the demo video) queued, for when the gateway or tunnel is down
 - [ ] After the demo: resume social posts in `/ceo` (card 3a paused them)

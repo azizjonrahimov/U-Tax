@@ -22,6 +22,8 @@ because nothing has to happen on cue.
     written consent, and only as their masked label.
   - The DM draft in shot 2 must not name a real person (`recipient_label` describes them:
     "founder, Team #3 (met at kickoff)").
+  - Staged people are labelled on screen: shots 3 and 8 carry the caption "test client (teammate,
+    made-up company)", and shots 12–14 "test applicant (teammate)".
 - Each shot's **Proof** is the event or tool call behind it. Put it on screen as a small caption
   in the edit (for example `memo.sent · acct · 31 s after last fact`), with values copied from
   `/api/events`, never typed from memory.
@@ -33,7 +35,8 @@ because nothing has to happen on cue.
 
 Record shot 16 **last**, in a fresh Chrome profile or incognito window that has never opened
 `/ceo` (its brief then covers the whole log, the day included), and at least a minute after any
-other `/ceo` login (the gateway reuses a brief for 60 s).
+other `/ceo` login with at least one new event since (the gateway reuses its last brief for 60 s,
+and for as long as nothing new has happened).
 
 | # | Time | Screen | What happens | Voiceover | Proof (event or tool call) |
 |---|---|---|---|---|---|
@@ -70,7 +73,7 @@ through every department is the proof.
 | 9 | **Mobilerun** (`ADAPTER_DEVICE=mobilerun`; it also needs AgentMail) | `ADAPTER_DEVICE=local` renders the memo headlessly at phone size, but the Phone pane still reads "cloud phone", which would be untrue. Drop shot 9. |
 | 10 | **AgentMail** calendar (`ADAPTER_CALENDAR=agentmail`) | `ADAPTER_CALENDAR=local` writes the same `call.booked`. No invitation reaches an inbox, so don't show one. |
 | 11 | HubSpot for the CRM tag (`ADAPTER_CRM=hubspot`; optional) | `ADAPTER_CRM=local` still shows the stage tag. Don't say "HubSpot" over it. |
-| 12, 13 | **AgentMail** (the hiring inbox, the questionnaire mail and the CEO's email) | With `ADAPTER_MAIL=local`, from `backend/`: `python -m app.devtools inject --inbox hiring ../fixtures/hiring/01-applicant-ea.eml`, then a second mail from the same sender (`POST /api/dev/inject-email` with `inbox: "hiring"`) as the questionnaire answer. Without AgentMail there are no real mails to cut to, so stay on the theater's Hiring pane. |
+| 12, 13 | **AgentMail** (the hiring inbox, the questionnaire mail and the CEO's email) | With `ADAPTER_MAIL=local`, from `backend/`: `python -m app.devtools inject --inbox hiring ../fixtures/hiring/01-applicant-ea.eml`, then a second mail from the same sender (`POST /api/dev/inject-email` with `inbox: "hiring"`) as the questionnaire answer. Caption shots 12 and 13 "stand-in mail (dev inject)". Without AgentMail there are no real mails to cut to, so stay on the theater's Hiring pane. |
 | 14, 16 | **ElevenLabs** (`ADAPTER_VOICE=elevenlabs`, only on the D30 build with `POST /api/tts`; an older build won't start with that value): the firm's spoken readback and the brief | Keep `ADAPTER_VOICE=none`, and the page speaks with the browser's own voice (`speechSynthesis`). Listening is Chrome's speech recognition either way. If voice fails, click Hire: the touch shows `channel: "click"`, so say "one click", not "by voice". |
 | all | **Naïve** (`NAIVE_API_KEY`: the seven agents) | The local stand-in crew (`UTAX_DRIVER=local`) plays the same tool calls. Use it only for a rehearsal or a labelled fallback, never as "agents on Naïve" (the honesty rules above). |
 
@@ -95,7 +98,9 @@ through every department is the proof.
       credentials or API-key pages (shot 4 records the board view only). The theater shows masked
       labels only; `/ceo`'s shortlist also shows the applicant's own stated credentials, which is
       why shots 12–14 use a teammate. The inbox cuts (shots 8, 12 and 13) show the team's own test,
-      hiring and CEO addresses: blur them in the edit, and check every frame before export.
+      hiring and CEO addresses: blur them in the edit. For the X or LinkedIn cut (shot 2), open the
+      post signed out or crop to it, and blur other people's names, replies and sidebars. Check
+      every frame before export.
 
 **Theater**
 - [ ] Live shots: the theater live (the default with a gateway), speed 1×, the queue quiet (see
@@ -110,13 +115,19 @@ through every department is the proof.
       of that kind): social posts running on their own for shot 2 (Resume them if a live demo
       paused them), email and calendar invites running on their own for shots 8 and 10 (or the
       step waits for a click), and a candidate shortlisted before shot 14.
+- [ ] Record on a fresh event store (a new gateway data file) if a demo or rehearsal ran first.
+      Otherwise the Hiring pane counts the earlier applicants, the teammate isn't Candidate A, and
+      re-injecting a fixture is refused as a duplicate (fixed Message-IDs). Without a fresh store,
+      inject with a new `message_id` and `from` through `POST /api/dev/inject-email`, and caption
+      the counts from `/api/state` at recording time.
 
 **Voice (shots 14 and 16)**
-- [ ] Shot 16 recorded last, in a fresh profile or incognito window (above).
+- [ ] Shot 16 recorded last, in a fresh profile or incognito window, after a minute and a new
+      event (above).
 - [ ] Voice rehearsed in a separate profile with the exact phrases ("what's pending", "hire
       candidate A" or the label `/ceo` shows), saying "cancel" at the readback. If Chrome writes
       number words or sound-alikes, click Hire instead. Hands-free off, speaker low and away from
-      the mic so the firm's voice can't confirm itself. Never press Esc on `/ceo` (STOP
+      the mic so the firm's voice can't confirm itself; tap the mic before each phrase. Never press Esc on `/ceo` (STOP
       EVERYTHING).
 
 **Edit and export**
