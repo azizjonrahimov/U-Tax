@@ -6,12 +6,14 @@
 //
 // MOCK_VOICE=1 mints a fake Realtime session (the browser's WebRTC must be stubbed by the test);
 // otherwise /api/voice/session answers 503 voice_unavailable and the console falls back.
+// THEATER_TOKEN (default theater-test) may read state, events and the stream, as the projector does.
 // Dev-only extras: POST /api/dev/approval {summary, case_id} and POST /api/dev/block {case_id, reason}.
 
 import { createServer } from "node:http";
 
 const PORT = Number(process.env.PORT || 8020);
 const ADMIN = process.env.ADMIN_TOKEN || "admin-test";
+const THEATER = process.env.THEATER_TOKEN || "theater-test";
 const VOICE = process.env.MOCK_VOICE === "1";
 const TTL_MS = Number(process.env.PROPOSAL_TTL_MS || 60_000);
 const TYPES = ["email", "social_post", "calendar_invite", "voice_screen"];
@@ -152,6 +154,11 @@ function confirm(body) {
   return [200, { kind: "done", summary }];
 }
 
+function touchCounts() {
+  const n = (t) => events.filter((e) => e.type === t).length;
+  return { training: n("touch.training"), operating: n("touch.operating"), engineering: n("touch.engineering") };
+}
+
 function state() {
   return {
     last_event_id: events.length,
@@ -179,7 +186,27 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
   };
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
-  if (req.headers.authorization !== `Bearer ${ADMIN}`) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
+  // The theater token reads (state, events, stream), so the projector can be checked against this mock.
+  if (req.method === "GET" && url.searchParams.get("token") === THEATER && req.headers.authorization === undefined) {
+    if (url.pathname === "/api/state") return out(200, { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
+    if (url.pathname === "/api/events/stream") {
+      let after = Number(url.searchParams.get("after_id") || 0);
+      res.writeHead(200, { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      const pump = () => {
+        for (const e of events.filter((x) => x.id > after)) {
+          res.write(`id: ${e.id}\ndata: ${JSON.stringify(e)}\n\n`);
+          after = e.id;
+        }
+      };
+      pump();
+      const t = setInterval(pump, 300);
+      req.on("close", () => clearInterval(t));
+      return;
+    }
+  }
+  if (req.headers.authorization !== `Bearer ${ADMIN}` && !(req.method === "GET" && url.pathname === "/api/events" && url.searchParams.get("token") === THEATER)) {
+    return out(401, { error: { code: "unauthorized", message: "admin token required" } });
+  }
   if (body === null) return out(400, { error: { code: "bad_json", message: "bad JSON" } });
   const p = url.pathname;
   if (req.method === "GET" && p === "/api/state") return out(200, state());
