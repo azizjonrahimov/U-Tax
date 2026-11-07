@@ -9,6 +9,10 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- frontend · 0m · MERGED /ceo console: login brief, approvals, standing orders, hiring, blocked cases (272 tests); every page is done
+- backend · 10m · MERGED task 14: superseded approvals, carry out on resume, trust ASK/RESUME, token guard (871 tests)
+- backend · 1h · MERGED task 13: public /talk case cap, voice spend holds
+
 - backend · 0m · report refreshed (owner's 7 Saturday steps, full swap table); lane resting
 - frontend · 15m · MERGED slice 3: live + replay against the gateway, watchdog, finale (207 tests)
 - backend · 30m · MERGED task 10: HubSpot + Monid wired, buy_tool, outbox off the request path (807 tests)
@@ -31,6 +35,6 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | /talk (the finale), then /ceo; slice 3 live + replay merged | 0m |
-| backend | `backend/`, `fixtures/`, `db/` | done for tonight: all tasks merged (807 tests); resting, may rerun e2e | 0m |
+| frontend | `frontend/` | all pages merged (theater, /talk, /ceo); folding v1.7.8, then polish | 0m |
+| backend | `backend/`, `fixtures/`, `db/` | tasks 1-14 merged (871 tests); tiny task 15 (summary clipping) | 0m |
 | agents | `naive/` | done for tonight; resting until Naïve access Saturday (task 3) | 0m |

@@ -233,3 +233,7 @@ c. `/api/trust` accepts `ASK` and `RESUME` (back to the pre-pause state).
 d. Refuse to boot when `PUBLIC_MODE=event` (or `PUBLIC_TALK_URL` is https) and ADMIN_TOKEN or
    THEATER_TOKEN is empty.
 Mocked tests, quick /review, one READY.
+
+## Task 15 (tiny, 2026-11-07): approval summaries clip at a word boundary with "…"
+The frontend's /design-review saw "whether a foreign o" in /ceo. Use the same clip helper as
+subjects for approval.requested summaries and ceo.notified summaries.
