@@ -192,6 +192,19 @@ class FactCheck:
         return not self.missing
 
 
+# Contract §6: the R&D facts are optional, never required to finish a case, asked at most
+# once. One that can't be found or read is dropped (rnd_flag false, the conditional
+# {{rnd_note}}), never a reason to hold the required facts.
+RND_FACTS = ("gross_receipts", "years_with_receipts")
+_ZERO_WORDS = re.compile(r"\b(?:no|none|zero|nothing|nil|pre[- ]?revenue|no revenue)\b", re.I)
+
+
+def _zero_amount(quote: str) -> bool:
+    """ "no gross receipts yet, we're pre-revenue", "none", "zero": 0 (and no digit, so a
+    number the client did give is never read as nothing)."""
+    return not re.search(r"\d", quote) and _ZERO_WORDS.search(quote) is not None
+
+
 def _parse_fact(fact: str, quote: str) -> Any:
     if fact in ("authorized_shares", "issued_shares", "years_with_receipts"):
         return parse_shares(quote)
@@ -222,15 +235,22 @@ def check_facts(
             continue
         # Problems are fixed wording per fact: the agent's quote never reaches the client.
         if not quote_found(quote, texts):
+            if fact in RND_FACTS:
+                continue  # optional: dropped, never blocks the case
             out.missing.append(fact)
             out.problems.append(f"we couldn't find your {labels[fact]} in your email")
             continue
         try:
             value = _parse_fact(fact, quote)
         except ParseError:
-            out.missing.append(fact)
-            out.problems.append(f"your {labels[fact]} isn't one clear number")
-            continue
+            if fact in RND_FACTS:
+                if not _zero_amount(quote):
+                    continue  # optional: dropped, never blocks the case
+                value = 0
+            else:
+                out.missing.append(fact)
+                out.problems.append(f"your {labels[fact]} isn't one clear number")
+                continue
         natural = Decimal(value) / (100 if fact in ("gross_assets", "gross_receipts") else 1)
         if fact in ("authorized_shares", "issued_shares", "gross_assets") and _conflict(
             fact, natural, texts
