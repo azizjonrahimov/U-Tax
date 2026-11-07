@@ -111,7 +111,7 @@ Unverified:
 |---|---|---|
 | `NEXT_PUBLIC_API_URL` | `https://<tunnel-host>` | No trailing slash, and no `/api` (the pages add it). |
 | `NEXT_PUBLIC_THEATER_TOKEN` | the gateway's `THEATER_TOKEN` | Public by design: read-only, and it ends up in the page. It must be the same value as the gateway's, and never empty (event mode refuses an empty token). |
-| `NEXT_PUBLIC_ASSET_HOSTS` | the gateway's `PUBLIC_ASSET_HOSTS` | Comma-separated hosts. Without this, social images don't show on the theater. |
+| `NEXT_PUBLIC_ASSET_HOSTS` | the gateway's `PUBLIC_ASSET_HOSTS` | Comma-separated https hosts for other images. The gateway's own ad images (D31) need no entry: the theater trusts the origin it streams from. |
 | `NEXT_PUBLIC_SHOW_BLOCKED` / `NEXT_PUBLIC_SHOW_QUEUE` | leave unset (both default to on) | Set either to `0` to hide that card. |
 
    **Never** put `ADMIN_TOKEN`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY` or any other secret in Vercel. The CEO types the admin token at `/ceo`, where it stays in that browser tab only.
@@ -150,6 +150,31 @@ Use desktop Chrome on the laptop that will run the demo, with the mic you'll use
 4. Press **Esc**. You get "Paused everything…". Resume the kinds under Standing orders.
 
 If either page can't hear you at all: check Chrome's site permission (the lock icon → Microphone → Allow), and that the laptop isn't on a network that blocks Google's speech service. Both pages always work by typing and clicking.
+
+## The live CEO orders on the theater (D31, contract v1.11.1)
+
+- **Orders strip:** a band between the header and the panes, once the CEO gives an order.
+  - Each order is a card, and the firm's steps for it fill in one plain line at a time with a department badge: "Marketing made an ad image" (with a thumbnail), "posted to X", "HR found 3 public profiles", "HR emailed Candidate A with a call invite", "HR booked a 20-min call with Candidate A", "Intake followed up with Team #7 (memo check)".
+  - Above the cards, a row of desks lights up each department while its agent acts.
+- **How steps find their order:**
+  - By the `order_id` the gateway stamps.
+  - Without one, a D31 action (ad, post, HR, follow-up) can match a recent order that names its department. Case work (tax, memo, client calls, approvals) files only by `order_id`.
+  - The Chief of Staff's handoff joins only an order given in the last minute.
+  - Only the CEO's own words open a card.
+- **Reload:** a projector reloaded mid-order rebuilds its cards from the last 300 events (orders only; nothing replays on the panes).
+- **Stage mode:**
+  - The band slides open and shrinks when the camera focuses a pane.
+  - The cards have three fixed slots, so order numbers never shift.
+  - An order nobody acts on leaves after 2 minutes of log time. The night replay's "open the firm" shows briefly at the start, then the band closes.
+- **Images:** https hosts listed in `NEXT_PUBLIC_ASSET_HOSTS`, or anything on the gateway's own origin. Other http hosts and ports are refused. An image that fails to load disappears.
+- **Mock:** `scripts/mock-ceo-gateway.mjs`. A confirmed `/ceo` order (or `POST /api/dev/order {text}`) plays each department's steps with `order_id`, and an ad SVG is served at `/assets/ad_<n>.svg`.
+- **Checks:**
+  - `/review` ran one fix pass (7 specialists, the adversarial pass, Red Team and a browser smoke test), timeboxed. Every finding is fixed except one (below).
+  - 443 tests pass, including 17 regression tests, each shown failing on the pre-fix code.
+- **Open:** on the very first order, the CEO's cursor lands on the rail, because the band isn't on screen yet. From the second order on, it lands on "CEO orders".
+- **Unverified:**
+  - The real gateway (backend task 23 is merged) was not run with these pages; the payloads were checked against `perform.py`.
+  - The no-orders layout position after the four-row grid change was not measured in a browser.
 
 ## What the owner must do
 
