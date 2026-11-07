@@ -104,6 +104,8 @@ export function Talk() {
   const [mayHaveLanded, setMayHaveLanded] = useState(false);
   /** The last spoken answer was still being transcribed when the call ended. */
   const [lostAnswer, setLostAnswer] = useState(false);
+  /** The firm is full for today (v1.7.6): the gateway's sentence (it names the inbox); Send stays off. */
+  const [atCapacity, setAtCapacity] = useState<string | null>(null);
   /** Stream start: the last event id before our case opened (so we don't replay the night). */
   const [followFrom, setFollowFrom] = useState(0);
   /** The turns as of the last change: handlers read this, never a state updater with side effects. */
@@ -413,7 +415,8 @@ export function Talk() {
       go("following");
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
-      setError(friendlyError(status, e instanceof ApiError ? e.code : "network_error"));
+      setError(friendlyError(status, e instanceof ApiError ? e.code : "network_error", e instanceof ApiError ? e.message : ""));
+      if (e instanceof ApiError && e.code === "at_capacity") setAtCapacity(friendlyError(status, e.code, e.message)); // names where to write instead
       // Only a refusal of the content proves nothing was saved: the next try is a new request.
       // Anything else (429, timeout, network, 5xx) may follow a send that landed, so the same id
       // must come back for the same case, and the conversation is locked so nothing is silently dropped.
@@ -492,6 +495,7 @@ export function Talk() {
     setStreamDown(false);
     setMayHaveLanded(false);
     setLostAnswer(false);
+    setAtCapacity(null);
     setMode("typed");
     go("consent");
   };
@@ -619,7 +623,7 @@ export function Talk() {
                   aria-describedby="email-hint"
                   disabled={phase === "sending" || mayHaveLanded}
                 />
-                <button className="primary" type="submit" disabled={!ready || phase === "sending" || !HAS_GATEWAY}>
+                <button className="primary" type="submit" disabled={!ready || phase === "sending" || !HAS_GATEWAY || atCapacity !== null}>
                   {phase === "sending" ? "Sending…" : "Send to U-Tax"}
                 </button>
               </div>
@@ -630,6 +634,11 @@ export function Talk() {
                 <p className="error" role="alert">
                   {error}
                   {mayHaveLanded ? " It may already have reached U-Tax; sending again won't open a second case." : ""}
+                </p>
+              )}
+              {atCapacity && !error && (
+                <p className="error" role="status">
+                  {atCapacity}
                 </p>
               )}
               {mayHaveLanded && (

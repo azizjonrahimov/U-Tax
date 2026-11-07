@@ -236,4 +236,12 @@ describe("errors read as sentences", () => {
     [0, "network_error", /Can't reach U-Tax/],
     [500, "internal", /Something went wrong/],
   ])("%i %s", (status, code, re) => expect(friendlyError(status, code)).toMatch(re));
+
+  it("at capacity shows the gateway's own sentence (it names the inbox), never a retry", () => {
+    const msg = "U-Tax is at capacity today. Email clients@u-tax.app and the firm will reply by email.";
+    expect(friendlyError(429, "at_capacity", msg)).toBe(msg);
+    expect(friendlyError(429, "at_capacity", "")).toMatch(/fully booked/);
+    expect(friendlyError(429, "at_capacity", msg)).not.toMatch(/try again/);
+    expect(friendlyError(413, "too_large")).toMatch(/too much to send/);
+  });
 });
