@@ -50,6 +50,10 @@ MOBILERUN_RUN_USD = MOBILERUN_STEP_USD * MOBILERUN_MAX_STEPS
 # UNVERIFIED placeholders, deliberately on the high side: a Realtime mint is priced as one
 # whole /talk intake (a few minutes of audio in and out, capped at 600 output tokens a
 # response); a TTS brief as one short spoken digest (input is clipped to 4000 characters).
+# v1.10 §5c: ElevenLabs bills per character. UNVERIFIED placeholder on the high side
+# (Flash is about half a credit a character); booked with estimated: true.
+ELEVENLABS_USD_PER_1K_CHARS = Decimal("0.10")
+
 VOICE_USD = {
     "realtime": Decimal("0.30"),
     "tts": Decimal("0.02"),

@@ -303,7 +303,7 @@ def test_unknown_voice_adapter_fails_clearly():
     from app.gateway.settings import Settings
 
     with pytest.raises(AdapterNotReady):
-        build_port("voice", Settings(adapters={"voice": "elevenlabs"}))
+        build_port("voice", Settings(adapters={"voice": "sayit"}))  # elevenlabs is v1.10
     # openai without a key falls back to NoVoice (routes answer 503 voice_unavailable)
     assert type(build_port("voice", Settings(adapters={"voice": "openai"}))).__name__ == "NoVoice"
 

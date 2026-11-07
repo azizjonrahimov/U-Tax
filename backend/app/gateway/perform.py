@@ -391,6 +391,7 @@ class Gateway:
         self._public_cap_retry_at = 0.0  # task 13: next try of a failed at-capacity notice
         self._voice_pending: dict[str, int] = {}  # task 13: paid voice calls in flight
         self._voice_pending_usd = Decimal(0)
+        self._tts_talk_pending = 0  # v1.10 §5c: /talk TTS characters in flight
         # failed wake deliveries: (message, waker, attempt, due monotonic time)
         self._wake_retries: list[tuple[str, Callable[[str], None], int, float]] = []
 
@@ -599,6 +600,60 @@ class Gateway:
                 "cost_usd": str(VOICE_USD[kind]), "estimated": True})
         if result.status != "done":
             log.error("voice %s spend not booked after the call: %s", kind, result.error)
+
+    @staticmethod
+    def _tts_usd(provider: str | None, chars: int) -> Decimal:
+        """The estimate a TTS call holds while in flight and books once it answered."""
+        from app.gateway.pricing import ELEVENLABS_USD_PER_1K_CHARS, VOICE_USD
+
+        cost = (ELEVENLABS_USD_PER_1K_CHARS * chars / 1000 if provider == "elevenlabs"
+                else VOICE_USD["tts"])
+        return max(cost, Decimal("0.0001")).quantize(Decimal("0.0001"))
+
+    def reserve_tts(self, purpose: str, chars: int, provider: str | None = "elevenlabs"
+                    ) -> str | None:
+        """v1.10 §5c: hold a /api/tts call before the paid request, under the lock, so
+        concurrent calls can't all pass the same check. The hold is the call's own estimate
+        (per character on ElevenLabs). "budget" at SPEND_CAP_USD, "unbooked" when the log
+        can't be written, "talk_budget" when /talk's TTS_PUBLIC_CHARS_PER_DAY would be passed
+        (in-flight characters count). A None must be settled (settle_tts)."""
+        hold = self._tts_usd(provider, chars)
+        cap = self.settings.spend_cap_usd
+        with self._lock:
+            if cap is not None and self.state.spent_usd() + self._voice_pending_usd + hold > cap:
+                return "budget"
+            try:
+                self.store.ensure_writable()
+            except EventWriteError as err:
+                log.warning("tts refused, spend can't be booked: %s", err)
+                return "unbooked"
+            if purpose == "talk":
+                day = iso_ts(self._now())[:10]
+                used = self.state.tts_talk_chars_by_day.get(day, 0) + self._tts_talk_pending
+                if used + chars > self.settings.tts_public_chars_per_day:
+                    return "talk_budget"
+                self._tts_talk_pending += chars
+            self._voice_pending["tts"] = self._voice_pending.get("tts", 0) + 1
+            self._voice_pending_usd += hold
+        return None
+
+    def settle_tts(self, purpose: str, chars: int, provider: str, model: str, *,
+                   ok: bool) -> None:
+        """Release a reserve_tts hold (the same estimate); book it as cost.booked (chars in
+        tokens_in) only when the provider answered with audio."""
+        cost = self._tts_usd(provider, chars)
+        with self._lock:
+            if purpose == "talk":
+                self._tts_talk_pending = max(0, self._tts_talk_pending - chars)
+            self._voice_pending["tts"] = max(0, self._voice_pending.get("tts", 0) - 1)
+            self._voice_pending_usd = max(Decimal(0), self._voice_pending_usd - cost)
+            if not ok:
+                return
+            result = self.perform("book_spend", {
+                "provider": provider, "model": f"tts:{purpose}:{model}"[:120],
+                "tokens_in": chars, "cost_usd": str(cost), "estimated": True})
+        if result.status != "done":
+            log.error("tts spend not booked after the call: %s", result.error)
 
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The

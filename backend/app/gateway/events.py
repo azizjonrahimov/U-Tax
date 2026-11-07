@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system"}
-PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "hubspot", "mobilerun",
+PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "elevenlabs", "hubspot", "mobilerun",
              "apify", "monid", "google", "stripe", None}
 STATUSES = {"ok", "failed", "skipped"}
 

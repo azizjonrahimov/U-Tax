@@ -18,7 +18,7 @@ from app.gateway.settings import Settings
 SPONSORS = {
     "mail": ("agentmail",), "llm": ("openrouter", "openai"), "crm": ("hubspot",),
     "device": ("mobilerun",), "scrape": ("apify",), "toolbuy": ("monid",),
-    "voice": ("openai",), "calendar": ("agentmail", "google"), "social": ("naive",), "pay": ("stripe",),
+    "voice": ("openai", "elevenlabs"), "calendar": ("agentmail", "google"), "social": ("naive",), "pay": ("stripe",),
 }
 
 
@@ -147,6 +147,14 @@ def build_port(name: str, settings: Settings):
         from app.gateway.adapters.openai_voice import OpenAIVoice
 
         return OpenAIVoice(settings.openai_api_key)
+    if name == "voice" and choice == "elevenlabs":  # v1.10 §5c
+        if not settings.elevenlabs_api_key:  # the routes then answer 503 voice_unavailable
+            return local.NoVoice()
+        from app.gateway.adapters.elevenlabs_voice import ElevenLabsVoice
+
+        return ElevenLabsVoice(settings.elevenlabs_api_key,
+                               voice_id=settings.elevenlabs_voice_id,
+                               model=settings.elevenlabs_model)
     built = _sponsor(name, choice, settings)
     if built is not None:
         return built
