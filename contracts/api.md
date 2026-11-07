@@ -201,7 +201,12 @@ For Replay mode and catch-up. Ordered by `id`.
   - Records found unsure at boot have actor `system`.
   - `buy_tool`: a store outage before paying is `error` `store_unavailable`. A purchase
     that may already be charged is refused until the CEO resolves it.
-  - Known gaps (task 17b): `ADAPTER_TOOLBUY` stays `local` until 17b merges.
+  - v1.9.1 (task 17b): the body takes `episode?` (int ≥ 0, default 0; required for a later
+    episode), and the reply carries `episode`. A resolve for any episode other than the open
+    one answers 409 `wrong_status` ("check it in Monid's runs, then resend with episode: N").
+    A console must never auto-retry with the N from that refusal. A resolve of a key that's
+    already bought answers `not_found` "already bought". A charge under $0.0001 is booked as
+    $0.0001.
 - `POST /api/candidates/{candidate_id}/decision` `{decision: "hire"|"decline"}` (admin) →
   `hr.hired` / `hr.declined` with actor `ceo`, a `touch.operating`, and the `hr-hired` /
   `hr-declined` mail to the candidate (trust type `email`). `/ceo` lists **every screened
@@ -540,6 +545,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.9.1 (2026-11-07, backend 17b): resolve-purchase `episode`; Monid hold lifted.
 
 - v1.9 (2026-11-07, design D29): §6b-bis, the gateway resolves Naïve data-leak confirms (allowlist: board + the seat's own utax tools; otherwise deny); event `naive.confirm`.
 
