@@ -44,7 +44,9 @@ class WakeFailed(RuntimeError):
 class NaiveWaker:
     def __init__(self, api_key: str, api_base: str = "https://api.vetta.sh", *,
                  transport: httpx.BaseTransport | None = None, timeout: float = 8.0,
-                 clock=time.monotonic) -> None:
+                 clock=time.monotonic, trigger_of=None) -> None:
+        # 22b: message -> the id of the event that triggered it (Gateway.wake_trigger)
+        self._trigger_of = trigger_of
         # short: wakes run on request threads and at boot; a hung Naive must not hold them
         self._http = httpx.Client(
             base_url=_api_root(api_base), timeout=httpx.Timeout(timeout, connect=3.0),
@@ -55,7 +57,7 @@ class NaiveWaker:
         self.agent_id: str | None = None
         # wake message -> (agent id, key) of its undelivered attempt: a new agent, a new key
         # (the same key with a different body is a 409 at Naive)
-        self._keys: dict[str, tuple[str, str]] = {}
+        self._keys: dict[str, tuple[tuple[str, int | None], str]] = {}
         self._clock = clock
         self._down_until = 0.0
 
@@ -106,14 +108,19 @@ class NaiveWaker:
             raise WakeFailed(f"Naïve unreachable: {exc}") from exc
         if not agent_id:
             raise WakeFailed("no chief-of-staff agent in Naïve (naive up not run?)")
+        once = message.startswith(ONCE_PREFIXES)
+        # 22b: a once-per-entity wake is keyed on the event that triggered it: a client's
+        # second email on an open case starts a new session; a restart's boot wake dedupes
+        trigger = self._trigger_of(message) if once and self._trigger_of else None
         with self._lock:
             held = self._keys.get(message)
-            if held is None or held[0] != agent_id:
-                if message.startswith(ONCE_PREFIXES):
-                    digest = hashlib.sha256(f"{agent_id}|{message}".encode()).hexdigest()[:32]
-                    held = (agent_id, f"utax-wake:{digest}")
+            if held is None or held[0] != (agent_id, trigger):
+                if once:
+                    digest = hashlib.sha256(
+                        f"{agent_id}|{message}|{trigger}".encode()).hexdigest()[:32]
+                    held = ((agent_id, trigger), f"utax-wake:{digest}")
                 else:
-                    held = (agent_id, f"utax-wake:{uuid.uuid4()}")
+                    held = ((agent_id, trigger), f"utax-wake:{uuid.uuid4()}")
                 self._keys[message] = held
             key = held[1]
         try:

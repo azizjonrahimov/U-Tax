@@ -208,3 +208,54 @@ def test_the_stamped_chief_of_staff_wins_and_an_archived_one_is_skipped():
     fake = FakeNaive(agents=agents)
     waker_for(fake)("New case case_1")
     assert fake.posts[0]["agent_id"] == "agt_ours"
+
+
+# ---------------------------------------------------------------- 22b
+
+
+def test_a_second_email_on_an_open_case_starts_a_new_session(h):
+    # live: a reply on an open INTAKE_PENDING case woke "New case case_1" again; the stable
+    # key made Naive replay the first session and nobody read the reply
+    fake = FakeNaive(gw=h.gw)
+    waker = NaiveWaker("nk_test", transport=httpx.MockTransport(fake),
+                       trigger_of=h.gw.wake_trigger)
+    h.gw.on_wake(waker)
+    mail = {"from": "founder@team9.dev", "subject": "Delaware tax",
+            "body": "We're a Delaware C-corp with 10,000,000 shares."}
+    h.ok("inject_email", **mail)
+    h.ok("inject_email", **{**mail, "body": "Also: 8,000,000 issued, $500k in assets."})
+    new_case = [p for p in fake.posts if p["message"] == "New case case_1"]
+    assert len(new_case) >= 2 and len({p["key"] for p in new_case}) == len(new_case)
+
+
+def test_a_restarts_boot_wake_still_dedupes_on_the_same_trigger(h):
+    fake = FakeNaive()
+    h.new_case()
+    first = NaiveWaker("nk_test", transport=httpx.MockTransport(fake),
+                       trigger_of=h.gw.wake_trigger)
+    first("New case case_1")
+    gw = h.restart()
+    again = NaiveWaker("nk_test", transport=httpx.MockTransport(fake),
+                       trigger_of=gw.wake_trigger)
+    again("New case case_1")  # the boot wake: no new mail since
+    assert fake.posts[0]["key"] == fake.posts[1]["key"]
+
+
+def test_a_new_applicant_wake_follows_the_applicants_mail(h):
+    fake = FakeNaive(gw=h.gw)
+    triggers = {"New applicant cand_1": 5}
+    waker = NaiveWaker("nk_test", transport=httpx.MockTransport(fake),
+                       trigger_of=triggers.get)
+    waker("New applicant cand_1")
+    triggers["New applicant cand_1"] = 9  # a later applicant mail
+    waker("New applicant cand_1")
+    assert fake.posts[0]["key"] != fake.posts[1]["key"]
+
+
+def test_the_gateway_names_each_wakes_trigger(h):
+    case_id = h.new_case()
+    case = h.gw.state.cases[case_id]
+    assert h.gw.wake_trigger(f"New case {case_id}") == case.last_inbound_id > 0
+    assert h.gw.wake_trigger(f"FAST PATH {case_id}") == case.last_inbound_id
+    assert h.gw.wake_trigger("New case case_99") is None
+    assert h.gw.wake_trigger("CEO order_3: hello") is None

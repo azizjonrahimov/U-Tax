@@ -512,6 +512,20 @@ class Gateway:
 
     HIDDEN = "[hidden: flagged by QA]"
 
+    def wake_trigger(self, message: str) -> int | None:
+        """22b: the event a once-per-entity wake answers. "New case X" / "FAST PATH X": the
+        case's latest inbound mail or voice; "New applicant X": the latest applicant mail.
+        A second email on an open case is a new trigger (a new Naive session); a restart's
+        boot wake finds the same one (Naive dedupes it)."""
+        kind, _, entity = message.rpartition(" ")
+        with self._lock:
+            if kind in ("New case", "FAST PATH"):
+                case = self.state.cases.get(entity)
+                return case.last_inbound_id if case is not None else None
+            if kind == "New applicant":
+                return (self.state.candidates.get(entity) or {}).get("last_event_id")
+        return None
+
     def flagged_injection(self, case_id: str | None) -> bool:
         case = self.state.cases.get(case_id) if case_id else None
         return case is not None and "possible_injection" in case.flags
