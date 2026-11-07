@@ -214,3 +214,12 @@ Add to task 9 (contract v1.7.1, from the frontend's slice 3 review):
 2. v1.7.4 bug: projections and the digest period sum every cost_usd except tool.bought. Sum
    **cost.booked only** (contract §4). Add a test with a cost-carrying law.searched that must
    not be counted.
+
+## Task 13: protect the overnight run from public /talk floods (2026-11-07)
+a. Daily cap on public customer cases from `/api/voice` (`PUBLIC_CASES_PER_DAY`, default 50).
+   At the cap, answer 429 code `at_capacity` with a friendly message naming the clients inbox
+   address, and send the CEO one `ceo.notified` (reason `paused`, "public /talk at capacity").
+c. A retried `request_id` and a `bad_input` refusal don't consume the Send limiter or the cap.
+d. Book estimated `cost.booked` for each Realtime mint and each TTS brief (price table in
+   code, `estimated: true`), so SPEND_CAP_USD sees voice spend.
+(b, the shared venue IP, is accepted.) Mocked tests. One READY, then rest.
