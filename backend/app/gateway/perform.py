@@ -370,8 +370,10 @@ class Gateway:
             # v1.9 §6b-bis: Naïve's data-leak confirms (app/naive_confirm.py), never an agent's
             "naive_confirm": self._naive_confirm,
             "naive_question": self._naive_question,
+            "naive_notice": self._naive_notice,
         }
         self._naive_noticed: dict[tuple[str, str], datetime] = {}
+        self._naive_questions: set[str] = set()  # notices tried this process (mailed or not)
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
         # reads that touch a slow port run before the lock is taken (contract §6f)
@@ -2988,15 +2990,17 @@ class Gateway:
     def _naive_confirm(self, args: dict) -> dict:
         """app/naive_confirm.py answered a Naïve confirm: log it once per tool call, and tell
         the CEO about a deny (at most once per agent and tool every 10 minutes)."""
+        session_id = _str(args, "session_id", max_len=80)
         call_id = _str(args, "tool_call_id", max_len=120)
-        key = f"naive.confirm:{call_id}"
+        # per session: a provider's call ids ("call_0") may repeat across sessions
+        key = f"naive.confirm:{session_id}:{call_id}"
         if self._done_from(key) is not None:
             return {"duplicate": True}
         agent = _one_of(args, "agent", AGENTS)
         tool = self._naive_tool(args)
         decision = _one_of(args, "decision", ("allow", "deny"))
         self._emit([NewEvent(type="naive.confirm", actor="system", payload={
-            "session_id": _str(args, "session_id", max_len=80), "agent": agent, "tool": tool,
+            "session_id": session_id, "agent": agent, "tool": tool,
             "decision": decision, "read_people": args.get("read_people") is True},
             idempotency_key=key)])
         if decision == "deny":
@@ -3005,20 +3009,36 @@ class Gateway:
                 self._naive_noticed[(agent, tool)] = self._now()
                 self._notify_ceo("flagged", clip(f"Naïve tool denied: {tool}", 120),
                                  f"Naïve asked to run {tool}; denied",
-                                 key=f"ceo:naive-deny:{call_id}")
+                                 key=f"ceo:naive-deny:{session_id}:{call_id}")
         return {"decision": decision}
 
     def _naive_question(self, args: dict) -> dict:
         """§6b-bis: an agent's ask_operator question is never answered by the gateway; the
         CEO hears about it once."""
+        session_id = _str(args, "session_id", max_len=80)
         call_id = _str(args, "tool_call_id", max_len=120)
-        key = f"ceo:naive-question:{call_id}"
-        if self._done_from(key) is not None:
-            return {"duplicate": True}
+        key = f"ceo:naive-question:{session_id}:{call_id}"
+        if key in self._naive_questions or self._done_from(key) is not None:
+            return {"duplicate": True}  # once per question, mailed or not (no retry storm)
         agent = _one_of(args, "agent", AGENTS)
+        self._naive_questions.add(key)
+        last = self._naive_noticed.get((agent, "?question"))
+        if last is not None and self._now() - last < self.NAIVE_NOTICE_EVERY:
+            return {"noticed": False}  # an agent asking in a loop: one mail per 10 minutes
+        self._naive_noticed[(agent, "?question")] = self._now()
         self._notify_ceo("flagged", f"Naïve question from {agent}",
                          f"An agent ({agent}) asked a question in Naïve; answer it there",
                          key=key)
+        return {"noticed": True}
+
+    def _naive_notice(self, args: dict) -> dict:
+        """app/naive_confirm.py: a setup problem (the key refused, agents missing), once."""
+        key = _str(args, "key", max_len=200)
+        if key in self._naive_questions or self._done_from(key) is not None:
+            return {"duplicate": True}
+        self._naive_questions.add(key)
+        self._notify_ceo("flagged", clip(_str(args, "subject", max_len=200), 120),
+                         clip(_str(args, "summary", max_len=600), 500), key=key)
         return {"noticed": True}
 
     def _ceo_confirm(self, args: dict) -> dict:
