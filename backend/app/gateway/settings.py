@@ -68,6 +68,7 @@ class Settings:
     public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"
+    naive_confirm: bool = True  # v1.9 §6b-bis: answer Naïve's confirms (UTAX_NAIVE_CONFIRM=off)
     # the identity whose social workspace posts: its id (idn_...) or, as the agents config
     # names it, "utax-mkt". Whether the {id} path takes a name is UNVERIFIED: use the idn_
     # id from `naive identity list` if a post answers 404.
@@ -136,6 +137,7 @@ class Settings:
             monid_api_key=_env("MONID_API_KEY"),
             naive_api_key=_env("NAIVE_API_KEY"),
             naive_api_base=_env("NAIVE_API_BASE") or "https://api.vetta.sh",
+            naive_confirm=_env("UTAX_NAIVE_CONFIRM").lower() != "off",
             naive_social_identity=_env("NAIVE_SOCIAL_IDENTITY"),
             public_asset_hosts=frozenset(h.strip().lower() for h in
                                          _env("PUBLIC_ASSET_HOSTS").split(",") if h.strip()),
