@@ -4,7 +4,7 @@
 // here, kept only in this tab, sent only as a Bearer header), hears and reads the login brief,
 // and makes the calls only a human makes: approvals, standing orders, hiring, blocked cases.
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
 import { briefAudioUrl, fetchAllEvents, type Endpoints } from "@/theater/live";
@@ -27,7 +27,6 @@ import {
   outdatedApprovals,
   parseBrief,
   readableSummary,
-  supersededBy,
   readLastSeen,
   STAGE_LABEL,
   TOKEN_KEY,
@@ -38,14 +37,14 @@ import {
   type Console,
   type LogView,
 } from "@/ceo/ceo";
+import { announceAgentAudio, CeoVoice } from "./CeoVoice";
+import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
 
 const HAS_GATEWAY = Boolean(process.env.NEXT_PUBLIC_API_URL);
-const API = `${API_URL}/api`;
 /** Endpoints for the shared URL builders: the token never goes in a URL here (it rides the header). */
 const NO_QUERY_TOKEN: Endpoints = { base: API_URL, token: "" };
 const POLL_MS = 4000;
-const REQUEST_MS = 15000;
 /** Data older than this is marked stale in the header. */
 const STALE_MS = 15000;
 
@@ -77,56 +76,32 @@ const subscribeToken = (l: () => void) => {
 const noToken = () => null;
 
 const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
+/** The brief, read by the browser. Voice mode counts it as agent audio (and mutes its mic) while it plays. */
+let sayTurn = 0;
+let sayTimer: ReturnType<typeof setTimeout> | undefined;
 function say(text: string) {
   if (!hasSpeech()) return;
   window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  clearTimeout(sayTimer);
+  const turn = ++sayTurn; // only this playback's end (or stall) may say the brief stopped
+  const u = new SpeechSynthesisUtterance(text);
+  announceAgentAudio("brief", true);
+  u.onend = u.onerror = () => {
+    if (turn !== sayTurn) return;
+    clearTimeout(sayTimer);
+    announceAgentAudio("brief", false);
+  };
+  // A stalled utterance must not keep the voice mic muted forever: silence it, then say it stopped.
+  sayTimer = setTimeout(() => {
+    if (turn !== sayTurn) return;
+    if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
+    announceAgentAudio("brief", false);
+  }, Math.min(120_000, 3000 + text.split(/\s+/).length * 450));
+  window.speechSynthesis.speak(u);
 }
 const hush = () => {
   if (hasSpeech()) window.speechSynthesis.cancel();
 };
-
-/** An admin request: Bearer header, a timeout, and contract errors as ApiError. */
-async function authJson<T>(token: string, url: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  headers.set("Authorization", `Bearer ${token}`);
-  if (init.body != null) headers.set("Content-Type", "application/json");
-  let r: Response;
-  try {
-    r = await fetch(url, { cache: "no-store", ...init, headers, signal: AbortSignal.timeout(REQUEST_MS) });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === "TimeoutError") throw new ApiError(0, "timeout", "timed out");
-    throw new ApiError(0, "network_error", e instanceof Error ? e.message : "network error");
-  }
-  const body: unknown = await r.json().catch(() => null);
-  if (!r.ok) {
-    const top = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-    const err = typeof top.error === "object" && top.error !== null ? (top.error as Record<string, unknown>) : {};
-    throw new GatewayError(
-      r.status,
-      typeof err.code === "string" ? err.code : "http_error",
-      typeof err.message === "string" ? err.message : `HTTP ${r.status}`,
-      { ...top, ...err }, // extra fields (v1.7.8 superseded: approval_id, superseded_by), wherever the gateway puts them
-    );
-  }
-  return body as T;
-}
-
-/** A gateway refusal with its extra fields. */
-class GatewayError extends ApiError {
-  constructor(status: number, code: string, message: string, readonly details: Record<string, unknown>) {
-    super(status, code, message);
-  }
-}
-
-/** The newer approval after a 409 superseded: from the body when the gateway sends it, else from the message. */
-function newerApproval(e: ApiError): string | null {
-  if (e instanceof GatewayError && "superseded_by" in e.details) {
-    const by = e.details.superseded_by;
-    return typeof by === "string" && /^apr_[A-Za-z0-9_-]{1,40}$/.test(by) ? by : null;
-  }
-  return supersededBy(e.message);
-}
 
 /** The rows a confirm can belong to, from fresh data. */
 function rowKeys(st: Console | null, log: LogView): Set<string> {
@@ -192,6 +167,8 @@ export function Ceo() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrl = useRef<string | null>(null);
   const audioSeq = useRef(0);
+  /** Voice mode's ear on the log: each refresh hands it the new events (hands-free speaks approvals and blocks). */
+  const voiceFeed = useRef<((events: readonly UTaxEvent[], reset: boolean) => void) | null>(null);
 
   const stopAudio = useCallback(() => {
     audioSeq.current += 1;
@@ -200,6 +177,9 @@ export function Ceo() {
     if (audioUrl.current) URL.revokeObjectURL(audioUrl.current);
     audioUrl.current = null;
     hush();
+    sayTurn += 1; // a stopped brief's own end and stall timer are void
+    clearTimeout(sayTimer);
+    announceAgentAudio("brief", false);
   }, []);
 
   const signOut = useCallback(
@@ -256,6 +236,8 @@ export function Ceo() {
         audioUrl.current = URL.createObjectURL(blob);
         const a = new Audio(audioUrl.current);
         audioRef.current = a;
+        a.onended = a.onpause = a.onerror = () => announceAgentAudio("brief", false);
+        announceAgentAudio("brief", true);
         await a.play();
       } catch {
         if (current()) say(b.text); // no voice key (503), or autoplay blocked: the browser reads it
@@ -271,7 +253,9 @@ export function Ceo() {
       try {
         const st = consoleFromState(await authJson<unknown>(tok, `${API}/state`));
         if (mine !== session.current) return;
+        let reset = false;
         const restart = () => {
+          reset = true;
           // Ids are reused after a reset: the old rows go off screen right away, before the reload.
           logRef.current = emptyLog();
           setLog(logRef.current);
@@ -294,6 +278,7 @@ export function Ceo() {
         }
         logRef.current = foldLog(logRef.current, events as UTaxEvent[]);
         setLog(logRef.current);
+        voiceFeed.current?.(events as UTaxEvent[], reset);
         if (st) setView(st);
         // A confirm whose row is gone (decided elsewhere, unblocked, reloaded) must not come back armed.
         setConfirm((c) => (c && !rowKeys(st, logRef.current).has(c.key) ? null : c));
@@ -441,6 +426,14 @@ export function Ceo() {
 
   const ask = (c: Confirm) => setConfirm(c);
 
+  /** Voice mode changed something: refresh the lists now, in order with the poll. */
+  const refreshAfterVoice = useCallback(() => {
+    if (token) void refreshNow(session.current, token);
+  }, [token, refreshNow]);
+  const voiceSignOut = useCallback((why: string) => signOut(why), [signOut]);
+  const caseNames = useMemo(() => new Map(view?.cases.map((c) => [c.caseId, c.name]) ?? []), [view]);
+  const flaggedCases = useMemo(() => new Set(view?.cases.filter((c) => c.flagged).map((c) => c.caseId) ?? []), [view]);
+
   // ---------------------------------------------------------------- views
 
   if (!token) {
@@ -494,7 +487,7 @@ export function Ceo() {
   const outdated = outdatedApprovals(pending);
   const candidates = view?.candidates ?? [];
   const toDecide = candidates.filter((c) => canDecide(c.stage)).length;
-  const names = new Map(view?.cases.map((c) => [c.caseId, c.name]) ?? []);
+  const names = caseNames;
   const stale = updatedAt !== null && now - updatedAt > STALE_MS;
   const working = (key: string) => busy === key;
 
@@ -541,6 +534,7 @@ export function Ceo() {
         <p className="sr-only" role="status" aria-live="polite">
           {announce}
         </p>
+        <CeoVoice key={token} token={token} refresh={refreshAfterVoice} signOut={voiceSignOut} feedRef={voiceFeed} names={caseNames} flagged={flaggedCases} />
         {actionError && (
           <p className="error banner" role="alert">
             {actionError}{" "}

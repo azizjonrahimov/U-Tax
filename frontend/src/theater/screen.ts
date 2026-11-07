@@ -52,6 +52,8 @@ export interface LogLine {
   ts: string;
   text: string;
   kind: string;
+  /** v1.8: the CEO gave this touch by voice (the rail shows a mic). */
+  voice?: boolean;
 }
 
 export interface ScreenState {
@@ -130,8 +132,9 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
   const sheet = (fn: (sh: SheetView) => SheetView) => withCase((v) => ({ ...v, sheet: fn(v.sheet) }));
   const cell = (key: string, fn: (c: Cell) => Cell) =>
     sheet((sh) => ({ ...sh, cells: { ...sh.cells, [key]: fn(own(sh.cells, key) ?? { text: "" }) } }));
-  const log = (kind: string) => {
-    s.rail = { ...s.rail, log: [...s.rail.log, { eventId: step.eventId, ts: step.ts, text, kind }].slice(-MAX_LOG) };
+  const log = (kind: string, voice = false) => {
+    const line: LogLine = voice ? { eventId: step.eventId, ts: step.ts, text, kind, voice } : { eventId: step.eventId, ts: step.ts, text, kind };
+    s.rail = { ...s.rail, log: [...s.rail.log, line].slice(-MAX_LOG) };
   };
 
   const [area, sub, ...rest] = step.target.split(".");
@@ -283,7 +286,7 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
       } else {
         const done = str(meta.approval_id);
         s.rail = { ...s.rail, pending: done ? s.rail.pending.filter((p) => p.approvalId !== done) : s.rail.pending };
-        log(str(meta.kind) ?? "touch");
+        log(str(meta.kind) ?? "touch", meta.channel === "voice");
       }
       break;
     case "trust":

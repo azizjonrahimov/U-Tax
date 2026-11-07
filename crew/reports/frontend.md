@@ -45,13 +45,47 @@ Unverified:
 | `/talk` | 08e9467 |
 | `/ceo` | da17c31 (HEAD only; f42ea0e alone doesn't compile, 1a2320b repairs it) |
 | `/ceo` v1.7.8 (RESUME, 409 superseded) | 2ceccf6 |
-| Stylesheet pass and clock polish | 80df2c2 (this READY) |
+| Stylesheet pass and clock polish | 80df2c2 |
+| `/ceo` voice mode (v1.8 to v1.8.5, design D28) | this READY (HEAD only: the first "wip" commit 95d7510 doesn't compile alone) |
+
+## `/ceo` voice mode (contract v1.8 to v1.8.5)
+
+- **Inputs:** Talk (tap or hold), Hands-free, and STOP EVERYTHING (button or Esc, no confirm). The Realtime session is minted with `mode: "ceo"`. Without a key, or without WebRTC, it falls back to browser speech or typing through `/api/ceo/command`, with answers read aloud. The theater rail shows a mic on voice touches.
+- **Confirm rules, in code** (`frontend/src/ceo/voice.ts`, 110 tests):
+  - A proposal is confirmed only by the CEO's own words, typed words, or a click. Model output never confirms.
+  - The grammar is identical to the gateway's (v1.8.4/v1.8.5): the whole utterance must be a confirm phrase; never a question, an echo, the readback's own words, or a non a-z letter.
+  - Spoken words count only from speech that started:
+    - after the readback was heard in full: the model's reply must carry it in order, with the same verb, figures, targets and status words, and must not be cut off;
+    - outside every stretch of agent audio (the model, the browser's voice, the brief), plus an 800 ms echo tail.
+  - Otherwise the card is click or typed only, and says so.
+- **STOP:**
+  - It fences anything already in flight: no new card, no `response.create`, and a confirm that lands during STOP is paused again.
+  - Its touch is sent with `channel: "click"`. Backend 18b honours it; before that, the gateway logged "voice".
+- **Checks:**
+  - `/qa` found and fixed 3 issues (`ISSUE-001` was High: a spoken confirm never left the console).
+  - `/design-review` found and fixed 3.
+  - `/review` ran 3 cycles: 7 specialists, the adversarial pass and Red Team each cycle. It found 11 CRITICALs, all fixed and checked in the browser. It stopped at the cycle cap without converging.
+  - Open Lows:
+    - Ceo.tsx and CeoVoice share one `speechSynthesis` queue: the brief's `cancel()` cuts a voice line. This fails safe: the card stays click-only.
+    - A non-busy Realtime error clears the "response running" flag. It recovers via `wantResponse`.
+    - A card from a typed "confirm" shows 58 s although the gateway's proposal may be older. The gateway's 409 still rules.
+    - The mock gateway does nothing for unblock, decide and order.
+- **Tested against the real gateway routes** (main's backend, local driver, no OpenAI key): typed proposals, "I can't confirm that", typed and clicked confirms, the gateway's `confirm` answer after a reload, "stop everything" with a card open, and Esc.
+- **Unverified:**
+  - The live Realtime leg. There was no `OPENAI_API_KEY`; WebRTC was stubbed in the browser and the event order follows the docs.
+  - Whether a real model's reply transcript carries the readback closely enough to arm cards by voice. If it doesn't, cards stay click or typed only, which fails safe.
+  - Echo levels in the venue.
+  - Browser `SpeechRecognition` on real audio.
 
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
 - Set `NEXT_PUBLIC_ASSET_HOSTS` to the gateway's `PUBLIC_ASSET_HOSTS`, or social images won't show.
 - Give the gateway an `OPENAI_API_KEY` for voice on `/talk` (without it, `/talk` types), and test voice once on the venue network. If WebRTC is blocked, the page falls back to typed chat after 15 s.
+- Test `/ceo` voice once with the key, on the projector speakers:
+  - Say "approve the latest", let the agent read the proposal, then say "confirm".
+  - If the card says "U-Tax didn't read the whole proposal", the agent paraphrased the readback. Tighten `naive/prompts/ceo-voice.md` ("read the proposal word for word") or confirm by click.
+  - Prefer a headset mic in the room. Hands-free on open speakers is guarded, but any voice in the room can still say "confirm" after a readback.
 - Stale local servers I started early in the night and couldn't stop (I wasn't permitted to kill processes): ports 3000, 3100, 3200, 3300 and 8010. Stop them by PID before the event.
 
 ## Lesson
