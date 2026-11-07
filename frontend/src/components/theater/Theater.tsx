@@ -623,11 +623,14 @@ export function Theater() {
         if (label && label.right < r.left) {
           // Rail card: in the gap between "Clients saved" and the figure, on the figure's line.
           const step = clamp((r.left - label.right - 16) / AGENTS.length, 12, 26);
-          const x0 = r.left - 8 - step * AGENTS.length;
+          // Never on top of the "Clients saved" label, even when the gap is narrow.
+          const x0 = Math.max(label.right + 6, r.left - 8 - step * AGENTS.length);
           AGENTS.forEach(([id], k) => place(id, x0 + step * k, r.top + r.height / 2 - 6));
         } else {
           // Stage box: a row just under the figure.
-          AGENTS.forEach(([id], k) => place(id, r.left + 26 * k, r.bottom + 8));
+          // Kept on screen when the figure sits near the right edge.
+          const x0 = Math.max(8, Math.min(r.left, window.innerWidth - 26 * AGENTS.length - 24));
+          AGENTS.forEach(([id], k) => place(id, x0 + 26 * k, r.bottom + 8));
         }
         setFinale((f) => (f ? { ...f, lined: true } : f));
       }
@@ -639,7 +642,7 @@ export function Theater() {
       }
       if (!alive) return;
       await realSleep(2400);
-      if (alive) setFinale((f) => (f ? { ...f, banner: "" } : f));
+      if (alive) setFinale((f) => (f ? { ...f, banner: "", lined: false } : f)); // name tags come back with the banner gone
     };
 
     (async () => {
