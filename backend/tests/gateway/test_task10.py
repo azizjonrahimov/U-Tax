@@ -204,3 +204,120 @@ def test_buy_tool_is_on_mcp_for_mkt_only():
 
     assert TOOL_ACTORS["buy_tool"] == ("mkt",) and "buy_tool" in TOOLS
     assert TOOLS["buy_tool"]["inputSchema"]["required"] == ["tool", "input", "key"]
+
+
+@pytest.mark.parametrize("depth", [100, 990])
+def test_a_deep_buy_input_is_refused_before_an_intent(h, depth):
+    # task 16: 990 levels of [[...]] fit in BUY_INPUT_MAX; the recursive email walk then
+    # raised RecursionError after the intent was written (it read as "may be charged")
+    port = monid()
+    h.gw.ports.toolbuy = port
+    puts = []
+    real_put = h.gw._buy_intents.put
+    h.gw._buy_intents.put = lambda k, v: (puts.append(k), real_put(k, v))
+    data: object = "x"
+    for _ in range(depth):
+        data = [data]
+    r = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"query": data}, "key": "deep"},
+                     actor="mkt")
+    assert r.status == "refused" and "nest at most 32" in r.error["message"]
+    assert puts == [] and port.calls == []  # refused by the gateway: no intent, ever
+    assert "tool.bought" not in h.types()
+
+
+def test_an_unexpected_check_failure_before_sending_is_not_unsure(h):
+    # task 16 review: any exception before Monid is called proves nothing was charged; it must
+    # be a refusal (intent cleared), never an intent left to replay as "may be charged"
+    from app.gateway.adapters import monid as monid_module
+
+    port = monid()
+    h.gw.ports.toolbuy = port
+
+    def broken(_):
+        raise TypeError("boom")
+
+    real = monid_module._has_email
+    monid_module._has_email = broken
+    try:
+        r = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"query": "q"}, "key": "x1"},
+                         actor="mkt")
+    finally:
+        monid_module._has_email = real
+    assert r.status == "refused" and "could not be checked" in r.error["message"]
+    assert port.calls == [] and not port._inflight and not port._unsure
+    assert h.gw._buy_intents.get("buy:x1") is None
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    h.restart()
+    assert "buy:x1" not in fresh._unsure  # nothing replays as "may be charged"
+
+
+def test_an_unreachable_monid_clears_the_intent_and_stays_buyable(h):
+    # task 16 review (state matrix): a connect failure proves nothing was charged
+    def down(request):
+        raise httpx.ConnectError("down", request=request)
+
+    h.gw.ports.toolbuy = monid(down)
+    args = {"tool": "enrichment", "input": {"query": "q"}, "key": "k1"}
+    r = h.gw.perform("buy_tool", args, actor="mkt")
+    assert r.status == "error" and h.gw._buy_intents.get("buy:k1") is None
+    assert "tool.bought" not in h.types()
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    gw = h.restart()
+    assert "buy:k1" not in fresh._unsure  # not replayed as "may be charged"
+    assert gw.perform("buy_tool", args, actor="mkt").status == "done" and len(fresh.calls) == 1
+
+
+def test_a_deep_result_is_booked_but_neither_stored_nor_relayed(h):
+    # task 16 review: a result deeper than json's C limit used to raise RecursionError while
+    # the event was written, after Monid had charged (tool.bought and cost.booked lost)
+    deep: object = "x"
+    for _ in range(150):
+        deep = [deep]
+    port = monid(lambda request: httpx.Response(200, json=completed(output={"results": deep})))
+    h.gw.ports.toolbuy = port
+    r = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"query": "q"}, "key": "d1"},
+                     actor="mkt")
+    assert r.status == "done" and r.data["bought"] is True and r.data["result"] is None
+    bought = h.events("tool.bought")
+    assert len(bought) == 1 and bought[0].private["result"] is None
+    assert len([e for e in h.events("cost.booked") if e.provider == "monid"]) == 1
+    assert h.gw._buy_intents.get("buy:d1") is None
+
+
+def test_a_same_key_retry_never_clears_the_first_buys_intent(h):
+    # task 16 review (red team): call B with A's key, while A is still with Monid, used to
+    # overwrite and then clear A's intent; a crash then forgot a charge
+    inside, release = threading.Event(), threading.Event()
+
+    def slow(request):
+        inside.set()
+        assert release.wait(5)
+        return httpx.Response(200, json=completed())
+
+    h.gw.ports.toolbuy = monid(slow)
+    out = {}
+    first = threading.Thread(target=lambda: out.setdefault("a", h.gw.perform(
+        "buy_tool", {"tool": "enrichment", "input": {"query": "a"}, "key": "k"}, actor="mkt")))
+    first.start()
+    assert inside.wait(5)
+    intent = h.gw._buy_intents.get("buy:k")
+    b = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"query": "b"}, "key": "k"},
+                     actor="mkt")
+    assert b.status == "refused" and "in flight" in b.error["message"]
+    assert intent and h.gw._buy_intents.get("buy:k") == intent  # A's intent, untouched
+    release.set()
+    first.join(5)
+    assert out["a"].status == "done" and h.gw._buy_intents.get("buy:k") is None
+    assert h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"query": "a"}, "key": "k"},
+                        actor="mkt").status == "done"  # the reservation was given back
+
+
+def test_reservation_flags_are_never_caller_supplied(h):
+    # task 16 review: "_law_reserved" from a caller used to decrement the law-search
+    # reservation count below zero (past the hourly cap of paid searches)
+    for name, args, actor in (("law_search", {"case_id": "nope", "query": ""}, "tax"),
+                              ("buy_tool", {"tool": "crypto", "input": {}, "key": "k"}, "mkt")):
+        h.gw.perform(name, {**args, "_law_reserved": True, "_buy_reserved": "buy:x"}, actor=actor)
+    assert h.gw._law_inflight == 0 and not h.gw._buy_inflight
