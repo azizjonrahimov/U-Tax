@@ -28,9 +28,10 @@ CHUNK = 4096
 def _map_error(response: httpx.Response) -> PortError:
     status = response.status_code
     try:
-        detail = str(response.json().get("detail") or "")[:200]
-    except ValueError:
-        detail = response.text[:200]
+        body = response.json()
+        detail = str(body.get("detail") or "" if isinstance(body, dict) else body)[:200]
+    except (ValueError, httpx.HTTPError):
+        detail = ""
     if status in (401, 403):
         return AuthExpired(f"elevenlabs refused the key ({status}): {detail}")
     if status == 429:
@@ -50,7 +51,9 @@ class ElevenLabsVoice:
                  transport: httpx.BaseTransport | None = None) -> None:
         self.voice_id = voice_id or DEFAULT_VOICE
         self.tts_model = model or DEFAULT_MODEL
-        self._http = httpx.Client(base_url=API, timeout=timeout, transport=transport,
+        # connect fast or fail: the console gives up at 10 s (v1.10.1)
+        self._http = httpx.Client(base_url=API, timeout=httpx.Timeout(timeout, connect=3.0),
+                                  transport=transport,
                                   headers={"xi-api-key": api_key, "Accept": "audio/mpeg",
                                            "User-Agent": "utax-gateway"})
 
@@ -70,12 +73,15 @@ class ElevenLabsVoice:
             response = self._http.send(request, stream=True)
         except httpx.TransportError as exc:
             raise Unavailable(f"elevenlabs unreachable: {exc}") from exc
+        self._last = response  # speak() reads it whole, without the stream's swallow
         if not response.is_success:
             try:
                 response.read()
-                raise _map_error(response)
+            except httpx.HTTPError:  # the error body never came: map on the status alone
+                pass
             finally:
                 response.close()
+            raise _map_error(response)
 
         def chunks() -> Iterator[bytes]:
             try:
@@ -88,9 +94,16 @@ class ElevenLabsVoice:
         return chunks(), response.close
 
     def speak(self, text: str) -> bytes:
-        """The whole clip (GET /api/brief/audio caches it)."""
-        chunks, close = self.open_stream(text)
+        """The whole clip (GET /api/brief/audio caches it): a cut or empty one is an error,
+        never cached as the brief."""
+        _, close = self.open_stream(text)
+        response = self._last
         try:
-            return b"".join(chunks)
+            audio = b"".join(response.iter_bytes(CHUNK))
+        except httpx.HTTPError as exc:
+            raise Unavailable(f"elevenlabs stream cut: {exc}") from exc
         finally:
             close()
+        if not audio:
+            raise Unavailable("elevenlabs answered an empty clip")
+        return audio

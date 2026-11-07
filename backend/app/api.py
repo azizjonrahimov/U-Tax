@@ -19,6 +19,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Header, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.errors import APIError
 from app.gateway.events import Event
@@ -409,12 +410,14 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         voice = gw().ports.voice
         text = event.payload["text"]
         if voice.provider == "elevenlabs":  # v1.10 §5c: booked per character
-            if gw().reserve_tts("brief", len(text)):
+            if gw().reserve_tts("brief", len(text), "elevenlabs"):
                 raise APIError(503, "voice_unavailable", "audio is resting; use speechSynthesis")
             try:
                 audio = voice.speak(text)
-            except PortError as exc:
+            except Exception as exc:  # any failure releases the hold
                 gw().settle_tts("brief", len(text), "elevenlabs", voice.tts_model, ok=False)
+                if not isinstance(exc, PortError):
+                    raise
                 log.warning("brief audio failed: %s", exc)
                 raise APIError(503, "voice_unavailable",
                                "audio is unavailable; use speechSynthesis") from exc
@@ -458,9 +461,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if stamp is None or phrases_cache["stamp"] != stamp:
             try:
                 phrases_cache["phrases"] = load(path)
-            except PhraseError as err:
+            except PhraseError as err:  # retried on the next call (a file held by a scanner)
                 log.error("talk phrases refused: %s", err)
                 phrases_cache["phrases"] = None
+                return None
             phrases_cache["stamp"] = stamp
         return phrases_cache["phrases"]
 
@@ -491,12 +495,14 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
                 text = mask_words(render(phrases, body.get("phrase"), body.get("args")))
             except PhraseError as err:
                 raise APIError(400, "bad_input", str(err)) from err
+            if len(text) > 600:  # §5c: a talk line is at most 600 characters, as spoken
+                raise APIError(400, "bad_input", "that line is over 600 characters")
         else:
             raise APIError(400, "bad_input", 'purpose must be "ceo" or "talk"')
         voice = gw().ports.voice
         if voice.provider is None:
             raise APIError(503, "voice_unavailable", "no voice key; use speechSynthesis")
-        refusal = gw().reserve_tts(purpose, len(text))
+        refusal = gw().reserve_tts(purpose, len(text), voice.provider)
         if refusal == "talk_budget":
             raise APIError(429, "rate_limited", "today's /talk voice is spent; use speechSynthesis")
         if refusal:
@@ -509,12 +515,18 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             else:
                 audio = voice.speak(text)
                 chunks, close = iter([audio]), (lambda: None)
-        except PortError as exc:  # NotConfigured, a refused key, a rate limit, an outage
+        except Exception as exc:  # any failure releases the hold (never leaks the budget)
             gw().settle_tts(purpose, len(text), voice.provider, model, ok=False)
+            if not isinstance(exc, PortError):
+                raise
             log.warning("tts (%s) failed: %s", purpose, exc)
             raise APIError(503, "voice_unavailable", "audio is unavailable; use speechSynthesis") \
                 from exc
-        gw().settle_tts(purpose, len(text), voice.provider, model, ok=True)  # it bills now
+        try:
+            gw().settle_tts(purpose, len(text), voice.provider, model, ok=True)  # it bills now
+        except Exception:
+            close()  # never leave the upstream connection checked out of the pool
+            raise
 
         def stream():
             try:
@@ -522,8 +534,11 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             finally:
                 close()
 
+        # the background task closes the upstream even when the browser leaves before the
+        # first chunk (a generator that never started never runs its finally)
         return StreamingResponse(stream(), media_type="audio/mpeg",
-                                 headers={"Cache-Control": "no-store"})
+                                 headers={"Cache-Control": "no-store"},
+                                 background=BackgroundTask(close))
 
     @router.get("/api/ceo/brief")
     def ceo_brief(since_id: int = Query(0, ge=0), authorization: str | None = Header(None)):

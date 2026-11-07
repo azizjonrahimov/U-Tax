@@ -256,3 +256,100 @@ def test_the_registry_builds_elevenlabs_only_with_its_key(tmp_path):
     assert isinstance(build_port("voice", base), NoVoice)
     built = build_port("voice", replace(base, elevenlabs_api_key="el_live"))
     assert isinstance(built, ElevenLabsVoice) and built.voice_id == "EXAVITQu4vr4xnSDxMaL"
+
+
+def test_the_upstream_is_closed_even_if_the_browser_never_reads(h, monkeypatch):
+    closed = []
+    real = h.ports.voice.open_stream
+
+    def tracked(text):
+        chunks, close = real(text)
+
+        def recording_close():
+            closed.append(True)
+            close()
+
+        return chunks, recording_close
+
+    monkeypatch.setattr(h.ports.voice, "open_stream", tracked)
+    monkeypatch.setattr(h.gw, "settle_tts", lambda *a, **k: (_ for _ in ()).throw(
+        RuntimeError("book_spend blew up")))
+    with TestClient(create_app(h.gw, start_background=False),
+                    raise_server_exceptions=False) as c:
+        assert talk(c).status_code == 500
+    assert closed  # released, not left checked out of the pool
+
+
+
+# ---------------------------------------------------------------- review 1
+
+
+def test_in_flight_talk_characters_count_against_the_budget(h):
+    assert h.gw.reserve_tts("talk", 150) is None  # in flight, not settled
+    assert h.gw.reserve_tts("talk", 100) == "talk_budget"
+    h.gw.settle_tts("talk", 150, "elevenlabs", "m", ok=False)
+    assert h.gw.reserve_tts("talk", 100) is None
+
+
+def test_the_spend_hold_is_the_calls_own_estimate(make_harness, phrases_file):
+    # 1500 characters hold $0.15, not a flat $0.02: two calls can't both pass a $0.20 cap
+    h = make_harness(admin_token=ADMIN, talk_phrases_path=phrases_file,
+                     spend_cap_usd=Decimal("0.20"))
+    assert h.gw.reserve_tts("ceo", 1500) is None
+    assert h.gw.reserve_tts("ceo", 1500) == "budget"
+    h.gw.settle_tts("ceo", 1500, "elevenlabs", "m", ok=False)
+    assert h.gw._voice_pending_usd == 0 and h.gw.reserve_tts("ceo", 1500) is None
+
+
+@pytest.mark.parametrize("respond", [
+    lambda r: httpx.Response(500, json=["not", "an", "object"]),
+    lambda r: httpx.Response(502, content=b"<html>bad gateway</html>"),
+])
+def test_any_upstream_error_answers_503_and_releases_the_hold(h, respond):
+    h.ports.voice = ElevenLabsVoice("el_test", transport=httpx.MockTransport(respond))
+    with client(h) as c:
+        r = talk(c)
+    assert r.status_code == 503
+    assert h.gw._tts_talk_pending == 0 and h.gw._voice_pending_usd == 0
+
+
+def test_a_brief_that_fails_or_is_cut_is_never_booked_or_cached(h):
+    brief = h.gw.perform("ceo_brief", {}).data
+    h.ports.voice = ElevenLabsVoice("el_test", transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, content=b"")))  # an empty clip
+    with client(h) as c:
+        first = c.get("/api/brief/audio", params={"event_id": brief["brief_event_id"]},
+                      headers=AUTH)
+        h.fake.status = 500
+        h.ports.voice = ElevenLabsVoice("el_test", transport=httpx.MockTransport(h.fake))
+        second = c.get("/api/brief/audio", params={"event_id": brief["brief_event_id"]},
+                       headers=AUTH)
+    assert first.status_code == 503 and second.status_code == 503
+    assert not [e for e in h.events("cost.booked") if e.provider == "elevenlabs"]
+    assert h.gw._voice_pending_usd == 0
+
+
+def test_a_registry_read_that_failed_is_retried(h, phrases_file, monkeypatch):
+    from app.gateway import talk_phrases as tp
+
+    real = tp.load
+    calls = {"n": 0}
+
+    def flaky(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise tp.PhraseError("held by a scanner")
+        return real(path)
+
+    monkeypatch.setattr(tp, "load", flaky)
+    with client(h) as c:
+        assert talk(c).status_code == 503
+        assert talk(c).status_code == 200  # the same file, read again
+
+
+def test_a_spoken_line_over_600_characters_is_refused(h, phrases_file):
+    line = "x" * 560 + " {a}{b}{c}{d}{e}{f}{g}{h}{i}{j}"
+    phrases_file.write_text(json.dumps({"long": line}), encoding="utf-8")
+    args = {k: 999999999999 for k in "abcdefghij"}
+    with client(h) as c:
+        assert talk(c, "long", args).status_code == 400
