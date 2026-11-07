@@ -10,6 +10,8 @@ import {
   parseBrief,
   readLastSeen,
   outdatedApprovals,
+  approveReleases,
+  logStillMatches,
   readableSummary,
   logWasReset,
   briefSince,
@@ -113,6 +115,27 @@ describe("what the CEO is shown", () => {
     expect(briefSince(91, 12)).toBe(0);
     expect(briefSince(40, 90)).toBe(40);
     expect(briefSince(40, null)).toBe(40);
+  });
+});
+
+describe("before an Approve that releases more than one", () => {
+  const a = (approvalId: string, caseId: string | null, actionType = "email"): Approval => ({ approvalId, caseId, actionType, summary: "" });
+  const pending = [a("apr_1", "case_1"), a("apr_2", "case_2"), a("apr_3", "case_1"), a("apr_4", null, "social_post")];
+  const outdated = outdatedApprovals(pending);
+
+  it("counts the other waiting approvals of that kind (and the outdated ones) while the kind still asks", () => {
+    expect(approveReleases(pending, pending[1], "ASK", outdated)).toEqual({ others: 2, outdated: 1 });
+    expect(approveReleases(pending, pending[1], undefined, outdated)).toEqual({ others: 2, outdated: 1 });
+    expect(approveReleases(pending, pending[3], "ASK", outdated)).toBeNull(); // alone of its kind
+    expect(approveReleases(pending, pending[1], "PAUSED", outdated)).toBeNull(); // nothing flips
+  });
+
+  it("the log still matches only while the event at lastId has the same id and ts", () => {
+    const v = foldLog(emptyLog(), [ev(7, "case.status", {})]);
+    expect(logStillMatches(v, { data: [{ id: 7, ts: "2026-11-07T09:00:00Z" }] })).toBe(true);
+    expect(logStillMatches(v, { data: [{ id: 7, ts: "2026-11-08T01:00:00Z" }] })).toBe(false); // reset, regrown past 7
+    expect(logStillMatches(v, { data: [] })).toBe(false); // reset, shorter
+    expect(logStillMatches(emptyLog(), { data: [] })).toBe(true);
   });
 });
 

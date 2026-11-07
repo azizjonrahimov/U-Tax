@@ -7,10 +7,11 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ApiError, API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
-import { briefAudioUrl, fetchAllEvents, type Endpoints } from "@/theater/live";
+import { briefAudioUrl, eventsUrl, fetchAllEvents, type Endpoints } from "@/theater/live";
 import {
   ACTION_LABEL,
   ACTION_TYPES,
+  approveReleases,
   briefSince,
   canDecide,
   ceoError,
@@ -18,6 +19,7 @@ import {
   emptyLog,
   foldLog,
   LAST_SEEN_KEY,
+  logStillMatches,
   logWasReset,
   MAX_ORDER_CHARS,
   orderBody,
@@ -101,6 +103,25 @@ async function authJson<T>(token: string, url: string, init: RequestInit = {}): 
   return body as T;
 }
 
+/** The rows a confirm can belong to, from fresh data. */
+function rowKeys(st: Console | null, log: LogView): Set<string> {
+  const keys = new Set<string>([...log.pending.keys()].map((id) => `ap:${id}`));
+  for (const c of st?.cases ?? []) if (c.status === "BLOCKED") keys.add(`ub:${c.caseId}`);
+  for (const c of st?.candidates ?? []) if (canDecide(c.stage)) keys.add(`hr:${c.candidateId}`);
+  for (const t of ACTION_TYPES) keys.add(`tr:${t}`);
+  return keys;
+}
+
+/** Where the next login brief starts (only the session that showed this brief writes it). */
+function rememberSeen(b: Brief) {
+  if (b.lastEventId === null) return;
+  try {
+    localStorage.setItem(LAST_SEEN_KEY, String(b.lastEventId));
+  } catch {
+    /* fine */
+  }
+}
+
 const errorOf = (e: unknown) => (e instanceof ApiError ? ceoError(e.status, e.code, e.message) : "The gateway sent something unexpected. Try again in a moment.");
 
 interface Confirm {
@@ -118,7 +139,10 @@ export function Ceo() {
   const [brief, setBrief] = useState<Brief | null>(null);
   const [view, setView] = useState<Console | null>(null);
   const [log, setLog] = useState<LogView>(emptyLog);
+  /** The poll's own error: cleared by the next good poll. */
   const [error, setError] = useState<string | null>(null);
+  /** The last action's error: stays until the next action (a refresh never hides it). */
+  const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
@@ -157,6 +181,7 @@ export function Ceo() {
       setView(null);
       setLog(logRef.current);
       setError(null);
+      setActionError(null);
       setNotice(null);
       setUpdatedAt(null);
       setBusy(null);
@@ -211,8 +236,16 @@ export function Ceo() {
       try {
         const st = consoleFromState(await authJson<unknown>(tok, `${API}/state`));
         if (mine !== session.current) return;
-        if (st && logWasReset(st.lastEventId, logRef.current.lastId)) {
+        let reset = st !== null && logWasReset(st.lastEventId, logRef.current.lastId);
+        if (!reset && logRef.current.lastId > 0) {
+          // A reset whose new log already grew past ours keeps the ids: check the event we stopped at.
+          const page = await authJson<unknown>(tok, eventsUrl(NO_QUERY_TOKEN, logRef.current.lastId - 1, 1));
+          if (mine !== session.current) return;
+          reset = !logStillMatches(logRef.current, page);
+        }
+        if (reset) {
           logRef.current = emptyLog();
+          setConfirm(null);
           setNotice("The gateway's log restarted, so the console reloaded it. Check the lists before acting.");
         }
         const { events } = await fetchAllEvents(NO_QUERY_TOKEN, (url) => authJson<unknown>(tok, url), logRef.current.lastId, 200);
@@ -220,6 +253,8 @@ export function Ceo() {
         logRef.current = foldLog(logRef.current, events as UTaxEvent[]);
         setLog(logRef.current);
         if (st) setView(st);
+        // A confirm whose row is gone (decided elsewhere, unblocked, reloaded) must not come back armed.
+        setConfirm((c) => (c && !rowKeys(st, logRef.current).has(c.key) ? null : c));
         setError(null);
         setUpdatedAt(Date.now());
       } catch (e) {
@@ -247,13 +282,6 @@ export function Ceo() {
       }
       const b = parseBrief(await authJson<unknown>(tok, `${API}/ceo/brief?since_id=${briefSince(lastSeen, stateLastId)}`));
       if (!b) throw new Error("malformed brief");
-      if (b.lastEventId !== null) {
-        try {
-          localStorage.setItem(LAST_SEEN_KEY, String(b.lastEventId));
-        } catch {
-          /* fine */
-        }
-      }
       return b;
     },
     [],
@@ -265,26 +293,25 @@ export function Ceo() {
     session.current += 1;
     const mine = session.current;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const briefOnce = async () => {
+      try {
+        const st = consoleFromState(await authJson<unknown>(token, `${API}/state`));
+        const b = await loadBrief(token, st?.lastEventId ?? null);
+        if (mine !== session.current) return;
+        briefRef.current = b;
+        setBrief(b);
+        rememberSeen(b);
+        void playBrief(b, token);
+      } catch (e) {
+        if (mine === session.current) fail(e);
+      }
+    };
     const tick = async () => {
+      if (!briefRef.current && mine === session.current) await briefOnce(); // retried until it lands
       await refreshNow(mine, token);
       if (mine === session.current) timer = setTimeout(() => void tick(), POLL_MS);
     };
-    (async () => {
-      if (!briefRef.current) {
-        try {
-          const st = consoleFromState(await authJson<unknown>(token, `${API}/state`));
-          const b = await loadBrief(token, st?.lastEventId ?? null);
-          if (mine !== session.current) return;
-          briefRef.current = b;
-          setBrief(b);
-          void playBrief(b, token);
-        } catch (e) {
-          if (mine === session.current) fail(e);
-          if (mine !== session.current) return;
-        }
-      }
-      await tick();
-    })();
+    void tick();
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       session.current += 1;
@@ -307,6 +334,7 @@ export function Ceo() {
       setDraftToken("");
       briefRef.current = b;
       setBrief(b);
+      rememberSeen(b);
       writeToken(t);
       void playBrief(b, t); // inside the click, so the browser lets it play
     } catch (e) {
@@ -322,7 +350,7 @@ export function Ceo() {
     const mine = session.current;
     setBusy(key);
     setConfirm(null);
-    setError(null);
+    setActionError(null);
     try {
       await authJson(token, `${API}${path}`, { method: "POST", body: JSON.stringify(body) });
       if (mine !== session.current) return;
@@ -332,7 +360,10 @@ export function Ceo() {
         setOrderSent(true);
       }
     } catch (e) {
-      if (mine === session.current) fail(e);
+      if (mine === session.current) {
+        if (e instanceof ApiError && e.status === 401) signOut(errorOf(e));
+        else setActionError(errorOf(e));
+      }
     } finally {
       if (mine === session.current) {
         await refreshNow(mine, token);
@@ -429,6 +460,11 @@ export function Ceo() {
         <p className="sr-only" role="status" aria-live="polite">
           {announce}
         </p>
+        {actionError && (
+          <p className="error banner" role="alert">
+            {actionError}
+          </p>
+        )}
         {error && (
           <p className="error banner" role="alert">
             {error}
@@ -488,7 +524,20 @@ export function Ceo() {
                             className="primary"
                             aria-describedby={`w-${key}`}
                             disabled={!!busy}
-                            onClick={() => void act(key, "/approve", { approval_id: a.approvalId, decision: "allow", note: "" }, `Approved: ${what}`)}
+                            onClick={() => {
+                              const approve = () => void act(key, "/approve", { approval_id: a.approvalId, decision: "allow", note: "" }, `Approved: ${what}`);
+                              const rel = approveReleases(pending, a, view?.trust[a.actionType as ActionType], outdated);
+                              if (!rel) return approve();
+                              const kind = (ACTION_LABEL[a.actionType as ActionType] ?? a.actionType).toLowerCase();
+                              ask({
+                                key,
+                                prompt:
+                                  `Approve it? ${ACTION_LABEL[a.actionType as ActionType] ?? a.actionType} then run on their own, and the ${rel.others} other waiting ${kind} go out now` +
+                                  (rel.outdated ? `, including ${rel.outdated} outdated. Deny the outdated ones first if their figures are wrong.` : "."),
+                                label: "Approve and let them run",
+                                run: approve,
+                              });
+                            }}
                           >
                             {working(key) ? "Working…" : "Approve"}
                           </button>

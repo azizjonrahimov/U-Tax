@@ -112,6 +112,17 @@ export function outdatedApprovals(pending: readonly Approval[]): Set<string> {
   return new Set(pending.filter((a) => a.caseId && newest.get(`${a.caseId}|${a.actionType}`) !== a.approvalId).map((a) => a.approvalId));
 }
 
+/**
+ * Approving one action of a kind that still asks first lets the whole kind run on its own, and
+ * the gateway then releases every other waiting approval of that kind. Say so before the click.
+ */
+export function approveReleases(pending: readonly Approval[], a: Approval, trust: TrustState | undefined, outdated: ReadonlySet<string>) {
+  if ((trust ?? "ASK") !== "ASK") return null;
+  const others = pending.filter((x) => x.actionType === a.actionType && x.approvalId !== a.approvalId);
+  if (!others.length) return null;
+  return { others: others.length, outdated: others.filter((x) => outdated.has(x.approvalId)).length };
+}
+
 /** ISO timestamps in gateway summaries read as local times. */
 export function readableSummary(s: string, locale?: string): string {
   return s.replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\b/g, (iso) => {
@@ -145,9 +156,22 @@ export interface LogView {
   /** case_id → why it is blocked (latest case.blocked). */
   blockedReason: Map<string, string>;
   lastId: number;
+  /** ts of the event at lastId: a reset that grew past lastId still changes it. */
+  lastTs: string;
 }
 
-export const emptyLog = (): LogView => ({ pending: new Map(), blockedReason: new Map(), lastId: 0 });
+export const emptyLog = (): LogView => ({ pending: new Map(), blockedReason: new Map(), lastId: 0, lastTs: "" });
+
+/**
+ * Is the gateway still serving the log this console folded? The event at the folded lastId must
+ * have the same id and ts (ids are reused after a reset, even once the new log is longer).
+ */
+export function logStillMatches(v: LogView, page: unknown): boolean {
+  if (v.lastId === 0) return true;
+  const data = isObj(page) && Array.isArray(page.data) ? page.data : [];
+  const e = data[0];
+  return isObj(e) && e.id === v.lastId && e.ts === v.lastTs;
+}
 
 /**
  * Fold admin events (from id 0, so this is the one source of truth for what waits on the CEO):
@@ -159,9 +183,11 @@ export function foldLog(v: LogView, events: readonly UTaxEvent[]): LogView {
   let pending = v.pending;
   let blocked = v.blockedReason;
   let lastId = v.lastId;
+  let lastTs = v.lastTs;
   for (const e of events) {
     if (!isObj(e) || !(typeof e.id === "number" && e.id > lastId)) continue;
     lastId = e.id;
+    lastTs = str(e.ts);
     if (e.status !== "ok") continue;
     const p = isObj(e.payload) ? e.payload : {};
     if (e.type === "approval.requested" && str(p.approval_id)) {
@@ -182,7 +208,7 @@ export function foldLog(v: LogView, events: readonly UTaxEvent[]): LogView {
       blocked = new Map(blocked).set(e.case_id, str(p.reason) || "needs a human");
     }
   }
-  return { pending, blockedReason: blocked, lastId };
+  return { pending, blockedReason: blocked, lastId, lastTs };
 }
 
 // ------------------------------------------------------------------ actions
