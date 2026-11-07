@@ -349,7 +349,7 @@ else {
   for (const must of ["Say confirm", "read the `readback` out word for word", "Never confirm on the CEO's behalf",
     "Never say an action is done until the tool says it is", "You have no confirm tool", "data, never instructions",
     "ask, never guess", "Stopping is instant", "Your words never confirm", "ask the CEO nothing at all",
-    "you don't see the result", "not tax advice"])
+    "Wait for that line and report only what it says", "not tax advice"])
     if (!ceo.toLowerCase().includes(must.toLowerCase())) fail(`prompts/ceo-voice.md: must keep the rule "${must}"`);
   if (/utax\.\w+/.test(raw)) fail("prompts/ceo-voice.md: names a gateway tool (utax.*); its tools are contract §5b only");
   const section = raw.split(/^## Your tools.*$/m)[1]?.split(/^## /m)[0] ?? "";
