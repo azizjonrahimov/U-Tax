@@ -1,0 +1,71 @@
+# Render Blueprint for the U-Tax gateway (backend/README.md, "Variant B").
+# Render -> New -> Blueprint -> this repo. Render asks for every `sync: false` value;
+# paste them there, never in git. After the first deploy, create the table once:
+#   psql "<external database url>" -f db/001_events.sql
+# Every ADAPTER_* stays local until the owner approves that sponsor's key
+# (crew/reports/backend.md, "Saturday adapter swap").
+# Cost: the web service is Starter (always on, so webhooks and MCP calls never hit a cold
+# start; Render shows the price before you apply). The database is the free plan.
+databases:
+  - name: utax-db
+    plan: free
+    databaseName: utax
+    user: utax
+
+services:
+  - type: web
+    name: utax-gateway
+    runtime: python
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    # Never two instances on one database (README step 6).
+    numInstances: 1
+    autoDeploy: false
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
+      - key: STORE
+        value: postgres
+      - key: DATABASE_URL
+        fromDatabase:
+          name: utax-db
+          property: connectionString
+      - key: PUBLIC_MODE
+        value: event
+      # Step 1 tokens: generate with the one-liner in backend/README.md.
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: THEATER_TOKEN
+        sync: false
+      - key: UTAX_TOOL_TOKEN_COS
+        sync: false
+      - key: UTAX_TOOL_TOKEN_INTAKE
+        sync: false
+      - key: UTAX_TOOL_TOKEN_TAX
+        sync: false
+      - key: UTAX_TOOL_TOKEN_QA
+        sync: false
+      - key: UTAX_TOOL_TOKEN_ACCT
+        sync: false
+      - key: UTAX_TOOL_TOKEN_MKT
+        sync: false
+      - key: UTAX_TOOL_TOKEN_HR
+        sync: false
+      # Public pages (the Vercel theater).
+      - key: THEATER_ORIGIN
+        sync: false
+      - key: PUBLIC_TALK_URL
+        sync: false
+      - key: CEO_CONSOLE_URL
+        sync: false
+      - key: NAIVE_API_KEY
+        sync: false
+      - key: CEO_EMAIL
+        sync: false
+      - key: MAIL_INBOX_CLIENTS
+        sync: false
+      - key: MAIL_INBOX_HIRING
+        sync: false
