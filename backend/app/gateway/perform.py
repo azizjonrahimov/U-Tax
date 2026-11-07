@@ -2863,9 +2863,13 @@ class Gateway:
     # _released, _touch_channel, flagged_injection, UNBLOCK_TARGETS. Rename with care.
     def _ceo_tool(self, args: dict) -> dict:
         """POST /api/ceo/tool: a read, a stop carried out at once, or a start proposed."""
-        return self._ceo_run(_str(args, "name", max_len=40), args.get("args"), "realtime")
+        # task 18b: the console's STOP button is a click; the model's tool call is voice
+        channel = _one_of(args, "channel", ("voice", "click"), default="voice")
+        return self._ceo_run(_str(args, "name", max_len=40), args.get("args"), "realtime",
+                             channel=channel)
 
-    def _ceo_run(self, name: str, raw_args: Any, source: str) -> dict:
+    def _ceo_run(self, name: str, raw_args: Any, source: str,
+                 channel: str | None = None) -> dict:
         from app import ceo_tools
 
         tool = ceo_tools.REGISTRY.get(name)
@@ -2877,7 +2881,7 @@ class Gateway:
             if tool.kind == "read":
                 return {"kind": "read", "data": tool.read(self, tool_args)}
             if tool.kind == "stop":
-                with self._channel("voice" if source == "realtime" else "typed"):
+                with self._channel(channel or ("voice" if source == "realtime" else "typed")):
                     return {"kind": "done", "summary": tool.carry(self, tool_args)}
             pinned, readback = tool.pin(self, tool_args)
         except ceo_tools.ToolRefused as err:
@@ -3031,6 +3035,11 @@ class Gateway:
             to = self.state.trust_before_pause.get(action_type, "ASK") \
                 if current == "PAUSED" else current
         if current == to:
+            if to == "PAUSED":  # a repeat stop still stops what waits for a confirm (18b)
+                stopped = [self._proposal_cancel(p, "superseded", "click", "")
+                           for p in self._open_proposals()]
+                if stopped:
+                    self._emit(stopped)
             return {"action_type": action_type, "trust": to, "duplicate": True}
         waiting = self._pending_of(action_type) if to == "AUTO" else []
         released = self._released(action_type, current)

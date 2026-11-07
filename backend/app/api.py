@@ -380,7 +380,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     @router.post("/api/ceo/tool")
     def ceo_tool(body: dict = Body(...), authorization: str | None = Header(None)):
         require_admin(authorization)
-        return _console("ceo_tool", _pick(body, "name", "args", "call_id"))
+        return _console("ceo_tool", _pick(body, "name", "args", "call_id", "channel"))
 
     @router.post("/api/ceo/confirm")
     def ceo_confirm(body: dict = Body(...), authorization: str | None = Header(None)):
