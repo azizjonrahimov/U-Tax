@@ -13,9 +13,10 @@ paid and escalation tools are denied by name.
 | `prompts/*.md` | one system prompt per agent; `_firm-rules.md` is appended to each |
 | `prompts/voice-intake.md` | the `/talk` voice agent (OpenAI Realtime, run by the backend; not a Naïve agent, no tools) |
 | `prompts/ceo-voice.md` | the `/ceo` voice agent for the CEO (OpenAI Realtime, run by the backend; not a Naïve agent; only the contract §5b CEO tools, every start action a proposal the CEO confirms) |
+| `prompts/talk-phrases.json` | the only lines the public `/talk` voice speaks (contract v1.10.2): a flat key → line map the gateway renders for `POST /api/tts` purpose `talk`, numbers only in `{placeholders}` |
 | `templates/memo.md` | the client memo (contract §7 placeholders only) |
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
-| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), every template's rules, bad-env guard tests |
+| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, the page's questions word for word), the Chief of Staff's card rules and firm rules 9 and 11 kept word for word, every template's rules, bad-env guard tests |
 
 ## Templates for the gateway (values come from code and projections, never from an agent)
 Status: the gateway loads `memo.md` today. The others are the agreed wording with these exact
@@ -40,7 +41,8 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 a port of the gateway's post guard over them: only $85,165 / $400 / $450 / $50, no links, @handles,
 emails, phone numbers or case names; X posts ≤ 255 characters so the appended link fits). The
 Discord/Slack sections are for the owner to post by hand.
-`demo-script.md` and `backup-slide.md` are for the presenter.
+`demo-script.md` and `backup-slide.md` are for the presenter; `demo-video.md` is the submission
+video's shot list.
 
 ## Env vars (see `.env.example`)
 `NAIVE_API_KEY`, `UTAX_MCP_URL` (required; public HTTPS base ending in `/mcp`; each agent uses `<base>/<actor>`), one token per agent
