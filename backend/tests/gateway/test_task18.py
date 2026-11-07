@@ -737,3 +737,38 @@ def test_any_failed_ceo_mint_is_refunded(make_harness, tmp_path):
         assert all(mint().status_code == 200 for _ in range(10))
         assert mint().status_code == 429
 
+
+
+def test_a_readbacks_own_words_never_confirm_it(make_harness):
+    # the model reading the order back ("... go ahead ...") can be transcribed in pieces
+    h = make_harness(admin_token=ADMIN, theater_token=THEATER)
+    proposal = tool(h, "order", text="go ahead").data
+    with http(h) as client:
+        r = voice_confirm(client, proposal["proposal_id"], "Go ahead.")
+        assert r.status_code == 400 and r.json()["error"]["code"] == "not_a_confirm"
+        assert voice_confirm(client, proposal["proposal_id"], "confirm").status_code == 200
+
+
+def test_a_candidate_readback_names_the_decision_email(h):
+    h.ok("inject_email", **{"from": "ann.lee@example.com", "subject": "gig", "inbox": "hiring",
+                            "body": "EA with 6 years."})
+    readback = tool(h, "decide_candidate", candidate="Candidate A", decision="hire").data["readback"]
+    assert "email" in readback.lower()
+
+
+def test_a_proposal_id_is_never_reused_after_a_lost_write_reply(h):
+    from app.gateway.ports.store import EventWriteError
+
+    pending_memo(h)
+    real = h.gw.store.append_batch
+
+    def lost(events, **kw):
+        real(events, **kw)  # committed; the reply never came back
+        raise EventWriteError("reply lost")
+
+    h.gw.store.append_batch = lost
+    assert tool(h, "approve", approval="latest").status == "error"
+    h.gw.store.append_batch = real  # the projection never saw the first one
+    second = tool(h, "approve", approval="latest").data["proposal_id"]
+    ids = [e.payload["proposal_id"] for e in h.events("ceo.proposed")]
+    assert len(ids) == 2 and len(set(ids)) == 2 and second == ids[-1]

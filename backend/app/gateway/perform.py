@@ -2901,7 +2901,9 @@ class Gateway:
         proposal supersedes every open one (confirm words go to the newest)."""
         from app.ceo_tools import PROPOSAL_TTL
 
-        proposal_id = f"prop_{len(self.state.proposals) + 1}"
+        import secrets  # never a counter: a lost write reply would hand out the same id twice
+
+        proposal_id = f"prop_{secrets.token_hex(5)}"
         expires_at = iso_ts(self._now() + PROPOSAL_TTL)
         events = [self._proposal_cancel(p, "expired" if self._expired(p) else "superseded",
                                         "click", "") for p in self._open_proposals()]
@@ -2946,7 +2948,8 @@ class Gateway:
             self._emit([self._proposal_cancel(proposal, "spoken" if spoken else "clicked",
                                               via, heard)])
             return {"kind": "done", "summary": "Cancelled."}
-        if spoken and not ceo_tools.heard_confirms(spoken_words, proposal["tool"]):
+        if spoken and not ceo_tools.heard_confirms(spoken_words, proposal["tool"],
+                                                   proposal["readback"]):
             raise Refused("not_a_confirm", "that was not a confirm: say confirm, or cancel")
         pinned = dict(proposal["args"])
         if proposal["tool"] in ("approve", "deny"):

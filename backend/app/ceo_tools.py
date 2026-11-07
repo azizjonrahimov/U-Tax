@@ -400,8 +400,8 @@ def pin_candidate(gw: Any, args: dict) -> tuple[dict, str]:
     decision = args["decision"]
     return ({"candidate_id": cand["candidate_id"], "decision": decision,
              "stage": cand.get("stage")},
-            f"{decision.capitalize()} {cand.get('name_masked', cand['candidate_id'])}. "
-            "Say confirm.")
+            f"{decision.capitalize()} {cand.get('name_masked', cand['candidate_id'])} "
+            f"({cand.get('stage')}), and email them the decision. Say confirm.")
 
 
 def stale_candidate(gw: Any, pinned: dict) -> str | None:
@@ -513,11 +513,15 @@ def heard_cancels(heard: str) -> bool:
     return bool(_CANCEL.search(_speech(heard)))
 
 
-def heard_confirms(heard: str, tool: str | None = None) -> bool:
+def heard_confirms(heard: str, tool: str | None = None, readback: str | None = None) -> bool:
     """The confirm grammar: the whole utterance is a confirm phrase. "approve it" confirms
-    only an approve proposal; the readback echoed back, or a question, never confirms."""
+    only an approve proposal; the readback echoed back (even a piece of it, like an order
+    that says "go ahead"), or a question, never confirms."""
     words = _speech(heard)
     if not words or "?" in (heard or "") or _ECHO.search(words):
+        return False
+    body = _speech(re.sub(r"\s*say confirm\.?\s*$", "", readback or "", flags=re.I))
+    if body and re.search(rf"(?:^| ){re.escape(words)}(?: |$)", body):
         return False
     return bool(_CONFIRM.fullmatch(words)) or (
         tool == "approve" and bool(_APPROVE_IT.fullmatch(words)))
