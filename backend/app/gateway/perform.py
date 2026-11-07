@@ -185,6 +185,12 @@ class ToolResult:
                 "approval_id": self.approval_id, "error": self.error}
 
 
+def _episode(n: int) -> str:
+    """The idempotency suffix of a buy key's nth unsure episode ("" for the first). "#" is
+    outside the key charset, so no agent key can collide with it."""
+    return f"#{n}" if n else ""
+
+
 def _digest(value: Any) -> str:
     raw = json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
@@ -573,6 +579,12 @@ class Gateway:
         if slow is not None:
             try:
                 args["_prefetch"] = slow(args)  # outside the lock
+            except EventWriteError as err:  # the log can't take a write: nothing was paid
+                log.error("event store unavailable: %s", err)
+                self._release(args)
+                return ToolResult("error", error={
+                    "code": "store_unavailable",
+                    "message": "event log unavailable; retry the same call when it is back"})
             except Exception:  # noqa: BLE001 - a broken adapter must not kill the server
                 log.exception("%s failed unexpectedly before the lock", name)
                 self._release(args)
@@ -1747,7 +1759,8 @@ class Gateway:
     _BUY_KEY = re.compile(r"[A-Za-z0-9_.:-]{1,120}")
     BUY_INPUT_MAX = 2000  # characters of JSON: a data call needs a query, not a document
     BUY_RESULT_KEPT = 20_000  # a result up to this size is kept (private) for repeats
-    BUY_RESULT_DEPTH = 100  # a deeper result is neither stored nor relayed (json's C limit is the OS's)
+    BUY_RESULT_DEPTH = 100  # a paid result deeper than this, or with more keys and values
+    BUY_RESULT_VALUES = 1_000_000  # than this, is neither stored nor relayed (json's C limit is the OS's)
 
     @staticmethod
     def _buy_fingerprint(tool: str, data: dict) -> str:
@@ -1782,6 +1795,35 @@ class Gateway:
                     "(public startup data only)")
         return None
 
+    def _buy_episode(self, port_key: str) -> tuple[int, Event | None, Event | None]:
+        """(episode, its unsure record, its resolution). A "not charged" resolution closes an
+        episode and frees the key, so a later unsure gets records of its own (#1, #2...);
+        they used to dedupe into the first, and the second possible charge was forgotten."""
+        episode = 0
+        while True:
+            unsure = self._done_from(f"tool:unsure:{port_key}{_episode(episode)}")
+            resolved = self._done_from(f"tool:resolved:{port_key}{_episode(episode)}")
+            if resolved is None or resolved.status != "skipped":
+                return episode, unsure, resolved
+            episode += 1
+
+    def _buy_leftover(self, port_key: str, key: str, fp: str, left: dict,
+                      episode: int) -> dict:
+        """An intent an earlier call wrote and never settled (a crash, or a store error after
+        Monid answered): it may have paid. A purchase this process still remembers is booked
+        now; anything else becomes an unsure record for the CEO, never a second buy."""
+        left_fp = left.get("fingerprint")
+        recall = getattr(self.ports.toolbuy, "remembered", None)
+        known = recall(port_key) if callable(recall) else None
+        if known is not None and known[0] == left_fp:
+            return {"purchase": known[1], "fingerprint": left_fp, "port_key": port_key,
+                    "episode": episode, "other_input": left_fp != fp}
+        return {"error": "unavailable", "unsure": True, "retryable": False,
+                "message": f"purchase {key} may already be charged (an earlier call did not "
+                           "finish); the CEO resolves it (resolve_purchase) before it can run again",
+                "fingerprint": left_fp, "port_key": port_key, "ceiling": left.get("ceiling"),
+                "episode": episode}
+
     def _buy_fetch(self, args: dict) -> dict:
         """buy_tool's slow half, before the lock. Fail closed before paying: the log must be
         writable, the key's history is checked on the log, and an intent is written down
@@ -1801,8 +1843,7 @@ class Gateway:
             self._buy_inflight.add(port_key)  # released after the handler ran (perform)
             args["_buy_reserved"] = port_key
             known = self._done_from(f"tool:{port_key}")
-            unsure = self._done_from(f"tool:unsure:{port_key}")
-            resolved = self._done_from(f"tool:resolved:{port_key}")
+            episode, unsure, resolved = self._buy_episode(port_key)
         if known is None and resolved is not None and resolved.status == "ok":
             known = resolved  # the CEO found it charged: it is a purchase like any other
         if known is not None:  # the log is the memory: a repeat never reaches Monid
@@ -1812,6 +1853,9 @@ class Gateway:
         if unsure is not None and resolved is None:
             return {"refused": f"purchase {key} may already be charged; the CEO resolves it "
                                "(resolve_purchase) before it can run again"}
+        left = self._buy_intents.get(port_key)
+        if left:  # never overwrite, never clear what an unsettled earlier call wrote
+            return self._buy_leftover(port_key, key, fp, left, episode)
         spec = getattr(self.ports.toolbuy, "tools", {}).get(tool) or {}
         ceiling = str(spec.get("max_usd")) if spec.get("max_usd") is not None else None
         self._buy_intents.put(port_key, {"tool": tool, "fingerprint": fp, "ceiling": ceiling,
@@ -1820,12 +1864,13 @@ class Gateway:
             purchase = self.ports.toolbuy.buy(tool, data, port_key)
         except PortError as err:
             unsure_now = type(err).__name__ == "Unsure"
-            if not unsure_now:
+            if not unsure_now and getattr(err, "proves_uncharged", True):
                 self._buy_intents.put(port_key, None)  # proved not charged
             return {"error": err.code, "message": str(err)[:200], "unsure": unsure_now,
                     "fingerprint": fp, "port_key": port_key, "ceiling": ceiling,
-                    "retryable": err.retryable}
-        return {"purchase": purchase, "fingerprint": fp, "port_key": port_key}
+                    "retryable": err.retryable, "episode": episode}
+        return {"purchase": purchase, "fingerprint": fp, "port_key": port_key,
+                "episode": episode}
 
     def _buy_tool(self, args: dict) -> dict:
         tool = _str(args, "tool", max_len=80)
@@ -1844,28 +1889,16 @@ class Gateway:
             if fetched.get("unsure"):  # it may be charged: remembered across restarts
                 self._emit([NewEvent(type="tool.bought", actor="mkt", provider=provider,
                                      status="failed", payload={"tool": tool, "provider": provider},
-                                     idempotency_key=f"tool:unsure:{fetched['port_key']}",
+                                     idempotency_key=f"tool:unsure:{fetched['port_key']}"
+                                                     f"{_episode(fetched.get('episode', 0))}",
                                      private={**private, "unsure": True,
                                               "ceiling": fetched.get("ceiling")})])
                 self._buy_intents.put(fetched["port_key"], None)
             raise (ToolError if fetched.get("retryable") and not fetched.get("unsure")
                    else Refused)(fetched["error"], f"buy_tool: {fetched['message']}")
         purchase = fetched["purchase"]
-        from app.gateway.adapters import _http
-
-        result = purchase.result
-        if _http.too_nested(result, max_depth=self.BUY_RESULT_DEPTH, max_values=1_000_000):
-            # paid for, but json.dumps of the event (and the MCP reply) could raise
-            # RecursionError after the charge: book the cost, drop the result
-            log.warning("buy_tool %s: result nests over %d levels; dropped", key,
-                        self.BUY_RESULT_DEPTH)
-            result = None
-        kept = None
-        try:
-            if len(json.dumps(result, ensure_ascii=False)) <= self.BUY_RESULT_KEPT:
-                kept = result
-        except (TypeError, ValueError, RecursionError):
-            kept = None
+        result, size = self._relayable(purchase.result, key)
+        kept = result if size <= self.BUY_RESULT_KEPT else None
         events = [NewEvent(type="tool.bought", actor="mkt", provider=provider,
                            payload={"tool": tool, "provider": provider},
                            cost_usd=purchase.cost_usd,
@@ -1879,17 +1912,42 @@ class Gateway:
                                    idempotency_key=f"cost:tool:{fetched['port_key']}"))
         self._emit(events)
         self._buy_intents.put(fetched["port_key"], None)
+        if fetched.get("other_input"):  # an earlier call's charge, booked; not this input's
+            raise Refused("bad_input", "this key was used for a different purchase")
         return {"tool": tool, "key": key, "bought": purchase.bought,
                 "cost_usd": purchase.cost_usd, "result": result}
+
+    def _relayable(self, result: Any, key: str) -> tuple[Any, int]:
+        """(result, its JSON size) when it can go to the log and the agent; (None, 4) when a
+        paid result is deeper or wider than the BUY_RESULT_* bounds, or not plain JSON (NaN,
+        Infinity): json.dumps of the event, or the MCP reply, would fail after the charge.
+        The cost is booked either way."""
+        from app.gateway.adapters import _http
+
+        if _http.too_nested(result, max_depth=self.BUY_RESULT_DEPTH,
+                            max_values=self.BUY_RESULT_VALUES):
+            why = (f"nests over {self.BUY_RESULT_DEPTH} levels or holds over "
+                   f"{self.BUY_RESULT_VALUES} keys and values")
+        else:
+            try:
+                return result, len(json.dumps(result, ensure_ascii=False, allow_nan=False))
+            except (TypeError, ValueError, RecursionError):
+                why = "is not plain JSON (NaN, Infinity or a non-JSON value)"
+        log.warning("buy_tool %s: the paid result %s; dropped, the cost is booked", key, why)
+        return None, 4
 
     def _resolve_purchase(self, args: dict) -> dict:
         """POST /api/dev/... or the CEO console: an unsure purchase checked in Monid's
         GET /v1/runs. `cost_usd` null = never charged (frees the key and its reservation);
         a decimal = charged (booked once, remembered)."""
         key = _str(args, "key", max_len=120)
-        port_key = key if key.startswith("buy:") else f"buy:{key}"
-        unsure = self._done_from(f"tool:unsure:{port_key}")
+        port_key = f"buy:{key}"  # the agent's key, exactly as buy_tool's refusal names it
+        episode, unsure, resolved = self._buy_episode(port_key)
+        if resolved is not None:  # once only: a second answer used to book its cost too
+            raise Refused("wrong_status", f"purchase {key} is already resolved as charged")
         if unsure is None:
+            if episode:
+                raise Refused("wrong_status", f"purchase {key} is already resolved as not charged")
             raise Refused("not_found", f"no unsure purchase {key}")
         raw = args.get("cost_usd")
         try:
@@ -1904,7 +1962,7 @@ class Gateway:
                            status="ok" if cost else "skipped",
                            payload={"tool": tool, "provider": provider},
                            cost_usd=usd_string(cost) if cost else None,
-                           idempotency_key=f"tool:resolved:{port_key}",
+                           idempotency_key=f"tool:resolved:{port_key}{_episode(episode)}",
                            private={**private, "bought": bool(cost)})]
         if cost:
             events.append(NewEvent(type="cost.booked", actor="system", provider=provider,
@@ -1913,6 +1971,7 @@ class Gateway:
                                    cost_usd=usd_string(cost),
                                    idempotency_key=f"cost:tool:{port_key}"))
         self._emit(events)
+        self._buy_intents.put(port_key, None)  # settled: a leftover intent must not re-block it
         resolve = getattr(self.ports.toolbuy, "resolve", None)
         if callable(resolve):
             resolve(port_key, usd_string(cost) if cost else None)
@@ -1943,10 +2002,13 @@ class Gateway:
                     key, fp = private.get("key"), private.get("fingerprint")
                     if not key or not fp:
                         continue
-                    if e.status in ("ok", "skipped"):
+                    if e.status == "skipped":  # resolved as not charged: the key is free
+                        port._unsure.pop(key, None)
+                        continue
+                    if e.status == "ok":
                         done.add(key)
                         port._unsure.pop(key, None)
-                        if e.status != "ok" or not private.get("bought", True):
+                        if not private.get("bought", True):
                             continue
                         port._remember(key, fp, Purchase(result=private.get("result"),
                                                          cost_usd=e.cost_usd or "0", bought=True))
