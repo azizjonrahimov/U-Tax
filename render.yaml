@@ -21,10 +21,17 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /api/health
-    # Never two instances on one database (README step 6).
+    # Never two instances on one database (README step 6). The disk also makes every
+    # deploy stop-then-start, and keeps data_dir (Monid purchase intents) across deploys.
     numInstances: 1
     autoDeploy: false
+    disk:
+      name: utax-data
+      mountPath: /var/data/utax
+      sizeGB: 1
     envVars:
+      - key: UTAX_DATA_DIR
+        value: /var/data/utax
       - key: PYTHON_VERSION
         value: 3.12.7
       - key: STORE
