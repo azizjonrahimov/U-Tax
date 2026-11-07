@@ -150,3 +150,14 @@ def test_the_owner_resolves_a_newer_episode_over_http(make_harness):
         assert post().status_code == 409  # the replay: refused
         r = post(episode=1)
         assert r.status_code == 200 and r.json()["episode"] == 1
+
+
+def test_a_buy_whose_commit_ack_was_lost_still_reaches_the_spend(h):
+    h.gw.ports.toolbuy = monid()
+    commit_then_lose(h, "cost.booked")
+    assert buy(h.gw).status == "error"  # charged and logged, the reply lost
+    h.new_case()  # newer events land before the agent retries
+    assert buy(h.gw).data["duplicate"] is True
+    assert h.gw.state.spent_by_provider == {"monid": Decimal("0.0013")}
+    assert resolve(h, charged=False).error["code"] == "not_found"
+    assert h.gw.state.spent_by_provider == {"monid": Decimal("0.0013")}  # still once

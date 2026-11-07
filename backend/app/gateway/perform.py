@@ -1889,6 +1889,8 @@ class Gateway:
             self._buy_inflight.add(port_key)  # released after the handler ran (perform)
             args["_buy_reserved"] = port_key
             known = self._done_from(f"tool:{port_key}")
+            if known is not None:  # 17b: a booking whose commit reply was lost counts once
+                self._catch_up_cost(self._done_from(f"cost:tool:{port_key}"))
             episode, unsure, resolved = self._buy_episode(port_key)
         if known is None and resolved is not None and resolved.status == "ok":
             known = resolved  # the CEO found it charged: it is a purchase like any other
@@ -2018,6 +2020,7 @@ class Gateway:
             raise Refused("wrong_status", f"purchase {key} is in flight; resolve it after "
                                           "it returns")
         if self._done_from(f"tool:{port_key}") is not None:  # 17b: the log first
+            self._catch_up_cost(self._done_from(f"cost:tool:{port_key}"))
             self._buy_intents.put(port_key, None)  # an intent whose clear failed: settled
             raise Refused("not_found", f"purchase {key} was already bought and booked; "
                                        "nothing to resolve")
