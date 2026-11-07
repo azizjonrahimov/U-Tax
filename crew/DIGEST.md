@@ -9,6 +9,8 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- backend · 0m · MERGED Linux depth fix as 2bf3a38; CI green on GitHub (all 3 jobs). Task 17 buy_tool hardening started (auto-decided)
+- captain · 25m · first CI run caught a Linux-only crash in Monid deep-input handling (backend 878/879)
 - captain · 0m · local boot with backend/.env: health 200; /mcp/cos with its own token lists 3 tools; another seat's token and no token both get 401; no token in the log
 - captain · 5m · backend/.env made (7 seat tokens, ADMIN, THEATER, PUBLIC_MODE=event; gitignored, never printed); backend/.venv installed in main
 - agents · 0m · MERGED buy_tool for mkt; CI + render.yaml pushed with it
@@ -20,5 +22,5 @@ Captain (naive-yc-hackathon-99)
 | Thread | Owns | State | Last report |
 |---|---|---|---|
 | frontend | `frontend/` | done; resting until the event | 0m |
-| backend | `backend/`, `fixtures/`, `db/` | done; resting; wakes for the sponsor key swap | 15m |
+| backend | `backend/`, `fixtures/`, `db/` | building task 17: buy_tool hardening (money paths) | 0m |
 | agents | `naive/` | done (buy_tool merged); resting until `naive up` (task 3) | 0m |
