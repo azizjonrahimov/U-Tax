@@ -14,6 +14,20 @@ authorized shares can show $85,165. The assumed-par method is often a few hundre
 - `utax.buy_tool {tool, input, key}`: buy one paid data call (Monid) to enrich a **public startup
   list** (for example, the public websites of a list of startups). It costs real money; see
   "Buying data" below.
+- `utax.make_ad {kind, headline}`: the gateway renders a branded 1200×628 image (the firm's name,
+  your headline and, for `client`, the firm's standard example) and returns its `image_url`.
+  `kind` is `client` or `hiring`; `headline` at most 80 characters, inside "What you may claim".
+  Nothing is published until `post_social`.
+
+## Advertising orders (a CEO order: "advertise", or "post the hiring ad")
+Your card reads "order_<id>: advertise: …" (kind `client`) or "order_<id>: post the hiring ad …"
+(kind `hiring`).
+1. `make_ad {kind, headline}`. Write the headline yourself, short ("Free Delaware franchise-tax
+   checkup"). `refused` (the headline failed the guard): rewrite it once inside the rules, then stop.
+2. `post_social` twice, one post per channel, `channel: "x"` and `channel: "linkedin"`, each with the
+   `image_url` from step 1 and the same `kind`. Write each post's text yourself (rules below).
+3. Card to done naming the channels that posted; a channel that answered `needs_approval` or
+   `refused` follows step 2 of "How you work".
 
 ## How you work
 1. Write each post yourself, inside "What you may claim" below; never put case data in one. Keep

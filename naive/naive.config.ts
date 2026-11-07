@@ -98,16 +98,18 @@ function system(agent: AgentKey): string {
 
 const usd = (dollars: number) => Math.round(dollars * 1_000_000); // integer micro-USD
 
-// Models: chosen from the docs' examples. z-ai/glm-5.3-flash is the docs' "routine tool use"
-// model; deepseek/deepseek-v4-flash-0731 is their "strict JSON output" pick, used where an
-// agent must return exact quoted spans. Both serve the `immediate` window only (docs), so
-// every agent runs `immediate`.
-const MODEL_TOOL_USE = "z-ai/glm-5.3-flash"; // UNVERIFIED: check GET /v1/models
-const MODEL_STRICT = "deepseek/deepseek-v4-flash-0731"; // UNVERIFIED: check GET /v1/models
+// Model (design D31): every agent runs anthropic/claude-haiku-5.5, for reliable tool use. The live
+// GET /v1/models lists it, window `immediate`. The first live case on z-ai/glm-5.3-flash had the
+// Chief of Staff create board cards with no title or body and a made-up blocked_by, then repeat
+// the same call. Both earlier ids (glm-5.3-flash, deepseek-v4-flash-0731) existed; haiku is the
+// choice now.
+const MODEL = "anthropic/claude-haiku-5.5";
 
 // Daily caps (period: day). Fast-path members delegated with wait:true run on the Chief of
 // Staff's budget, and every card that reaches done/blocked wakes a CoS digest session, so the
-// CoS carries the most. Measure real per-session cost on Saturday and adjust. Ceiling: $13/day.
+// CoS carries the most. The caps total $13.00/day (the ceiling) and are unchanged for haiku:
+// they are ceilings, not estimates. UNVERIFIED: haiku's per-token price on Naïve (not in the
+// docs we read); measure real per-session cost from session.usage and lower a cap if it binds.
 const BUDGETS: Record<AgentKey, { cap: number; task: number }> = {
   cos: { cap: 5.0, task: 1.0 },
   intake: { cap: 2.0, task: 0.25 },
@@ -119,13 +121,13 @@ const BUDGETS: Record<AgentKey, { cap: number; task: number }> = {
 };
 
 const MODELS: Record<AgentKey, string> = {
-  cos: MODEL_TOOL_USE, // UNVERIFIED: check GET /v1/models
-  intake: MODEL_STRICT, // UNVERIFIED: check GET /v1/models
-  tax: MODEL_TOOL_USE, // UNVERIFIED: check GET /v1/models
-  qa: MODEL_STRICT, // UNVERIFIED: check GET /v1/models
-  acct: MODEL_TOOL_USE, // UNVERIFIED: check GET /v1/models
-  mkt: MODEL_TOOL_USE, // UNVERIFIED: check GET /v1/models
-  hr: MODEL_TOOL_USE, // UNVERIFIED: check GET /v1/models
+  cos: MODEL,
+  intake: MODEL,
+  tax: MODEL,
+  qa: MODEL,
+  acct: MODEL,
+  mkt: MODEL,
+  hr: MODEL,
 };
 
 const GATEWAY_MCP_BASE = mcpUrl();
