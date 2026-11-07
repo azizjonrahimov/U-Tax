@@ -13,9 +13,10 @@ paid and escalation tools are denied by name.
 | `prompts/*.md` | one system prompt per agent; `_firm-rules.md` is appended to each |
 | `prompts/voice-intake.md` | the `/talk` voice agent (OpenAI Realtime, run by the backend; not a Naïve agent, no tools) |
 | `prompts/ceo-voice.md` | the `/ceo` voice agent for the CEO (OpenAI Realtime, run by the backend; not a Naïve agent; only the contract §5b CEO tools, every start action a proposal the CEO confirms) |
+| `prompts/talk-phrases.json` | the only lines the public `/talk` voice speaks (contract v1.10.2): a flat key → line map the gateway renders for `POST /api/tts` purpose `talk`, numbers only in `{placeholders}` |
 | `templates/memo.md` | the client memo (contract §7 placeholders only) |
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
-| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), every template's rules, bad-env guard tests |
+| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, the page's questions word for word), the Chief of Staff's card rules and firm rules 9 and 11 kept word for word, every template's rules, bad-env guard tests |
 
 ## Templates for the gateway (values come from code and projections, never from an agent)
 Status: the gateway loads `memo.md` today. The others are the agreed wording with these exact
@@ -32,6 +33,10 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
 | `hr-hired.md` / `hr-declined.md` | the CEO's decision in `/ceo` | none |
+| `hr-outreach.md` | `hr_outreach` (v1.11) | `slot_time`, `minutes`; carries the AI-screen line |
+| `follow-up-memo_check.md` | `follow_up` kind `memo_check` | `greeting_name` |
+| `follow-up-missing_facts.md` | `follow_up` kind `missing_facts` | `greeting_name`, `missing_list` |
+| `follow-up-call_reminder.md` | `follow_up` kind `call_reminder` | `greeting_name`, `call_time` |
 | `ceo-update-email.md` | approval needed, BLOCKED, flagged, shortlisted, paused | `headline`, `lead`, `summary`, `action_line` (per reason: "Approve or Deny it in the console", "Unblock or skip it", …), `console_url` |
 | `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `touches_engineering`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |
 | `login-brief.md` | `/ceo` login brief (spoken + shown) | `greeting`, `clients_new`, `memos_sent`, `tax_saved`, `agent_spend`, `approvals_line`, `blocked_line`, `hiring_line` |
@@ -40,7 +45,8 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 a port of the gateway's post guard over them: only $85,165 / $400 / $450 / $50, no links, @handles,
 emails, phone numbers or case names; X posts ≤ 255 characters so the appended link fits). The
 Discord/Slack sections are for the owner to post by hand.
-`demo-script.md` and `backup-slide.md` are for the presenter.
+`demo-script.md` and `backup-slide.md` are for the presenter; `demo-video.md` is the submission
+video's shot list.
 
 ## Env vars (see `.env.example`)
 `NAIVE_API_KEY`, `UTAX_MCP_URL` (required; public HTTPS base ending in `/mcp`; each agent uses `<base>/<actor>`), one token per agent
@@ -70,5 +76,5 @@ naive up
 The same goes for a new tunnel URL: the credential is keyed by `UTAX_MCP_URL`, so `naive up` adds a
 new one, and the old one can be removed the same way.
 
-Models are marked `// UNVERIFIED: check GET /v1/models` until checked against the live catalogue
-(`naive models get z-ai/glm-5.3-flash`).
+Every agent runs `anthropic/claude-haiku-5.5` (design D31; the live `GET /v1/models` lists it,
+window `immediate`). Its per-token price on Naïve is still unverified: the daily caps are ceilings.

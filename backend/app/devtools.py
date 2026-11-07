@@ -5,6 +5,7 @@
     python -m app.devtools approve-all            # plays the CEO clicking Approve
     python -m app.devtools state
     python -m app.devtools agentmail-webhook https://<public-host>   # after a tunnel restart
+    python -m app.devtools rotate-host https://<public-host>   # UTAX_PUBLIC_URL + the webhook
 
 Env: UTAX_BASE (default http://localhost:8000), ADMIN_TOKEN.
 """
@@ -112,10 +113,22 @@ def set_env_values(path: Path, updates: dict[str, str]) -> None:
 
 
 def hook_url(public: str) -> str:
-    """https://<host>[/hooks/agentmail]: only an https host, the path added when missing."""
+    """https://<host>[/hooks/agentmail]: only an https host (no query, fragment, user or
+    control characters, which could also break the .env line), the path added when missing."""
+    from urllib.parse import urlsplit
+
     url = public.strip().rstrip("/")
-    if not url.startswith("https://") or " " in url:
-        raise SystemExit("the webhook needs the public https URL (https://<public-host>)")
+    bad = SystemExit("needs the public https URL (https://<public-host>)")
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in url):
+        raise bad
+    try:
+        parts = urlsplit(url)
+    except ValueError as err:
+        raise bad from err
+    if (parts.scheme != "https" or not parts.hostname or parts.query or parts.fragment
+            or parts.username or parts.password
+            or parts.path not in ("", "/hooks/agentmail")):
+        raise bad
     return url if url.endswith("/hooks/agentmail") else url + "/hooks/agentmail"
 
 
@@ -162,6 +175,27 @@ def agentmail_webhook(public: str, env_path: Path,
         return outcome
 
 
+def rotate_host(public: str, env_path: Path,
+                transport: httpx.BaseTransport | None = None) -> str:
+    """A quick tunnel's new host, in one go: UTAX_PUBLIC_URL (make_ad's images) in the
+    .env, then the AgentMail webhook. Returns the webhook outcome."""
+    base = hook_url(public).removesuffix("/hooks/agentmail")
+    outcome = agentmail_webhook(base, env_path, transport=transport)  # first: a failure
+    set_env_values(env_path, {"UTAX_PUBLIC_URL": base})  # leaves the .env as it was
+    return outcome
+
+
+def cmd_rotate_host(args: argparse.Namespace) -> int:
+    outcome = rotate_host(args.url, Path(args.env))
+    base = hook_url(args.url).removesuffix("/hooks/agentmail")
+    restart = outcome in ("created", "recreated")
+    print(f"UTAX_PUBLIC_URL={base}")
+    print(f"AgentMail webhook {outcome} -> {base}/hooks/agentmail")
+    print("restart the gateway (UTAX_PUBLIC_URL" + (" and the new webhook secret" if restart
+                                                     else "") + " are read at boot)")
+    return 0
+
+
 def cmd_agentmail_webhook(args: argparse.Namespace) -> int:
     outcome = agentmail_webhook(args.url, Path(args.env))
     note = {"created": "secret written; restart the gateway",
@@ -196,6 +230,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
                    help="the .env that gets AGENTMAIL_WEBHOOK_SECRET (default backend/.env)")
     p.set_defaults(func=cmd_agentmail_webhook)
+    p = sub.add_parser("rotate-host",
+                       help="a new tunnel host: UTAX_PUBLIC_URL and the AgentMail webhook")
+    p.add_argument("url", help="the new public https URL (the tunnel host)")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
+                   help="the .env to update (default backend/.env)")
+    p.set_defaults(func=cmd_rotate_host)
     args = parser.parse_args(argv)
     return args.func(args)
 

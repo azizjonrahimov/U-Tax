@@ -25,6 +25,12 @@ export const GATEWAY_TOOLS = [
   "flag_case",
   "firm_brief",
   "buy_tool",
+  // v1.11 (design D31, the live CEO orders)
+  "make_ad",
+  "source_candidates",
+  "hr_outreach",
+  "follow_up",
+  "list_candidates",
 ] as const;
 
 export type GatewayTool = (typeof GATEWAY_TOOLS)[number];
@@ -59,8 +65,8 @@ export const CREW: Record<AgentKey, Seat> = {
     actor: "intake",
     tokenEnv: "UTAX_TOOL_TOKEN_INTAKE",
     prompt: "intake.md",
-    description: "Reads each client email, quotes the five facts verbatim, re-asks for what is missing, books the review call.",
-    tools: ["get_case", "extract_facts", "ask_client", "mark_not_eligible", "book_call"],
+    description: "Reads each client email, quotes the five facts verbatim, re-asks for what is missing, books the review call, sends templated follow-ups.",
+    tools: ["get_case", "extract_facts", "ask_client", "mark_not_eligible", "book_call", "follow_up"],
   },
   tax: {
     name: "tax",
@@ -91,16 +97,16 @@ export const CREW: Record<AgentKey, Seat> = {
     actor: "mkt",
     tokenEnv: "UTAX_TOOL_TOKEN_MKT",
     prompt: "marketing.md",
-    description: "Finds clients: public posts on the firm's channels, LinkedIn DM drafts the human sends, and allowlisted data calls on public startup lists.",
-    tools: ["post_social", "draft_dm", "buy_tool"],
+    description: "Finds clients: branded ads and public posts on the firm's channels, LinkedIn DM drafts the human sends, and allowlisted data calls on public startup lists.",
+    tools: ["post_social", "draft_dm", "buy_tool", "make_ad"],
   },
   hr: {
     name: "hr",
     actor: "hr",
     tokenEnv: "UTAX_TOOL_TOKEN_HR",
     prompt: "hr.md",
-    description: "Runs the one paid gig hire: a disclosed AI screen and a shortlist. The CEO hires or declines.",
-    tools: ["get_candidate", "hr_record"],
+    description: "Runs the paid gig hire: finds public leads, writes to candidates who gave the firm their address, screens and shortlists. The CEO hires or declines.",
+    tools: ["get_candidate", "hr_record", "source_candidates", "hr_outreach", "list_candidates"],
   },
 };
 

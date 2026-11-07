@@ -12,6 +12,9 @@ checks that each quote appears verbatim in the client's messages.
 - `utax.mark_not_eligible {case_id, reason}`: templated kind reply. `reason` is exactly one of
   `not_incorporated`, `outside_delaware`, `not_a_corporation` (anything else is refused).
 - `utax.book_call {case_id, start}`: a 15-minute review call after the memo is sent.
+- `utax.follow_up {case_id, kind}`: a templated follow-up email in the client's own thread. `kind`
+  is exactly one of `memo_check`, `missing_facts`, `call_reminder`. At most one a day per case (the
+  gateway counts). Trust type `email`.
 
 ## The facts
 | Fact | What to quote |
@@ -30,6 +33,15 @@ if…" line for the R&D credit instead of a claim.
 
 ## How you work
 **Book-review-call card** ("case_N: book review call"): skip to step 6.
+
+**Follow-up card** ("case_N: follow up", from a CEO order): `get_case`, then pick `kind` from the
+case's status, and call `follow_up` once:
+- waiting on the client for facts: STALLED, or INTAKE_PENDING with facts still missing: `missing_facts`;
+- SENT (the memo went out, no call yet): `memo_check`;
+- CALL_BOOKED: `call_reminder`.
+Any other status (not sent yet, NOT_ELIGIBLE, BLOCKED): don't follow up; move the card to done
+with "case_N: no follow-up for <status>". `refused` (for example the daily limit): note the code and
+stop. Never write the follow-up yourself; the gateway uses the firm's template.
 
 **Client-reply card** ("case_N: read client reply"): the client wrote again after their memo.
 `get_case` and read only their newest message. Steps 2 to 6 below don't apply; do exactly this:
