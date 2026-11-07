@@ -3,7 +3,6 @@
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- D (now): the frontend tab has stalled again mid-/ceo (~25 min, no reply). Open the `crew` window, `frontend` tab, and answer whatever it's asking. Reply "frontend unstuck".
 - A (Saturday morning before leaving): GitHub remote. In your own terminal: `cd "D:\Claude Projects\Naive YC Hackathon"` then `gh repo create azizjonrahimov/u-tax --private --source . --remote origin --push`. Reply "repo ready".
 - B (Saturday at the event, after Naïve access): I'll walk you through `crew/reports/agents.md` "What the owner must do" and `backend/README.md` "Public URL for Saturday" in chat.
 - C (optional): if the backend tab asks to allow a cloudflared tunnel, deny it; it's not needed tonight.

@@ -223,3 +223,13 @@ c. A retried `request_id` and a `bad_input` refusal don't consume the Send limit
 d. Book estimated `cost.booked` for each Realtime mint and each TTS brief (price table in
    code, `estimated: true`), so SPEND_CAP_USD sees voice spend.
 (b, the shared venue IP, is accepted.) Mocked tests. One READY, then rest.
+
+## Task 14: approvals and trust safety (2026-11-07, contract v1.7.7, from the frontend's /ceo review)
+a. A new approval request for the same case and kind supersedes older pending ones; approving a
+   superseded one answers 409 `superseded` and changes nothing (no trust flip, no send).
+b. Approvals allowed while their type was PAUSED are carried out on resume (gateway-owned ones
+   too: questionnaire and decision mails).
+c. `/api/trust` accepts `ASK` and `RESUME` (back to the pre-pause state).
+d. Refuse to boot when `PUBLIC_MODE=event` (or `PUBLIC_TALK_URL` is https) and ADMIN_TOKEN or
+   THEATER_TOKEN is empty.
+Mocked tests, quick /review, one READY.
