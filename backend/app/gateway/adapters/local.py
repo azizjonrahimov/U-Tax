@@ -56,12 +56,13 @@ class _KeyedJson:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # reads too: Windows refuses a replace mid-read
 
     def load(self) -> dict[str, Any]:
-        if not self.path.exists():
-            return {}
-        return json.loads(self.path.read_text(encoding="utf-8") or "{}")
+        with self._lock:
+            if not self.path.exists():
+                return {}
+            return json.loads(self.path.read_text(encoding="utf-8") or "{}")
 
     def get(self, key: str) -> Any:
         return self.load().get(key)

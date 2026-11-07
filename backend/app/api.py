@@ -391,7 +391,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         """Admin: an unsure Monid purchase checked in Monid's runs list. cost_usd null =
         never charged (frees the key); a decimal = charged (booked once)."""
         require_admin(authorization)
-        return act("resolve_purchase", _pick(body, "key", "cost_usd"))
+        return act("resolve_purchase", _pick(body, "key", "charged", "cost_usd"))
 
     @router.post("/hooks/agentmail")
     async def agentmail_hook(request: Request,

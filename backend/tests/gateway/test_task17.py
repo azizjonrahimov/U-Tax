@@ -8,6 +8,7 @@ import json
 import threading
 from datetime import timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import httpx
 
@@ -276,3 +277,203 @@ def test_an_in_flight_duplicate_leaves_only_the_first_purchase_after_a_restart(m
     gw = h.restart()
     assert "buy:k" in fresh._bought and "buy:k" not in fresh._unsure
     assert buy(gw, key="k", query="a").data["duplicate"] is True and fresh.calls == []
+
+
+# ---------------------------------------------------------------- review 1
+
+
+def test_an_implausible_resolution_cost_is_refused_before_anything_is_booked(h):
+    # a typo ("5000" for "0.05") used to be booked, answer internal_error, and (resolve
+    # once) never be correctable; the cost can't exceed what the purchase reserved
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    for cost in ("5000", "0.5000"):
+        r = h.gw.perform("resolve_purchase", {"key": "k1", "cost_usd": cost})
+        assert r.status == "refused" and r.error["code"] == "bad_input"
+        assert "ceiling" in r.error["message"]
+    assert not [e for e in h.events("cost.booked") if e.provider == "monid"]
+    h.ok("resolve_purchase", key="k1", cost_usd="0.0400")
+    assert h.gw.state.spent_by_provider["monid"] == Decimal("0.0400")
+
+
+def test_resolve_honours_the_charged_flag(make_harness):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    h = make_harness(admin_token="admin-" + "a" * 30, theater_token="theater-" + "b" * 30)
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    auth = {"Authorization": "Bearer admin-" + "a" * 30}
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        no_cost = client.post("/api/dev/resolve-purchase", json={"key": "k1", "charged": True},
+                              headers=auth)
+        assert no_cost.status_code == 400  # charged, but how much? never "not charged"
+        mixed = client.post("/api/dev/resolve-purchase",
+                            json={"key": "k1", "charged": False, "cost_usd": "0.04"}, headers=auth)
+        assert mixed.status_code == 400
+        ok = client.post("/api/dev/resolve-purchase",
+                         json={"key": "k1", "charged": True, "cost_usd": "0.0400"}, headers=auth)
+        assert ok.status_code == 200 and ok.json()["charged"] is True
+
+
+def test_resolve_refuses_a_key_an_agent_could_not_have_used(h):
+    # "#" is the episode separator: "k1#1" reached k1's second-episode records
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    r = h.gw.perform("resolve_purchase", {"key": "k1#1", "cost_usd": "0.0400"})
+    assert r.status == "refused" and r.error["code"] == "bad_input"
+    assert "buy:k1" in h.gw.ports.toolbuy._unsure
+    assert h.ok("resolve_purchase", key="k1", cost_usd=None)["charged"] is False
+
+
+def test_a_leftover_is_recorded_under_its_own_tool(make_harness):
+    h = make_harness()
+    crash_left_intent(h)
+    h.ports.toolbuy = monid()
+    gw = h.restart()
+    gw.perform("buy_tool", {"tool": "zzz-not-a-tool", "input": {"query": "q"}, "key": "c1"},
+               actor="mkt")
+    assert [e.payload["tool"] for e in unsure_events(h, "c1")] == ["enrichment"]
+
+
+def test_resolve_clears_the_leftover_intent_first(h):
+    # a crash between the resolution and the clear used to re-block the key; and an intent
+    # left beside an unsure record (crash after the record) blocked it for good
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw, key="c1")
+    crash_left_intent(h)
+    failing_once(h)  # the resolution's write fails once
+    assert h.gw.perform("resolve_purchase", {"key": "c1", "cost_usd": None}).status == "error"
+    assert h.gw._buy_intents.get("buy:c1") is None
+    assert buy(h.gw, key="c1").status == "refused"  # the log still holds it as unsure
+    h.ok("resolve_purchase", key="c1", cost_usd=None)
+    h.gw.ports.toolbuy = monid()
+    assert buy(h.gw, key="c1").status == "done"
+
+
+def test_a_key_state_refusal_keeps_the_intent(h):
+    port = monid()
+    port._inflight["buy:k1"] = Decimal("0.05")  # the adapter holds it; the gateway's log doesn't
+    h.gw.ports.toolbuy = port
+    assert buy(h.gw).status == "refused"
+    assert h.gw._buy_intents.get("buy:k1") is not None
+
+
+def test_restart_after_a_not_charged_resolution_holds_the_second_unsure(make_harness):
+    h = make_harness()
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    h.ok("resolve_purchase", key="k1", cost_usd=None)
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    gw = h.restart()
+    assert "buy:k1" in fresh._unsure  # its ceiling still counts against the daily cap
+    assert buy(gw).status == "refused" and fresh.calls == []
+
+
+def test_a_not_charged_key_is_free_after_a_restart_and_a_day_change(make_harness):
+    h = make_harness()
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    h.ok("resolve_purchase", key="k1", cost_usd=None)
+    h.clock.advance(days=1)
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    gw = h.restart()
+    assert "buy:k1" not in fresh._unsure
+    assert buy(gw).status == "done" and len(fresh.calls) == 1
+
+
+def test_a_charged_resolution_is_a_purchase_after_a_restart(make_harness):
+    h = make_harness()
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    h.ok("resolve_purchase", key="k1", cost_usd="0.0400")
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    gw = h.restart()
+    assert buy(gw).data["duplicate"] is True and fresh.calls == []
+    assert gw.state.spent_by_provider["monid"] == Decimal("0.0400")
+
+
+def test_a_leftover_without_a_record_is_not_resolvable_and_stays(make_harness):
+    h = make_harness()
+    crash_left_intent(h)
+    r = h.gw.perform("resolve_purchase", {"key": "c1", "cost_usd": None})
+    assert r.status == "refused" and r.error["code"] == "not_found"
+    assert h.gw._buy_intents.get("buy:c1") is not None  # a retry records it first
+
+
+def test_intent_reads_and_writes_never_collide(tmp_path):
+    # Windows refuses os.replace onto a file another thread is reading
+    from app.gateway.adapters.local import _KeyedJson
+
+    store = _KeyedJson(Path(tmp_path) / "intents.json")
+    errors: list[BaseException] = []
+    stop = threading.Event()
+
+    def read():
+        while not stop.is_set():
+            try:
+                store.get("k")
+            except BaseException as exc:  # noqa: BLE001 - collected for the assert
+                errors.append(exc)
+
+    readers = [threading.Thread(target=read) for _ in range(3)]
+    for t in readers:
+        t.start()
+    try:
+        for i in range(300):
+            store.put("k", {"n": i})
+    except BaseException as exc:  # noqa: BLE001
+        errors.append(exc)
+    finally:
+        stop.set()
+        for t in readers:
+            t.join(5)
+    assert errors == [] and store.get("k") == {"n": 299}
+
+
+def raw_monid(text):
+    """A Monid answering with this exact JSON text (escapes as Monid would send them)."""
+    body = json.dumps(completed(output={"results": "@OUT@"})).replace('"@OUT@"', text)
+    return monid(lambda request: httpx.Response(200, content=body.encode(),
+                                                headers={"content-type": "application/json"}))
+
+
+def test_a_result_that_cannot_be_written_is_dropped_and_the_cost_booked(h):
+    # a lone surrogate failed the log write (UnicodeEncodeError) after the charge, on every
+    # retry; a NUL is refused by Postgres jsonb
+    for n, text in enumerate(('[{"t": "\\ud800"}]', '[{"t": "a\\u0000b"}]')):
+        h.gw.ports.toolbuy = raw_monid(text)
+        r = buy(h.gw, key=f"s{n}")
+        assert r.status == "done" and r.data["bought"] is True and r.data["result"] is None
+        json.dumps(r.as_dict(), ensure_ascii=False).encode("utf-8")
+    assert len([e for e in h.events("cost.booked") if e.provider == "monid"]) == 2
+
+
+def test_a_crash_left_intent_is_on_the_log_at_boot(make_harness):
+    # the CEO could only see it if an agent happened to retry that key
+    h = make_harness()
+    crash_left_intent(h)
+    h.ports.toolbuy = monid()
+    gw = h.restart()
+    assert len(unsure_events(h, "c1")) == 1 and gw._buy_intents.get("buy:c1") is None
+    assert gw.perform("resolve_purchase", {"key": "c1", "cost_usd": "0.0400"}).status == "done"
+    assert gw.state.spent_by_provider["monid"] == Decimal("0.0400")
+    h.restart()
+    assert len(unsure_events(h, "c1")) == 1  # once
+
+
+def test_a_repeat_is_answered_even_when_the_budget_is_spent(make_harness):
+    h = make_harness(spend_cap_usd=Decimal("0.0013"))
+    port = monid()
+    h.gw.ports.toolbuy = port
+    assert buy(h.gw).status == "done"  # the budget is now spent
+    again = buy(h.gw)
+    assert again.status == "done" and again.data["duplicate"] is True and len(port.calls) == 1
+    other = buy(h.gw, key="k2")
+    assert other.status == "refused" and "budget" in other.error["message"]

@@ -156,8 +156,9 @@ class Unsure(Unavailable):
 
 class KeyState(Rejected):
     """Refused for what this key already holds (bought, unsure, in flight). Unlike other
-    refusals it proves nothing about an earlier call's charge, so the gateway keeps that
-    call's intent."""
+    refusals it proves nothing about whether the key was charged before, so the gateway
+    keeps this call's intent as a stand-in: the key stays blocked until the CEO resolves
+    it."""
 
     proves_uncharged = False
 
