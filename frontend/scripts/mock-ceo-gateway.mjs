@@ -57,6 +57,13 @@ function pause(actionType, channel) {
     trust[t] = "PAUSED";
   }
   emit("touch.operating", { note: `pause ${actionType}`, approval_id: null, channel }, { actor: "ceo" });
+  // v1.8.4/v1.8.5: a pause from any path cancels every open proposal (a later confirm answers 409 superseded).
+  for (const p of proposals.values()) {
+    if (p.used) continue;
+    p.used = true;
+    p.cancelled = "superseded";
+    emit("ceo.cancelled", { proposal_id: p.id, via: "click", heard_len: 0, reason: "superseded" }, { actor: "ceo" });
+  }
   return actionType === "everything" || actionType === "*" ? "Paused everything: emails, social posts, calendar invites and phone screens." : `Paused ${actionType.replace(/_/g, " ")}.`;
 }
 
@@ -132,6 +139,7 @@ function command(text) {
 function confirm(body) {
   const p = proposals.get(body.proposal_id);
   if (!p) return [404, { error: { code: "not_found", message: "No such proposal." } }];
+  if (p.cancelled) return [409, { error: { code: p.cancelled, message: "That proposal was cancelled." } }];
   if (p.used) return [409, { error: { code: "used", message: "Already decided." } }];
   const heard = String(body.heard ?? "").slice(0, 200);
   const cancel = body.decision === "cancel" || (body.via === "voice" && CANCEL.some((w) => has(heard, w)));

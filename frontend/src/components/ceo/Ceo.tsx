@@ -37,7 +37,7 @@ import {
   type Console,
   type LogView,
 } from "@/ceo/ceo";
-import { CeoVoice } from "./CeoVoice";
+import { announceAgentAudio, CeoVoice } from "./CeoVoice";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
 
@@ -76,10 +76,16 @@ const subscribeToken = (l: () => void) => {
 const noToken = () => null;
 
 const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
+/** The brief, read by the browser. Voice mode counts it as agent audio (and mutes its mic) while it plays. */
 function say(text: string) {
   if (!hasSpeech()) return;
   window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+  const u = new SpeechSynthesisUtterance(text);
+  announceAgentAudio("brief", true);
+  u.onend = u.onerror = () => announceAgentAudio("brief", false);
+  // A stalled utterance must not keep the voice mic muted forever.
+  setTimeout(() => announceAgentAudio("brief", false), Math.min(120_000, 3000 + text.split(/\s+/).length * 450));
+  window.speechSynthesis.speak(u);
 }
 const hush = () => {
   if (hasSpeech()) window.speechSynthesis.cancel();
@@ -159,6 +165,7 @@ export function Ceo() {
     if (audioUrl.current) URL.revokeObjectURL(audioUrl.current);
     audioUrl.current = null;
     hush();
+    announceAgentAudio("brief", false);
   }, []);
 
   const signOut = useCallback(
@@ -215,6 +222,8 @@ export function Ceo() {
         audioUrl.current = URL.createObjectURL(blob);
         const a = new Audio(audioUrl.current);
         audioRef.current = a;
+        a.onended = a.onpause = a.onerror = () => announceAgentAudio("brief", false);
+        announceAgentAudio("brief", true);
         await a.play();
       } catch {
         if (current()) say(b.text); // no voice key (503), or autoplay blocked: the browser reads it

@@ -54,7 +54,7 @@ const speech = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-// Contract v1.8.4's spoken grammar, identical to the gateway's (backend app/ceo_tools.py
+// Contract v1.8.4/v1.8.5's spoken grammar, identical to the gateway's (backend app/ceo_tools.py
 // heard_confirms / heard_cancels), so the console never sends a confirm the gateway would refuse.
 const FILLER = "(?:(?:ok|okay|alright|so|um|uh|yes|yeah|please) )*";
 const CONFIRM_RE = new RegExp(`^${FILLER}(?:confirm|yes|confirm it|do it|go ahead|yes please)(?: please)?$`);
@@ -74,21 +74,54 @@ export interface ConfirmContext {
 }
 
 /**
- * The CEO's words → confirm, cancel, or nothing. A cancel word or a negation always wins
- * ("yes, wait" cancels). A confirm must be the whole utterance
- * (fillers allowed), not a question, not an echo, not a piece of the readback.
+ * v1.8.5: a question mark of any script, a ';', or a letter outside a-z: the grammar can't read
+ * it, so it never confirms (a "no" in another script would otherwise be stripped away).
  */
-export function matchConfirm(text: string, ctx: ConfirmContext = {}): "confirm" | "cancel" | null {
+const unreadable = (s: string) => Array.from(s).some((ch) => "?¿？؟;".includes(ch) || (ch.charCodeAt(0) > 127 && /\p{L}/u.test(ch)));
+
+const readbackBody = (readback: string | undefined) => speech((readback ?? "").replace(/\s*say confirm\.?\s*$/i, ""));
+
+/**
+ * The CEO's words → confirm, cancel, "blocked" (a confirm phrase the rules refuse: a question,
+ * an echo, the readback's own words, unreadable text), or nothing. A cancel word always wins.
+ */
+export function classifyConfirm(text: string, ctx: ConfirmContext = {}): "confirm" | "cancel" | "blocked" | null {
   const clipped = clipHeard(text);
   const w = speech(clipped);
   if (!w) return null;
   if (CANCEL_RE.test(w)) return "cancel";
-  if (clipped.includes("?") || ECHO_RE.test(w)) return null;
-  const body = speech((ctx.readback ?? "").replace(/\s*say confirm\.?\s*$/i, ""));
-  if (body && ` ${body} `.includes(` ${w} `)) return null;
-  if (CONFIRM_RE.test(w)) return "confirm";
-  if (ctx.tool === "approve" && APPROVE_IT_RE.test(w)) return "confirm";
-  return null;
+  const phrase = CONFIRM_RE.test(w) || (ctx.tool === "approve" && APPROVE_IT_RE.test(w));
+  const body = readbackBody(ctx.readback);
+  if (unreadable(clipped) || ECHO_RE.test(w) || (body && ` ${body} `.includes(` ${w} `))) return phrase || /\bconfirm\b/.test(w) ? "blocked" : null;
+  return phrase ? "confirm" : null;
+}
+
+/**
+ * The CEO's words → confirm, cancel, or nothing (contract v1.8.4 + v1.8.5, the gateway's grammar).
+ * A confirm must be the whole utterance (fillers allowed), never a question, an echo, a piece of
+ * the readback, or text the grammar can't read.
+ */
+export function matchConfirm(text: string, ctx: ConfirmContext = {}): "confirm" | "cancel" | null {
+  const c = classifyConfirm(text, ctx);
+  return c === "blocked" ? null : c;
+}
+
+/** "approve it" (the v1.8.4 command form that confirms an approve proposal). */
+export const isApproveIt = (text: string) => APPROVE_IT_RE.test(speech(clipHeard(text)));
+
+/**
+ * Did the agent's reply carry the whole readback? Most of its words (numbers aside: speech
+ * writes "$450" as words), and no question after it. Otherwise the CEO hasn't heard what
+ * they'd confirm, and only a click or typing can.
+ */
+export function readbackCovered(said: string, readback: string): boolean {
+  const want = new Set(readbackBody(readback).split(" ").filter((w) => /^[a-z']{3,}$/.test(w)));
+  if (!want.size) return true;
+  const got = new Set(speech(said).split(" "));
+  let hit = 0;
+  for (const w of want) if (got.has(w)) hit += 1;
+  const tail = said.trim().split(/(?<=[.!])\s+/).at(-1) ?? "";
+  return hit / want.size >= 0.8 && !/[?¿？]\s*$/.test(tail);
 }
 
 /** A cancel with nothing else in it. "Stop everything" cancels the card AND goes on as a command. */
@@ -119,15 +152,17 @@ const str = (v: unknown) => (typeof v === "string" ? v : "");
 /** A proposal's lifetime (contract: 60 s), and the fallback when the wire's expiry can't be used. */
 export const PROPOSAL_TTL_MS = 60_000;
 
+/** The local card closes this much before the gateway's 60 s, for the round trip. */
+const EXPIRY_MARGIN_MS = 2000;
+
 /**
- * Local expiry from the wire's `expires_at`. The gateway's clock is the authority (it answers
- * 409 expired), so a client clock running ahead must not kill a fresh card: an expiry that is
- * already past, unreadable or further than 60 s out falls back to now + 60 s.
+ * Local expiry. Every proposal lives 60 s from when the gateway made it, which is when its
+ * answer arrives here, so the console counts 60 s from receipt (less a margin) on its own clock.
+ * The wire's `expires_at` is on the gateway's clock: a client clock that is off, even by a few
+ * seconds, must not shorten the card. The gateway's 409 expired stays the authority.
  */
-export function localExpiry(expiresAt: unknown, now: number): number {
-  const t = Date.parse(str(expiresAt));
-  const left = t - now;
-  return Number.isFinite(left) && left > 0 && left <= PROPOSAL_TTL_MS ? t : now + PROPOSAL_TTL_MS;
+export function localExpiry(_expiresAt: unknown, now: number): number {
+  return now + PROPOSAL_TTL_MS - EXPIRY_MARGIN_MS;
 }
 
 /** POST /api/ceo/tool, /api/ceo/command and /api/ceo/confirm answers; anything else is null. */
@@ -235,8 +270,10 @@ export type VoiceEffect =
   | { type: "reply"; callId: string; output: string }
   /** POST /api/ceo/confirm with via "voice" and what the CEO said. The reducer has claimed the card. */
   | { type: "confirm"; proposalId: string; decision: "confirm" | "cancel"; heard: string }
-  /** A confirm phrase heard while the agent was talking (or right after): not taken, say it again. */
+  /** A confirm phrase not taken (heard during agent audio, before the readback, or blocked by the rules): say it again, or click. */
   | { type: "ignored"; text: string }
+  /** The agent's reply didn't carry the whole readback: this card can be confirmed by click or typing only, until it is read in full. */
+  | { type: "unread" }
   /** The CEO's own words, for the transcript. */
   | { type: "heard"; text: string }
   /** The agent's words, for the transcript (never matched against the grammar). */
@@ -264,6 +301,10 @@ export interface OpenProposal extends Proposal {
   replyId: string | null;
   /** That response played audio (then only the end of the audio arms the card). */
   replyAudio: boolean;
+  /** What that response said (its transcript): it must carry the readback. */
+  replyText: string | null;
+  /** When its audio stopped playing (ms). */
+  replyEndedAt: number | null;
 }
 
 export interface VoiceState {
@@ -306,6 +347,8 @@ export function armProposal(s: VoiceState, p: Proposal, now: number, readBy: "mo
       heardAt: readBy === "none" ? now : null,
       replyId: readBy === "browser" ? "local" : null,
       replyAudio: false,
+      replyText: null,
+      replyEndedAt: null,
     },
   };
 }
@@ -333,10 +376,13 @@ export function claimCard(
   decision: "confirm" | "cancel",
   now: number,
   claimed?: string,
+  onScreen?: string,
 ): { state: VoiceState; proposal: OpenProposal } | null {
   const p = s.proposal;
   if (!p) return null;
   if (claimed !== undefined) return p.proposalId === claimed && p.settling ? { state: s, proposal: p } : null;
+  // A click acts on the card it was made on: never on one that replaced it under the pointer.
+  if (onScreen !== undefined && p.proposalId !== onScreen) return null;
   if (p.settling || (decision === "confirm" && now >= p.expiresAt)) return null;
   const state = settleProposal(s);
   return { state, proposal: state.proposal as OpenProposal };
@@ -371,8 +417,9 @@ function duringAgentAudio(s: VoiceState, at: number): boolean {
 export function decide(s: VoiceState, text: string, speechAt: number | null, now: number): VoiceEffect | null {
   const p = s.proposal;
   if (!p || p.settling || speechAt === null || speechAt < p.openedAt) return null;
-  const d = matchConfirm(text, p);
+  const d = classifyConfirm(text, p);
   if (!d) return null;
+  if (d === "blocked") return { type: "ignored", text };
   if (d === "confirm") {
     if (now >= p.expiresAt) return null;
     if (p.heardAt === null || speechAt <= p.heardAt + ECHO_TAIL_MS || duringAgentAudio(s, speechAt)) return { type: "ignored", text };
@@ -380,12 +427,18 @@ export function decide(s: VoiceState, text: string, speechAt: number | null, now
   return { type: "confirm", proposalId: p.proposalId, decision: d, heard: clipHeard(text) };
 }
 
-/** Words typed, or heard by the browser (which never listens while it speaks): grammar only, no audio timing. */
-export function decideTyped(s: VoiceState, text: string, now: number): VoiceEffect | null {
+/**
+ * Words typed, or heard by the browser (which never listens while it speaks): the grammar, no
+ * audio timing. `spoken`: heard by the browser, so like any spoken confirm it needs the readback
+ * to have been heard first (typing doesn't: the card is on screen).
+ */
+export function decideTyped(s: VoiceState, text: string, now: number, spoken = false): VoiceEffect | null {
   const p = s.proposal;
   if (!p || p.settling) return null;
-  const d = matchConfirm(text, p);
-  if (!d || (d === "confirm" && now >= p.expiresAt)) return null;
+  const d = classifyConfirm(text, p);
+  if (!d) return null;
+  if (d === "blocked" || (d === "confirm" && spoken && p.heardAt === null)) return { type: "ignored", text };
+  if (d === "confirm" && now >= p.expiresAt) return null;
   return { type: "confirm", proposalId: p.proposalId, decision: d, heard: clipHeard(text) };
 }
 
@@ -396,24 +449,36 @@ const bounded = <K, V>(m: Map<K, V>) => {
 
 const responseId = (r: unknown) => (isObj(r) ? str(r.id) : "");
 
-/** Did a finished response say anything (a message), as opposed to only calling functions? */
-function spoke(r: unknown): { message: boolean; audio: boolean } {
+/** What a finished response said: a message (and its words), audio, or only function calls. */
+function spoke(r: unknown): { message: boolean; audio: boolean; text: string } {
   const out = isObj(r) && Array.isArray(r.output) ? r.output : [];
   let message = false;
   let audio = false;
+  const text: string[] = [];
   for (const item of out) {
     if (!isObj(item) || item.type !== "message") continue;
     message = true;
-    for (const c of Array.isArray(item.content) ? item.content : []) if (isObj(c) && /audio/.test(str(c.type))) audio = true;
+    for (const c of Array.isArray(item.content) ? item.content : []) {
+      if (!isObj(c)) continue;
+      if (/audio/.test(str(c.type))) audio = true;
+      text.push(str(c.text) || str(c.transcript));
+    }
   }
-  return { message, audio };
+  return { message, audio, text: text.join(" ").trim() };
 }
 
-/** The reading-back response's audio ended: from now (plus the echo tail) the CEO's speech can confirm. */
-function readbackEnded(s: VoiceState, rid: string, now: number): VoiceState {
+/** The reply is no readback after all (cut off, failed, only calls, or not the whole readback): wait for the next one. */
+const resetReply = (p: OpenProposal): OpenProposal => ({ ...p, replyId: null, replyAudio: false, replyText: null, replyEndedAt: null });
+
+/**
+ * Arm the card when the reading-back reply both finished playing and carried the readback. A
+ * reply that didn't carry it leaves the card unarmed (click or typing only) and says so.
+ */
+function tryArm(s: VoiceState): { state: VoiceState; unread: boolean } {
   const p = s.proposal;
-  if (!p || p.heardAt !== null || !p.replyId || p.replyId === "local" || (rid && rid !== p.replyId) || !p.replyAudio) return s;
-  return { ...s, proposal: { ...p, heardAt: now } };
+  if (!p || p.heardAt !== null || p.replyText === null || p.replyEndedAt === null) return { state: s, unread: false };
+  if (readbackCovered(p.replyText, p.readback)) return { state: { ...s, proposal: { ...p, heardAt: p.replyEndedAt } }, unread: false };
+  return { state: { ...s, proposal: resetReply(p) }, unread: true };
 }
 
 /** Realtime server event (data channel "oai-events") → new state and what the console does. */
@@ -457,8 +522,18 @@ export function voiceStep(s: VoiceState, raw: unknown, now: number): { state: Vo
     case "response.audio_transcript.done":
     case "response.output_audio_transcript.done": {
       // The model's words. Shown, never matched: the model saying "confirmed" does nothing.
+      // For the reading-back reply they are what the CEO heard: they must carry the readback.
       const text = str(raw.transcript).trim();
-      return { state: markAudio(s), effects: text ? [{ type: "agent", text }] : [] };
+      let st = markAudio(s);
+      const q = st.proposal;
+      let unread = false;
+      if (q && waiting && q.replyId && (!rid || rid === q.replyId)) {
+        st = { ...st, proposal: { ...q, replyText: `${q.replyText ?? ""} ${text}`.trim() } };
+        ({ state: st, unread } = tryArm(st));
+      }
+      const effects: VoiceEffect[] = text ? [{ type: "agent", text }] : [];
+      if (unread) effects.push({ type: "unread" });
+      return { state: st, effects };
     }
     case "response.audio_transcript.delta":
     case "response.output_audio_transcript.delta":
@@ -475,11 +550,23 @@ export function voiceStep(s: VoiceState, raw: unknown, now: number): { state: Vo
     case "response.output_audio.delta":
       // Audio is being made; over WebRTC only output_audio_buffer.* say when it plays in the room.
       return { state: markAudio(s), effects: [{ type: "state", state: "speaking" }] };
-    case "output_audio_buffer.stopped":
+    case "output_audio_buffer.stopped": {
+      // The model's audio finished playing in the room.
+      let st = agentAudio(s, "model", false, now);
+      const q = st.proposal;
+      let unread = false;
+      if (q && waiting && q.replyId && q.replyAudio && (!rid || rid === q.replyId)) {
+        st = { ...st, proposal: { ...q, replyEndedAt: now } };
+        ({ state: st, unread } = tryArm(st));
+      }
+      return { state: st, effects: unread ? [{ type: "state", state: "idle" }, { type: "unread" }] : [{ type: "state", state: "idle" }] };
+    }
     case "output_audio_buffer.cleared": {
-      // The model's audio ended in the room (stopped), or the CEO cut it off (cleared, a barge-in:
-      // that speech started during the audio, so it still can't confirm).
-      const st = readbackEnded(agentAudio(s, "model", false, now), rid, now);
+      // Cut off (a barge-in, a cough, or the echo tripping the VAD): the CEO did not hear the
+      // whole readback, so this reply never arms the card. The next full reading can.
+      let st = agentAudio(s, "model", false, now);
+      const q = st.proposal;
+      if (q && waiting && q.replyId && (!rid || rid === q.replyId)) st = { ...st, proposal: resetReply(q) };
       return { state: st, effects: [{ type: "state", state: "idle" }] };
     }
     case "response.done": {
@@ -487,14 +574,21 @@ export function voiceStep(s: VoiceState, raw: unknown, now: number): { state: Vo
       const id = responseId(r);
       let st = s;
       const q = st.proposal;
+      const effects: VoiceEffect[] = [{ type: "state", state: "idle" }, { type: "response", active: false }];
       if (q && q.heardAt === null && q.replyId && q.replyId !== "local" && q.replyId === id) {
         const said = spoke(r);
-        // An audio reply is heard only when its audio stops playing (output_audio_buffer.stopped/cleared).
-        if (said.audio || q.replyAudio) st = { ...st, proposal: { ...q, replyAudio: true } };
-        else if (said.message) st = { ...st, proposal: { ...q, heardAt: now } }; // a text-only readback
-        else st = { ...st, proposal: { ...q, replyId: null } }; // only function calls: the readback is still to come
+        const status = isObj(r) ? str(r.status) : "";
+        if (status && status !== "completed") st = { ...st, proposal: resetReply(q) }; // cancelled or failed: not heard
+        // An audio reply is heard only when its audio stops playing (output_audio_buffer.stopped).
+        else if (said.audio || q.replyAudio) st = { ...st, proposal: { ...q, replyAudio: true } };
+        else if (said.message) {
+          // A text-only readback: heard now, if it carried the readback.
+          const r2 = tryArm({ ...st, proposal: { ...q, replyText: said.text, replyEndedAt: now } });
+          st = r2.state;
+          if (r2.unread) effects.push({ type: "unread" });
+        } else st = { ...st, proposal: resetReply(q) }; // only function calls: the readback is still to come
       }
-      return { state: st, effects: [{ type: "state", state: "idle" }, { type: "response", active: false }] };
+      return { state: st, effects };
     }
     case "error": {
       const err = isObj(raw.error) ? raw.error : {};

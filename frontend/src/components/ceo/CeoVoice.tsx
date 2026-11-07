@@ -22,11 +22,13 @@ import {
   announcements,
   armProposal,
   claimCard,
+  CEO_TOOLS,
   clearProposal,
   decideTyped,
   describeRead,
   emptyVoice,
   functionOutputItem,
+  isApproveIt,
   isBareCancel,
   matchConfirm,
   parseToolResult,
@@ -57,6 +59,14 @@ const EAR_REOPEN_MS = 600;
 /** A spoken line that hasn't ended after ~this per word (plus 2 s, at most 30 s) is treated as stalled. */
 const SPEECH_MS_PER_WORD = 450;
 const SPEECH_MAX_MS = 30000;
+/** After STOP, function calls from the response it cut off may still arrive: they are fenced this long. */
+const STOP_FENCE_MS = 2000;
+/** While a confirm lands (and this long after), a model start call is answered locally: no duplicate proposal. */
+const CONFIRM_QUIET_MS = 5000;
+/** A Confirm click this soon after the card changed is ignored (it was aimed at the card before). */
+const CLICK_GUARD_MS = 600;
+/** Realtime errors that end the session: fall back to browser speech. */
+const FATAL_ERRORS = new Set(["session_expired", "session_closed", "invalid_session"]);
 /** A response.create with no response.created after this long is treated as lost. */
 const RESPONSE_STALE_MS = 15000;
 
@@ -66,7 +76,17 @@ type Line = { who: "you" | "firm" | "alert"; text: string; n: number };
 interface Card extends Proposal {
   expired: boolean;
   sending: boolean;
+  /** A confirm was sent but its answer never came: it may have run. */
+  unknown: boolean;
+  /** When this card appeared (ms): a click right after a swap belongs to the card before. */
+  shownAt: number;
 }
+
+/** Other agent audio on the console (the brief): CeoVoice counts it and mutes the mic meanwhile. */
+export const AGENT_AUDIO_EVENT = "utax:agent-audio";
+export const announceAgentAudio = (source: string, on: boolean) => {
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(AGENT_AUDIO_EVENT, { detail: { source, on } }));
+};
 
 // Browser speech recognition (Chrome ships it prefixed); feature-detected, typed minimally.
 interface Recognition {
@@ -120,6 +140,10 @@ function voiceError(e: unknown): string {
       return "That proposal was replaced or cancelled (a newer one, a change, or a pause). Ask again to hear the current one.";
     case "flagged":
       return "QA flagged that case, so it can't be decided by voice. Decide it in the lists below.";
+    case "console_only":
+      return "That one can only be decided in the console. Use the lists below.";
+    case "bad_answer":
+      return "The gateway answered, but not in a way the console can read, so it may have run. Check the lists.";
     case "not_a_confirm":
       return "That didn't sound like a confirm. Say “confirm”, or click Confirm.";
     case "nothing_pending":
@@ -135,8 +159,11 @@ function voiceError(e: unknown): string {
       return ceoError(e.status, e.code, e.message);
   }
 }
+const IGNORED =
+  "That wasn't taken as a confirm: it came while U-Tax was talking, before the proposal was read out, or it wasn't clear. Say “confirm” on its own, or click Confirm.";
+
 /** Refusals after which the action certainly did not run. */
-const NOT_RUN = new Set(["expired", "superseded", "flagged", "not_a_confirm", "not_found", "bad_args", "unknown_tool", "nothing_pending"]);
+const NOT_RUN = new Set(["expired", "superseded", "flagged", "console_only", "not_a_confirm", "not_found", "bad_args", "unknown_tool", "nothing_pending"]);
 
 export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: VoiceProps) {
   const [link, setLink] = useState<Link>("off");
@@ -175,6 +202,21 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   /** A model response is running (or was just asked for): a second response.create would be refused. */
   const responding = useRef<number | null>(null);
   const wantResponse = useRef(false);
+  /** When STOP last ran (ms): calls from the response it cut off are fenced for STOP_FENCE_MS. */
+  const stoppedAt = useRef(0);
+  /** When a confirm was last sent (ms), and while one is in flight. */
+  const confirmingAt = useRef(0);
+  /** Words queued for the browser's voice: each line's stall limit counts everything ahead of it. */
+  const queuedWords = useRef(0);
+  /** Agent audio from elsewhere on the console (the brief) playing now. */
+  const otherAudio = useRef(0);
+  /** Cards whose confirm got no answer (it may have run): their expiry never says "nothing was done". */
+  const unknownIds = useRef(new Set<string>());
+  /** Cases seen flagged in any feed batch (until a log reset): never read out. */
+  const seenFlagged = useRef(new Set<string>());
+  /** Late-bound handlers for closures made before them (a fatal Realtime error, the other-audio listener). */
+  const fatalRef = useRef<(why: string) => void>(() => {});
+  const applyMicRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     namesRef.current = names;
@@ -193,10 +235,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   }, []);
 
   /** Realtime client events, only while the channel is open. */
-  const send = useCallback((events: readonly object[]) => {
+  const send = useCallback((events: readonly object[]): boolean => {
     const dc = callRef.current?.dc;
-    if (dc?.readyState !== "open") return;
+    if (dc?.readyState !== "open") return false;
     for (const e of events) dc.send(JSON.stringify(e));
+    return true;
   }, []);
 
   /** Ask the model to speak: once, after the last tool result, and never over a running response. */
@@ -208,13 +251,12 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       return;
     }
     wantResponse.current = false;
-    responding.current = Date.now();
-    send([{ type: "response.create" }]);
+    if (send([{ type: "response.create" }])) responding.current = Date.now();
   }, [send]);
 
   /** The mic track is live only while talking (push-to-talk) or hands-free, and never while the browser speaks. */
   const applyMic = useCallback(() => {
-    const live = (micRef.current || handsRef.current) && speaking.current === 0;
+    const live = (micRef.current || handsRef.current) && speaking.current === 0 && otherAudio.current === 0;
     callRef.current?.mic.getAudioTracks().forEach((t) => (t.enabled = live));
   }, []);
 
@@ -238,6 +280,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   // listen() and onSpoken() call each other through these refs (speech ends → listen again).
   const listenRef = useRef<() => void>(() => {});
   const spokenRef = useRef<(text: string) => void>(() => {});
+  const speakRef = useRef<(text: string, onDone?: (played: boolean) => void) => void>(() => {});
 
   /**
    * Read a line aloud, queued. While the browser speaks, its own ear is closed and the Realtime
@@ -245,9 +288,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
    * `onDone` runs when this line has been spoken (or at once when nothing can speak).
    */
   const speak = useCallback(
-    (text: string, onDone?: () => void) => {
+    (text: string, onDone?: (played: boolean) => void) => {
       if (!hasSpeech() || !text) {
-        onDone?.();
+        onDone?.(true); // nothing can speak: the card on screen is all there is
         return;
       }
       const u = new SpeechSynthesisUtterance(text);
@@ -259,29 +302,33 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         micRef.current = false; // push-to-talk ended with the answer: the label must not say "Listening"
         setMicOn(false);
       }
+      const words = text.split(/\s+/).length;
+      queuedWords.current += words;
       let ended = false;
-      const done = () => {
+      const done = (played: boolean) => {
         if (ended) return;
         ended = true;
+        queuedWords.current = Math.max(0, queuedWords.current - words);
         speaking.current = Math.max(0, speaking.current - 1);
         if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", false, Date.now());
         applyMic();
-        onDone?.();
+        onDone?.(played);
         if (speaking.current === 0 && alive.current && linkRef.current === "fallback" && handsRef.current) {
           setTimeout(() => {
             if (alive.current && speaking.current === 0 && handsRef.current) listenRef.current();
           }, EAR_REOPEN_MS);
         }
       };
-      u.onend = done;
-      u.onerror = done;
+      u.onend = () => done(true);
+      u.onerror = () => done(false); // cut off (cancelled, interrupted): not heard
       // Browser speech can stall without ever ending (seen headless; Chrome does it too). Past a
-      // generous length-based limit, silence it (so no echo follows) and carry on as if it ended.
-      const limit = Math.min(SPEECH_MAX_MS, 2000 + text.split(/\s+/).length * SPEECH_MS_PER_WORD);
+      // generous limit that counts every word queued ahead of this line, silence it (so no echo
+      // follows) and carry on; a stalled line counts as not heard.
+      const limit = Math.min(SPEECH_MAX_MS * 4, 2000 + queuedWords.current * SPEECH_MS_PER_WORD);
       setTimeout(() => {
         if (ended) return;
         if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
-        done();
+        done(false);
       }, limit);
       window.speechSynthesis.speak(u);
     },
@@ -385,9 +432,10 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   );
 
   const showCard = useCallback((p: Proposal) => {
-    setNow(Date.now());
+    const t = Date.now();
+    setNow(t);
     setOutcome(null);
-    setCard({ ...p, expired: false, sending: false });
+    setCard({ ...p, expired: false, sending: false, unknown: false, shownAt: t });
   }, []);
   const closeCard = useCallback((proposalId?: string) => {
     vs.current = clearProposal(vs.current, proposalId);
@@ -400,21 +448,25 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
    */
   const openLocalCard = useCallback(
     (p: Proposal, say: string) => {
-      const realtime = linkRef.current === "realtime";
-      vs.current = armProposal(vs.current, p, Date.now(), realtime ? "browser" : "none");
+      const voiced = linkRef.current === "realtime" || linkRef.current === "fallback";
+      const replaced = vs.current.proposal && vs.current.proposal.proposalId !== p.proposalId;
+      vs.current = armProposal(vs.current, p, Date.now(), voiced ? "browser" : "none");
       showCard(p);
       addLine("firm", say);
-      speak(say, () => {
-        vs.current = readbackHeard(vs.current, p.proposalId, Date.now());
+      if (replaced) tellModel(`The open proposal was replaced. Only this one can be confirmed now: ${p.readback}`, false);
+      speak(say, (played) => {
+        // Spoken confirms count only once the readback was actually heard (a cut-off reading doesn't arm it).
+        if (played) vs.current = readbackHeard(vs.current, p.proposalId, Date.now());
       });
     },
-    [addLine, showCard, speak],
+    [addLine, showCard, speak, tellModel],
   );
 
   /** POST /api/ceo/confirm and report the outcome everywhere. The card was already claimed. */
   const send_confirm = useCallback(
     async (proposalId: string, decision: "confirm" | "cancel", via: "voice" | "click", heard: string) => {
       const epoch = stopEpoch.current;
+      confirmingAt.current = Date.now();
       setCard((c) => (c && c.proposalId === proposalId ? { ...c, sending: true } : c));
       try {
         const r = await post("/ceo/confirm", { proposal_id: proposalId, decision, via, heard });
@@ -425,10 +477,23 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         refresh();
         if (decision === "confirm" && epoch !== stopEpoch.current) {
           // It landed while STOP EVERYTHING ran: pause again, so nothing it re-enabled keeps going.
-          await post("/ceo/tool", { name: STOP_EVERYTHING.name, args: STOP_EVERYTHING.args, call_id: `stop-${Date.now()}`, channel: "click" }).catch(() => {});
+          let paused = true;
+          try {
+            await post("/ceo/tool", { name: STOP_EVERYTHING.name, args: STOP_EVERYTHING.args, call_id: `stop-${Date.now()}`, channel: "click" });
+          } catch (e) {
+            if (unauthorized(e)) return;
+            paused = await authJson(token, `${API}/trust`, { method: "POST", body: JSON.stringify({ action_type: "*", state: "PAUSED" }) }).then(
+              () => true,
+              () => false,
+            );
+          }
           if (!alive.current) return;
-          setStopNote({ ok: true, text: `A confirm landed during STOP (${text}), so everything was paused again.` });
-          tellModel(`STOP EVERYTHING. A confirm landed at the same moment (${text}); everything was paused again.`, false);
+          setStopNote(
+            paused
+              ? { ok: true, text: `A confirm landed during STOP (${text}), so everything was paused again.` }
+              : { ok: false, text: `A confirm landed during STOP (${text}) and pausing again failed. Press STOP EVERYTHING again.` },
+          );
+          tellModel(`STOP EVERYTHING. A confirm landed at the same moment (${text}); ${paused ? "everything was paused again" : "the second pause failed"}.`, false);
           return;
         }
         tellModel(text, epoch === stopEpoch.current);
@@ -441,7 +506,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           // Still open: say it again, or click (a retry of one that did land answers "used").
           const cur = vs.current.proposal;
           if (cur && cur.proposalId === proposalId) vs.current = { ...vs.current, proposal: { ...cur, settling: false } };
-          setCard((c) => (c && c.proposalId === proposalId ? { ...c, sending: false } : c));
+          const unknown = code !== "not_a_confirm";
+          if (unknown) unknownIds.current.add(proposalId);
+          setCard((c) => (c && c.proposalId === proposalId ? { ...c, sending: false, unknown: c.unknown || unknown } : c));
         } else {
           closeCard(proposalId);
           refresh();
@@ -451,7 +518,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         if (linkRef.current !== "realtime") speak(msg);
       }
     },
-    [closeCard, post, refresh, speak, tellModel, unauthorized],
+    [closeCard, post, refresh, speak, tellModel, token, unauthorized],
   );
 
   /**
@@ -459,8 +526,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
    * Realtime reducer already claimed this card (its id); a click or typed words claim it here.
    */
   const settle = useCallback(
-    (decision: "confirm" | "cancel", via: "voice" | "click", heard: string, claimed?: string) => {
-      const c = claimCard(vs.current, decision, Date.now(), claimed);
+    (decision: "confirm" | "cancel", via: "voice" | "click", heard: string, claimed?: string, onScreen?: string) => {
+      const c = claimCard(vs.current, decision, Date.now(), claimed, onScreen);
       if (!c) return Promise.resolve();
       vs.current = c.state;
       return send_confirm(c.proposal.proposalId, decision, via, heard);
@@ -470,16 +537,18 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
 
   /** A gateway answer: back to the model (Realtime), or read aloud (fallback and typing). */
   const handle = useCallback(
-    (r: ToolResult, callId: string | null, tool: string | null, via: "voice" | "click") => {
+    (r: ToolResult, callId: string | null, tool: string | null, via: "voice" | "click", said = "") => {
       if (r.kind === "done") {
         setOutcome({ ok: true, text: r.summary });
         refresh();
       }
       if (callId) {
         if (r.kind === "proposal") {
-          // The model reads it back; a spoken confirm waits until that audio has played.
+          // The model reads it back; a spoken confirm waits until that audio has played in full.
+          const replaced = vs.current.proposal && vs.current.proposal.proposalId !== r.proposalId;
           vs.current = armProposal(vs.current, { ...r, tool }, Date.now(), "model");
-          showCard(r);
+          showCard({ ...r, tool });
+          if (replaced) send([actionResultItem(`The earlier proposal was replaced. Only this one can be confirmed now: ${r.readback}`)]);
         }
         send([functionOutputItem(callId, toolOutput(r))]);
         return;
@@ -497,7 +566,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           return;
         }
         // Never confirm a card the CEO hasn't seen: show it, and ask for a fresh confirm.
-        const p = { proposalId: r.proposalId, readback: r.readback || "The open proposal.", expiresAt: Date.now() + PROPOSAL_TTL_MS };
+        // ("approve it" only ever matches an approve proposal: v1.8.4.) The gateway's own expiry may come sooner; its 409 expired rules.
+        const p = { proposalId: r.proposalId, readback: r.readback || "The open proposal.", expiresAt: Date.now() + PROPOSAL_TTL_MS, tool: isApproveIt(said) ? "approve" : null };
         return openLocalCard(p, `${p.readback} Confirm again to go ahead.`);
       }
       const text = r.kind === "read" ? describeRead(r.data) : r.kind === "done" ? r.summary : r.kind === "unknown" ? r.say : "";
@@ -511,6 +581,18 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     async (c: FunctionCall) => {
       const mine = attempt.current;
       const epoch = stopEpoch.current;
+      const stoppedOut = (text: string) => send([functionOutputItem(c.callId, toolOutput({ kind: "error", code: "stopped", message: text }))]);
+      if (Date.now() - stoppedAt.current < STOP_FENCE_MS) {
+        // A call from the response STOP cut off: never sent on, and the model stays quiet.
+        stoppedOut("The CEO pressed STOP EVERYTHING. Nothing new was started.");
+        return;
+      }
+      if (CEO_TOOLS[c.name] === "start" && (vs.current.proposal?.settling || Date.now() - confirmingAt.current < CONFIRM_QUIET_MS)) {
+        // The CEO's confirm is landing: a second proposal now would replace or duplicate it.
+        send([functionOutputItem(c.callId, toolOutput({ kind: "error", code: "busy", message: "The CEO is confirming the open proposal. Wait for the action result; don't propose again." }))]);
+        respond();
+        return;
+      }
       inflight.current += 1;
       let output: string;
       let result: ToolResult | null = null;
@@ -525,8 +607,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       }
       if (mine !== attempt.current || !alive.current) return;
       if (epoch !== stopEpoch.current) {
-        // STOP EVERYTHING came first: no card from it, and the model stays quiet.
-        send([functionOutputItem(c.callId, toolOutput({ kind: "error", code: "stopped", message: "The CEO pressed STOP EVERYTHING. Nothing new was started." }))]);
+        // STOP EVERYTHING came first: no card from it (and it is cancelled at the gateway), and the model stays quiet.
+        if (result?.kind === "proposal") void post("/ceo/confirm", { proposal_id: result.proposalId, decision: "cancel", via: "click", heard: "" }).catch(() => {});
+        stoppedOut("The CEO pressed STOP EVERYTHING. Nothing new was started.");
         return;
       }
       if (result) handle(result, c.callId, c.name, "voice");
@@ -542,13 +625,25 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       const t = text.trim();
       if (!t) return;
       addLine("you", t);
-      const d = decideTyped(vs.current, t, Date.now());
+      const d = decideTyped(vs.current, t, Date.now(), via === "voice");
+      if (d?.type === "ignored") {
+        setOutcome({ ok: false, text: IGNORED });
+        return;
+      }
       if (d?.type === "confirm") {
         await settle(d.decision, via, d.heard);
         if (d.decision === "confirm" || isBareCancel(t)) return; // "stop everything" also goes on as a command
       } else if (vs.current.proposal && matchConfirm(t, vs.current.proposal)) return; // the card is settling or expired
+      const epoch = stopEpoch.current;
       try {
-        handle(await post("/ceo/command", { text: t.slice(0, 500) }), null, null, via);
+        const r = await post("/ceo/command", { text: t.slice(0, 500) });
+        if (!alive.current) return;
+        if (epoch !== stopEpoch.current) {
+          // STOP came while it was on its way: nothing new from it.
+          if (r.kind === "proposal") void post("/ceo/confirm", { proposal_id: r.proposalId, decision: "cancel", via: "click", heard: "" }).catch(() => {});
+          return;
+        }
+        handle(r, null, null, via, t);
       } catch (e) {
         if (!alive.current || unauthorized(e)) return;
         const msg = voiceError(e);
@@ -579,7 +674,10 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
             void settle(ef.decision, "voice", ef.heard, ef.proposalId);
             break;
           case "ignored":
-            setOutcome({ ok: false, text: "Heard “confirm” while U-Tax was still talking. Say it again, or click Confirm." });
+            setOutcome({ ok: false, text: IGNORED });
+            break;
+          case "unread":
+            setOutcome({ ok: false, text: "U-Tax didn't read the whole proposal aloud, so it can't be confirmed by voice yet. Click Confirm or type it, or ask U-Tax to read it again." });
             break;
           case "heard":
             addLine("you", ef.text);
@@ -599,7 +697,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
             break;
           case "error":
             if (ef.code === "conversation_already_has_active_response") wantResponse.current = true;
+            else responding.current = null; // whatever failed, it isn't a response running
             console.warn("[ceo voice] realtime error", ef.code, ef.message);
+            if (FATAL_ERRORS.has(ef.code)) fatalRef.current("The voice session ended.");
             break;
         }
       }
@@ -636,9 +736,20 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         micRef.current = false;
         setMicOn(false);
       }
+      // A card the model never finished reading: the console reads it now, and only then can speech confirm it.
+      const p = vs.current.proposal;
+      if (p && p.heardAt === null && !p.settling) {
+        vs.current = armProposal(vs.current, p, p.openedAt, "browser");
+        speakRef.current(p.readback, (played) => {
+          if (played) vs.current = readbackHeard(vs.current, p.proposalId, Date.now());
+        });
+      }
     },
     [go, hangUp],
   );
+  useEffect(() => {
+    fatalRef.current = toFallback;
+  }, [toFallback]);
 
   /** First mic press or hands-free: mint a CEO session, then ask for the mic (only now), then connect. */
   const connect = useCallback(async () => {
@@ -709,6 +820,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       go("realtime");
       setFlow("idle");
       // The gateway set instructions, tools and transcription when minting. No opener: the CEO speaks first.
+    };
+    dc.onclose = () => {
+      if (!stale() && opened) toFallback("The voice line closed.");
     };
     dc.onmessage = (m) => {
       if (stale()) return;
@@ -808,6 +922,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     if (stopping.current) return;
     stopping.current = true;
     stopEpoch.current += 1;
+    stoppedAt.current = Date.now();
     wantResponse.current = false;
     hush();
     send([{ type: "response.cancel" }, { type: "output_audio_buffer.clear" }]);
@@ -832,7 +947,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         summary = "Everything is paused.";
       }
       if (!alive.current) return;
-      setStopNote({ ok: true, text: `${summary} Resume each kind under Standing orders when you're ready.` });
+      // A note about a confirm that landed during STOP outranks the plain "paused" one.
+      setStopNote((n) => (n && n.text.startsWith("A confirm landed") ? n : { ok: true, text: `${summary} Resume each kind under Standing orders when you're ready.` }));
       // The model was just cut off: tell it what happened, but don't start it talking again.
       tellModel(`The CEO pressed STOP EVERYTHING. ${summary}`, false);
       if (linkRef.current !== "realtime") speak("Everything is paused.");
@@ -863,25 +979,62 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // The console's brief (gateway audio or browser speech) is agent audio too: counted, and the mic muted meanwhile.
+  useEffect(() => {
+    const onAudio = (e: Event) => {
+      const d = (e as CustomEvent<{ source?: unknown; on?: unknown }>).detail ?? {};
+      const source = `other:${typeof d.source === "string" ? d.source : "audio"}`;
+      const on = d.on === true;
+      const was = vs.current.audio.playing.has(source);
+      if (on === was) return;
+      otherAudio.current = Math.max(0, otherAudio.current + (on ? 1 : -1));
+      vs.current = agentAudio(vs.current, source, on, Date.now());
+      applyMicRef.current();
+    };
+    window.addEventListener(AGENT_AUDIO_EVENT, onAudio);
+    return () => window.removeEventListener(AGENT_AUDIO_EVENT, onAudio);
+  }, []);
+
   // Hands-free: speak each new approval and BLOCKED case from the console's log poll.
-  const speakRef = useRef(speak);
   const lineRef = useRef(addLine);
   const closeRef = useRef(closeCard);
+  const tellRef = useRef(tellModel);
+  const noteRef = useRef((text: string) => {
+    setOutcome({ ok: false, text });
+    tellRef.current(`The open proposal is gone: ${text}`, false);
+  });
   useEffect(() => {
     speakRef.current = speak;
     lineRef.current = addLine;
     closeRef.current = closeCard;
-  }, [speak, addLine, closeCard]);
+    applyMicRef.current = applyMic;
+  }, [speak, addLine, closeCard, applyMic]);
   useEffect(() => {
     feedRef.current = (events, reset) => {
       const top = events.reduce((m, e) => (typeof e.id === "number" && e.id > m ? e.id : m), 0);
-      if (reset) closeRef.current(); // a reloaded log: the card belongs to the old one
+      if (reset) {
+        closeRef.current(); // a reloaded log: the card belongs to the old one
+        seenFlagged.current = new Set();
+      }
+      for (const e of events) if (e.type === "case.flagged" && e.case_id) seenFlagged.current.add(e.case_id);
+      // The gateway closed the open card itself (a pause from any path, a newer proposal, a restart).
+      const open = vs.current.proposal;
+      for (const e of events) {
+        const pid = typeof e.payload?.proposal_id === "string" ? e.payload.proposal_id : null;
+        if (!open || pid !== open.proposalId || open.settling) continue;
+        if (e.type === "ceo.cancelled" || e.type === "ceo.confirmed") {
+          closeRef.current(open.proposalId);
+          const why = e.type === "ceo.confirmed" ? "was confirmed elsewhere" : "was cancelled by the gateway (a pause, a newer proposal, or a change)";
+          noteRef.current(`That proposal ${why}. Nothing more to do on it here.`);
+        }
+      }
       if (seenId.current === null || reset) {
         seenId.current = top; // the first load, or a reloaded log: the backlog is never read out
         return;
       }
       if (handsRef.current) {
-        for (const line of announcements(events, seenId.current, namesRef.current, flaggedRef.current)) {
+        const hidden = new Set([...flaggedRef.current, ...seenFlagged.current]);
+        for (const line of announcements(events, seenId.current, namesRef.current, hidden)) {
           lineRef.current("alert", line);
           speakRef.current(line);
         }
@@ -895,7 +1048,6 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
 
   // The card's countdown; at zero it can't be confirmed (by voice or click) any more.
   const cardId = card?.proposalId ?? null;
-  const tellRef = useRef(tellModel);
   useEffect(() => {
     tellRef.current = tellModel;
   }, [tellModel]);
@@ -908,7 +1060,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       if (p && p.proposalId === cardId && n >= p.expiresAt && !p.settling) {
         vs.current = clearProposal(vs.current, cardId);
         setCard((c) => (c && c.proposalId === cardId ? { ...c, expired: true } : c));
-        tellRef.current("The proposal expired. Nothing was done.");
+        tellRef.current(unknownIds.current.has(cardId) ? "The proposal's time ran out. An earlier confirm may have gone through; the CEO should check the lists." : "The proposal expired. Nothing was done.");
       }
     }, 250);
     return () => clearInterval(t);
@@ -1032,7 +1184,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           </p>
           {card.expired ? (
             <p className="how" id="pr-how">
-              Expired: nothing was done. Ask again if you still want it.
+              {card.unknown ? "Time ran out. An earlier confirm may have gone through: check the lists." : "Expired: nothing was done. Ask again if you still want it."}
             </p>
           ) : (
             <p className="how" id="pr-how">
@@ -1042,13 +1194,17 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           )}
           <div className="btns">
             {!card.expired && (
-              <button className="primary" onClick={() => void settle("confirm", "click", "")} disabled={card.sending || left === 0}>
+              <button
+                className="primary"
+                onClick={() => void settle("confirm", "click", "", undefined, card.proposalId)}
+                disabled={card.sending || left === 0 || now - card.shownAt < CLICK_GUARD_MS}
+              >
                 {card.sending ? "Working…" : "Confirm"}
               </button>
             )}
             <button
               className="secondary"
-              onClick={() => (card.expired ? closeCard(card.proposalId) : void settle("cancel", "click", ""))}
+              onClick={() => (card.expired ? closeCard(card.proposalId) : void settle("cancel", "click", "", undefined, card.proposalId))}
               disabled={card.sending}
             >
               {card.expired ? "Dismiss" : "Cancel"}

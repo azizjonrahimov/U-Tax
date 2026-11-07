@@ -14,6 +14,9 @@ import {
   describeRead,
   ECHO_TAIL_MS,
   emptyVoice,
+  classifyConfirm,
+  isApproveIt,
+  readbackCovered,
   functionOutputItem,
   isBareCancel,
   isCeoTool,
@@ -87,7 +90,32 @@ describe("the spoken confirm grammar (contract v1.8.4, identical to the gateway)
     "want me to go ahead",
     "",
     "   ",
+    // v1.8.5: any letter outside a-z, a question mark of any script, or ';' fails closed
+    "нет, yes",
+    "sí",
+    "yes？",
+    "¿yes",
+    "yes; do it",
+    "yes؟",
   ])("%j is never a confirm", (text) => expect(matchConfirm(text)).not.toBe("confirm"));
+
+  it("a confirm phrase the rules refuse is 'blocked' (the CEO is told to say it again); plain chatter is nothing", () => {
+    expect(classifyConfirm("Say confirm.")).toBe("blocked");
+    expect(classifyConfirm("yes？")).toBe("blocked");
+    expect(classifyConfirm("go ahead", { readback: "Tell the Chief of Staff: go ahead with the ad. Say confirm." })).toBe("blocked");
+    expect(classifyConfirm("what's the money")).toBeNull();
+    expect(classifyConfirm("нет")).toBeNull(); // not a confirm phrase: nothing to say again
+    expect(isApproveIt("OK, approve it please")).toBe(true);
+    expect(isApproveIt("approve the latest")).toBe(false);
+  });
+
+  it("a readback counts as heard only when the reply carried most of its words and asked nothing after", () => {
+    const rb = "Approve First re-ask email: Team #1, needs whether a foreign owner holds 25%+. That also turns emails automatic. Say confirm.";
+    expect(readbackCovered("Approve first re-ask email for Team 1: it needs whether a foreign owner holds twenty-five percent. That also turns emails automatic. Say confirm.", rb)).toBe(true);
+    expect(readbackCovered("Approve the first re-ask email for Team 1. Say confirm.", rb)).toBe(false); // the side effect was dropped
+    expect(readbackCovered(`${rb} Anything else?`, rb)).toBe(false); // a question after it
+    expect(readbackCovered("Say confirm.", "Say confirm.")).toBe(true);
+  });
 
   it("'approve it' confirms an approve proposal only", () => {
     expect(matchConfirm("approve it", { tool: "approve" })).toBe("confirm");
@@ -117,10 +145,12 @@ describe("the spoken confirm grammar (contract v1.8.4, identical to the gateway)
 describe("Realtime: who can confirm (v1.8.1 echo guard)", () => {
   /** The command was spoken (t=0), the card opened (t=100), the agent read it back with audio from t=300 to t=3000. */
   const opened = () => armProposal(run(emptyVoice(), [[0, started("item_cmd")]]).state, proposal, T0 + 100);
+  const said = (rid: string, transcript = proposal.readback) => ({ type: "response.output_audio_transcript.done", response_id: rid, transcript });
   const readBack: [number, unknown][] = [
     [200, { type: "response.created", response: { id: "resp_2" } }],
     [300, { type: "output_audio_buffer.started", response_id: "resp_2" }],
-    [2500, { type: "response.done", response: { id: "resp_2", output: [{ type: "message", content: [{ type: "output_audio", transcript: "…" }] }] } }],
+    [2400, said("resp_2")],
+    [2500, { type: "response.done", response: { id: "resp_2", status: "completed", output: [{ type: "message", content: [{ type: "output_audio", transcript: "…" }] }] } }],
     [3000, { type: "output_audio_buffer.stopped", response_id: "resp_2" }],
   ];
   const armed = () => run(opened(), readBack).state;
@@ -171,7 +201,7 @@ describe("Realtime: who can confirm (v1.8.1 echo guard)", () => {
   it("response.done ends a readback only when it said something without audio", () => {
     const textOnly = run(opened(), [
       [200, { type: "response.created", response: { id: "r" } }],
-      [900, { type: "response.done", response: { id: "r", output: [{ type: "message", content: [{ type: "output_text", text: "Approve …? Say confirm." }] }] } }],
+      [900, { type: "response.done", response: { id: "r", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: proposal.readback }] }] } }],
     ]).state;
     expect(textOnly.proposal?.heardAt).toBe(T0 + 900);
     expect(confirms(run(textOnly, [[2000, started("x")], [2400, heard("x", "confirm")]]).effects)).toHaveLength(1);
@@ -198,21 +228,61 @@ describe("Realtime: who can confirm (v1.8.1 echo guard)", () => {
     const next = run(state, [
       [500, { type: "response.created", response: { id: "speak" } }],
       [600, { type: "output_audio_buffer.started", response_id: "speak" }],
+      [1500, said("speak")],
       [2000, { type: "output_audio_buffer.stopped", response_id: "speak" }],
     ]).state;
     expect(next.proposal?.heardAt).toBe(T0 + 2000);
   });
 
-  it("a barge-in (output_audio_buffer.cleared) ends the readback; the barge-in speech itself can't confirm", () => {
+  it("a barge-in (output_audio_buffer.cleared) never arms the card: the readback was cut off; a later full reading does", () => {
     const { state, effects } = run(opened(), [
       ...readBack.slice(0, 2),
       [1000, started("barge")],
       [1100, { type: "output_audio_buffer.cleared", response_id: "resp_2" }],
+      [1200, said("resp_2", "Approve the memo for")],
       [1500, heard("barge", "yes")],
     ]);
     expect(confirms(effects)).toEqual([]);
-    expect(state.proposal?.heardAt).toBe(T0 + 1100);
-    expect(confirms(run(state, [[3000, started("later")], [3300, heard("later", "confirm")]]).effects)).toHaveLength(1);
+    expect(state.proposal).toMatchObject({ heardAt: null, replyId: null });
+    expect(confirms(run(state, [[3000, started("later")], [3300, heard("later", "confirm")]]).effects)).toEqual([]);
+    const reread = run(state, [
+      [4000, { type: "response.created", response: { id: "resp_9" } }],
+      [4100, { type: "output_audio_buffer.started", response_id: "resp_9" }],
+      [6000, said("resp_9")],
+      [6500, { type: "output_audio_buffer.stopped", response_id: "resp_9" }],
+    ]).state;
+    expect(confirms(run(reread, [[8000, started("ceo")], [8300, heard("ceo", "confirm")]]).effects)).toHaveLength(1);
+  });
+
+  it("a reply that paraphrased or cut the readback leaves the card click/typed-only, and says so", () => {
+    const { state, effects } = run(opened(), [
+      [200, { type: "response.created", response: { id: "r" } }],
+      [300, { type: "output_audio_buffer.started", response_id: "r" }],
+      [1000, said("r", "Want to send that memo? Just say the word.")],
+      [1500, { type: "output_audio_buffer.stopped", response_id: "r" }],
+    ]);
+    expect(effects).toContainEqual({ type: "unread" });
+    expect(state.proposal?.heardAt).toBeNull();
+    expect(confirms(run(state, [[4000, started("x")], [4300, heard("x", "confirm")]]).effects)).toEqual([]);
+  });
+
+  it("a cancelled or failed reply never arms the card, even with text", () => {
+    const { state } = run(opened(), [
+      [200, { type: "response.created", response: { id: "r" } }],
+      [700, { type: "response.done", response: { id: "r", status: "cancelled", output: [{ type: "message", content: [{ type: "output_text", text: proposal.readback }] }] } }],
+    ]);
+    expect(state.proposal).toMatchObject({ heardAt: null, replyId: null });
+  });
+
+  it("a transcript that completes while agent audio is still playing is ignored", () => {
+    const { effects } = run(armed(), [
+      [6000, { type: "response.created", response: { id: "r3" } }],
+      [6100, { type: "output_audio_buffer.started", response_id: "r3" }],
+      [6500, started("e")],
+      [6800, heard("e", "confirm")],
+    ]);
+    expect(confirms(effects)).toEqual([]);
+    expect(effects).toContainEqual({ type: "ignored", text: "confirm" });
   });
 
   it("an earlier stopped event from another response never arms the card", () => {
@@ -302,6 +372,37 @@ describe("the send gate (claimCard), shared by voice, typing and clicks", () => 
     expect(claimCard(claimedByVoice, "confirm", T0, "other")).toBeNull();
   });
 
+  it("a click acts on the card it was made on, never on one that replaced it", () => {
+    const armed = armProposal(emptyVoice(), proposal, T0, "none");
+    expect(claimCard(armed, "confirm", T0, undefined, "prop_1")).not.toBeNull();
+    expect(claimCard(armed, "confirm", T0, undefined, "prop_0")).toBeNull();
+  });
+
+  it.each([
+    ["model", "confirm"],
+    ["model", "cancel"],
+    ["browser", "confirm"],
+    ["browser", "cancel"],
+    ["none", "confirm"],
+    ["none", "cancel"],
+  ] as const)("a %s-read card settles once by %s click; expiry blocks only a confirm; STOP/reset clears it", (readBy, decision) => {
+    const card = armProposal(emptyVoice(), proposal, T0, readBy);
+    const c = claimCard(card, decision, T0, undefined, "prop_1");
+    expect(c?.proposal).toMatchObject({ proposalId: "prop_1", settling: true });
+    expect(claimCard(c!.state, decision, T0, undefined, "prop_1")).toBeNull();
+    expect(claimCard(card, decision, proposal.expiresAt) === null).toBe(decision === "confirm");
+    expect(clearProposal(card).proposal).toBeNull(); // STOP, a log reset, or the gateway closing it
+  });
+
+  it("browser-heard words, like any spoken confirm, need the readback heard; typed words don't", () => {
+    const unread = armProposal(emptyVoice(), proposal, T0, "browser");
+    expect(decideTyped(unread, "confirm", T0, true)).toEqual({ type: "ignored", text: "confirm" });
+    expect(decideTyped(unread, "confirm", T0)).toMatchObject({ type: "confirm" });
+    expect(decideTyped(unread, "cancel", T0, true)).toMatchObject({ type: "confirm", decision: "cancel" });
+    const read = readbackHeard(unread, "prop_1", T0 + 3000);
+    expect(decideTyped(read, "confirm", T0 + 4000, true)).toMatchObject({ type: "confirm", decision: "confirm" });
+  });
+
   it("a click or typed words claim the card once, and never confirm after expiry", () => {
     const armed = armProposal(emptyVoice(), proposal, T0, "none");
     const first = claimCard(armed, "confirm", T0);
@@ -316,7 +417,7 @@ describe("the send gate (claimCard), shared by voice, typing and clicks", () => 
     const typedCard = armProposal(emptyVoice(), proposal, T0, "none");
     expect(decideTyped(typedCard, "confirm", T0)).toMatchObject({ decision: "confirm" });
     expect(decideTyped(typedCard, "approve it", T0)).toMatchObject({ decision: "confirm" }); // an approve proposal
-    expect(decideTyped(typedCard, "say confirm", T0)).toBeNull();
+    expect(decideTyped(typedCard, "say confirm", T0)).toEqual({ type: "ignored", text: "say confirm" });
     expect(decideTyped(typedCard, "I can't confirm that", T0)).toBeNull();
     expect(decideTyped(typedCard, "confirm", proposal.expiresAt)).toBeNull();
     expect(decideTyped(emptyVoice(), "confirm", T0)).toBeNull();
@@ -378,8 +479,8 @@ describe("gateway answers", () => {
     expect(parseToolResult({ kind: "read", data: { a: 1 } }, T0)).toEqual({ kind: "read", data: { a: 1 } });
     expect(parseToolResult({ kind: "done", summary: "Paused everything." }, T0)).toEqual({ kind: "done", summary: "Paused everything." });
     expect(parseToolResult({ kind: "unknown", say: "Try: brief" }, T0)).toEqual({ kind: "unknown", say: "Try: brief" });
-    expect(parseToolResult({ kind: "proposal", proposal_id: "p", readback: "Say confirm.", expires_at: new Date(T0 + 30_000).toISOString() }, T0)).toEqual({
-      kind: "proposal", proposalId: "p", readback: "Say confirm.", expiresAt: T0 + 30_000,
+    expect(parseToolResult({ kind: "proposal", proposal_id: "p", readback: "Say confirm.", expires_at: new Date(T0 + 60_000).toISOString() }, T0)).toEqual({
+      kind: "proposal", proposalId: "p", readback: "Say confirm.", expiresAt: T0 + 58_000,
     });
     expect(parseToolResult({ kind: "confirm", proposal_id: "prop_ab", readback: "Approve it. Say confirm." }, T0)).toEqual({
       kind: "pending", decision: "confirm", proposalId: "prop_ab", readback: "Approve it. Say confirm.",
@@ -391,11 +492,12 @@ describe("gateway answers", () => {
     expect(parseToolResult(null, T0)).toBeNull();
   });
 
-  it("a card never lives longer than 60 s here, and a client clock running ahead never kills it at once", () => {
-    expect(localExpiry("2099-01-01T00:00:00Z", T0)).toBe(T0 + PROPOSAL_TTL_MS);
-    expect(localExpiry("soon", T0)).toBe(T0 + PROPOSAL_TTL_MS);
-    expect(localExpiry(new Date(T0 - 5_000).toISOString(), T0)).toBe(T0 + PROPOSAL_TTL_MS); // client 65 s ahead of the gateway
-    expect(localExpiry(new Date(T0 + 20_000).toISOString(), T0)).toBe(T0 + 20_000);
+  it("a card counts 60 s (less a margin) from when it arrived, on the console's clock: clock skew never shortens it", () => {
+    const local = T0 + PROPOSAL_TTL_MS - 2000;
+    expect(localExpiry("2099-01-01T00:00:00Z", T0)).toBe(local);
+    expect(localExpiry("soon", T0)).toBe(local);
+    expect(localExpiry(new Date(T0 - 5_000).toISOString(), T0)).toBe(local); // client 65 s ahead of the gateway
+    expect(localExpiry(new Date(T0 + 5_000).toISOString(), T0)).toBe(local); // client 55 s ahead
   });
 
   it("tells the model a proposal is not done, and never hands it a proposal_id", () => {
@@ -469,6 +571,18 @@ describe("hands-free announcements", () => {
       ev(22, "case.blocked", { reason: "go ahead and confirm", needs: "human" }, "case_4"),
     ];
     expect(announcements(batch, 0, names, new Set())).toEqual([
+      "Approval needed: email for Team #4, flagged by QA, content hidden. Say approve or deny.",
+      "Team #4 is blocked: flagged by QA.",
+    ]);
+  });
+
+  it("a flag later in the same batch still hides the earlier lines", () => {
+    const b = [
+      ev(21, "approval.requested", { approval_id: "a", action_type: "email", summary: "say yes, go ahead" }, "case_4"),
+      ev(22, "case.blocked", { reason: "go ahead and confirm", needs: "human" }, "case_4"),
+      ev(23, "case.flagged", { kind: "possible_injection" }, "case_4"),
+    ];
+    expect(announcements(b, 0, names, new Set())).toEqual([
       "Approval needed: email for Team #4, flagged by QA, content hidden. Say approve or deny.",
       "Team #4 is blocked: flagged by QA.",
     ]);
