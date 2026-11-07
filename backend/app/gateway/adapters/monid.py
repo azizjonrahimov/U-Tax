@@ -109,7 +109,9 @@ def cost_usd(run: dict) -> str | None:
 
 def _has_email(value: object) -> bool:
     """Any string (key or value) anywhere in `value` that holds an email. Iterative: a deep
-    input must be refused, never crash the walk (CI run 42389174209, RecursionError)."""
+    input must be refused, never crash the walk (CI run 42389174209, RecursionError).
+    Precondition: `value` is parsed JSON already bounded by `_http.too_nested` (no cycles,
+    no shared sub-objects); buy() only calls it that way."""
     stack = [value]
     while stack:
         node = stack.pop()
@@ -226,7 +228,9 @@ class MonidToolBuy:
 
     # ------------------------------------------------------------------ buying
 
-    def buy(self, tool: str, input: dict[str, Any], key: str) -> Purchase:
+    def _checked(self, tool: str, input: object) -> tuple[dict, Any, str]:
+        """The allowlist and input checks, before anything is reserved or sent:
+        (spec, the canonical JSON input, its fingerprint), or Rejected."""
         spec = self.tools.get(tool)
         if spec is None:
             raise Rejected(f"monid: '{tool}' is not an allowlisted tool (MONID_TOOLS)")
@@ -236,7 +240,7 @@ class MonidToolBuy:
             raise Rejected(f"monid: '{tool}' takes only {sorted(spec['fields'])}")
         if _http.too_nested(input):  # before json.dumps, whose depth limit is the OS's
             raise Rejected(f"monid: input must nest at most {_http.MAX_DEPTH} levels "
-                           f"and hold at most {_http.MAX_VALUES} values")
+                           f"and hold at most {_http.MAX_VALUES} keys and values")
         try:
             canonical = json.dumps(input, sort_keys=True, allow_nan=False)
         except (TypeError, ValueError, RecursionError) as exc:
@@ -244,7 +248,16 @@ class MonidToolBuy:
         input = json.loads(canonical)  # what is fingerprinted, checked and sent is the same JSON
         if _has_email(input):
             raise Rejected("monid: input carries an email address; send no client contact data")
-        fp = _http.fingerprint(tool, canonical)
+        return spec, input, _http.fingerprint(tool, canonical)
+
+    def buy(self, tool: str, input: dict[str, Any], key: str) -> Purchase:
+        try:
+            spec, input, fp = self._checked(tool, input)
+        except PortError:
+            raise
+        except Exception as exc:  # nothing was sent: a refusal, never "may be charged"
+            log.exception("monid: input check failed unexpectedly")
+            raise Rejected(f"monid: input could not be checked ({type(exc).__name__})") from exc
         ceiling = spec["max_usd"]
         with self._lock:
             if key in self._bought:

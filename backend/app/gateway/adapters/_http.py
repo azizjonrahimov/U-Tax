@@ -128,29 +128,32 @@ def fingerprint(*parts: object) -> str:
 
 
 MAX_DEPTH = 32  # levels of objects/lists in a tool input: a data call needs a query, not a tree
-MAX_VALUES = 10_000  # values walked before giving up (shared sub-objects can multiply paths)
+MAX_VALUES = 10_000  # keys and values walked, at most (shared sub-objects can multiply paths)
 
 
 def too_nested(value: object, max_depth: int = MAX_DEPTH, max_values: int = MAX_VALUES) -> bool:
     """True when `value` nests objects/lists more than `max_depth` deep, or holds more than
-    `max_values` values. Walked with an explicit stack, never recursion: the platform's
-    recursion limit (and json's C encoder, whose limit differs by OS) decides nothing."""
+    `max_values` keys and values in all. Walked with an explicit stack, never recursion: the
+    platform's recursion limit (and json's C encoder, whose limit differs by OS) decides
+    nothing. Limits are checked before a container's children are copied."""
     stack: list[tuple[object, int]] = [(value, 1)]
     walked = 0
     while stack:
         node, depth = stack.pop()
         walked += 1
-        if walked > max_values:
-            return True
         if isinstance(node, dict):
-            children = list(node.keys()) + list(node.values())
+            size = 2 * len(node)
         elif isinstance(node, (list, tuple, set, frozenset)):
-            children = list(node)
+            size = len(node)
         else:
             continue
-        if depth > max_depth:
+        if depth > max_depth or walked + len(stack) + size > max_values:
             return True
-        stack.extend((child, depth + 1) for child in children)
+        if isinstance(node, dict):
+            stack.extend((child, depth + 1) for child in node.keys())
+            stack.extend((child, depth + 1) for child in node.values())
+        else:
+            stack.extend((child, depth + 1) for child in node)
     return False
 
 

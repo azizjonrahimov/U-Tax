@@ -1,8 +1,9 @@
 """Task 16 (CI run 42389174209): a deeply nested buy input is Rejected on every platform.
 
 json.dumps used to be the only depth check, and its C limit differs by OS: on Linux it took
-5000 levels and the recursive email walk then raised RecursionError. These tests use depths
-far below any recursion limit, so they fail without the explicit bound on any OS."""
+5000 levels and the recursive email walk then raised RecursionError. The bound tests use
+depths far below any recursion limit, so they fail without the explicit bound on any OS; the
+walk tests go past the limit on purpose, to prove the walks are iterative."""
 
 from __future__ import annotations
 

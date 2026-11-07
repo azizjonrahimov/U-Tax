@@ -1757,7 +1757,7 @@ class Gateway:
 
         if _http.too_nested(data):  # before json.dumps and before any intent is written
             return (f"input must nest at most {_http.MAX_DEPTH} levels "
-                    f"and hold at most {_http.MAX_VALUES} values")
+                    f"and hold at most {_http.MAX_VALUES} keys and values")
         try:
             text = json.dumps(data, sort_keys=True, allow_nan=False, ensure_ascii=False)
         except (TypeError, ValueError, RecursionError):

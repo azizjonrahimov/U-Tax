@@ -212,11 +212,41 @@ def test_a_deep_buy_input_is_refused_before_an_intent(h, depth):
     # raised RecursionError after the intent was written (it read as "may be charged")
     port = monid()
     h.gw.ports.toolbuy = port
+    puts = []
+    real_put = h.gw._buy_intents.put
+    h.gw._buy_intents.put = lambda k, v: (puts.append(k), real_put(k, v))
     data: object = "x"
     for _ in range(depth):
         data = [data]
-    r = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"q": data}, "key": "deep"},
+    r = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"query": data}, "key": "deep"},
                      actor="mkt")
-    assert r.status in ("refused", "error") and "nest at most 32" in r.error["message"]
-    assert port.calls == [] and h.gw._buy_intents.get("buy:deep") is None
+    assert r.status == "refused" and "nest at most 32" in r.error["message"]
+    assert puts == [] and port.calls == []  # refused by the gateway: no intent, ever
     assert "tool.bought" not in h.types()
+
+
+def test_an_unexpected_check_failure_before_sending_is_not_unsure(h):
+    # task 16 review: any exception before Monid is called proves nothing was charged; it must
+    # be a refusal (intent cleared), never an intent left to replay as "may be charged"
+    from app.gateway.adapters import monid as monid_module
+
+    port = monid()
+    h.gw.ports.toolbuy = port
+
+    def broken(_):
+        raise TypeError("boom")
+
+    real = monid_module._has_email
+    monid_module._has_email = broken
+    try:
+        r = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"query": "q"}, "key": "x1"},
+                         actor="mkt")
+    finally:
+        monid_module._has_email = real
+    assert r.status == "refused" and "could not be checked" in r.error["message"]
+    assert port.calls == [] and not port._inflight and not port._unsure
+    assert h.gw._buy_intents.get("buy:x1") is None
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    h.restart()
+    assert "buy:x1" not in fresh._unsure  # nothing replays as "may be charged"
