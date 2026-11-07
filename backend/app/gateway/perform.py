@@ -794,7 +794,7 @@ class Gateway:
     NOTE_MAX = 160  # touch notes ("approved: <summary>", the CEO's unblock note)
 
     def _gate(self, action_type: str, action_key: str, summary: str, case_id: str | None,
-              *, public: bool = False) -> None:
+              *, public: bool = False, detail: str | None = None) -> None:
         """Trust earned: ASK needs an approval, AUTO runs (until a cap), PAUSED needs a human.
 
         `public`: the action serves a case opened from the anonymous /talk page. Those sends
@@ -845,7 +845,8 @@ class Gateway:
                              payload={"approval_id": approval_id, "action_type": action_type,
                                       "summary": summary},
                              idempotency_key=f"approval:{action_key}:{approval_id}",
-                             private={"action_key": action_key})])
+                             private={"action_key": action_key,
+                                      **({"detail": detail} if detail else {})})])
         # anonymous traffic is throttled; so is an agent going back and forth between two
         # requests (slot A, B, A...): the console lists the newest, one mail was enough
         if not (public and self._recent_public_notice()) and not replaced:
@@ -2662,7 +2663,7 @@ class Gateway:
                                       f"X allows {X_MAX_CHARS}")
         self._gate("social_post", key,
                    _cap(f"{self._first('social_post')}post on {channel}: {clip(text, 80)}"),
-                   None)
+                   None, detail=f'the {channel} post, word for word: "{text}"')
         try:
             posted = self._with_retry("social post", lambda: self.ports.social.post(
                 Post(channel=channel, text=text, image_url=image_url), key))
@@ -2898,7 +2899,8 @@ class Gateway:
     def _proposal_cancel(proposal: dict, reason: str, via: str, heard: str) -> NewEvent:
         return NewEvent(type="ceo.cancelled", actor="ceo",
                         payload={"proposal_id": proposal["proposal_id"], "via": via,
-                                 "heard": heard, "reason": reason})
+                                 "heard_len": len(heard), "reason": reason},
+                        private={"heard": heard} if heard else None)
 
     def _propose(self, tool: str, pinned: dict, readback: str, source: str) -> dict:
         """A start tool's single-use proposal: pinned to its exact target, 60 s. A newer
@@ -2915,9 +2917,15 @@ class Gateway:
         approval = self.state.approvals.get(pinned.get("approval_id") or "")
         if approval is not None:
             case_id = approval.case_id
+        public_args, public_readback, private = pinned, readback, None
+        if tool == "order":  # v1.8.5: the CEO's words stay private; the theater sees a length
+            public_args = {"text_len": len(pinned["text"])}
+            public_readback = "An order for the Chief of Staff. Say confirm."
+            private = {"args": pinned, "readback": readback}
         events.append(NewEvent(type="ceo.proposed", actor="ceo", case_id=case_id, payload={
-            "proposal_id": proposal_id, "tool": tool, "args": pinned, "readback": readback,
-            "expires_at": expires_at, "source": source}))
+            "proposal_id": proposal_id, "tool": tool, "args": public_args,
+            "readback": public_readback, "expires_at": expires_at, "source": source},
+            private=private))
         self._emit(events)
         return {"kind": "proposal", "proposal_id": proposal_id, "readback": readback,
                 "expires_at": expires_at}
@@ -2972,7 +2980,9 @@ class Gateway:
             raise Refused("superseded", why)
         # used before it runs: a failure after this never lets the same words act twice
         self._emit([NewEvent(type="ceo.confirmed", actor="ceo",
-                             payload={"proposal_id": proposal_id, "via": via, "heard": heard})])
+                             payload={"proposal_id": proposal_id, "via": via,
+                                      "heard_len": len(heard)},
+                             private={"heard": heard} if heard else None)])
         try:
             with self._channel(via):
                 summary = tool.carry(self, pinned)

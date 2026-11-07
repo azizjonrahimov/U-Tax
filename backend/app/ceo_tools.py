@@ -290,7 +290,9 @@ def pin_decision(verb: str) -> Callable[[Any, dict], tuple[dict, str]]:
         pinned = {"approval_id": approval.approval_id}
         if verb == "Approve":  # its side effects hang on these: pinned, re-checked at confirm
             pinned.update(trust=trust, others=others)
-        return pinned, f"{verb} {approval.summary}.{also} Say confirm."
+        # v1.8.5: a post is read back word for word (the summary clips it at 80)
+        what = approval.detail if verb == "Approve" and approval.detail else approval.summary
+        return pinned, f"{verb} {what}.{also} Say confirm."
     return pin
 
 

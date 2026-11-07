@@ -135,6 +135,7 @@ class Approval:
     action_key: str
     case_id: str | None
     summary: str
+    detail: str | None = None  # v1.8.5: a post's full text, for a voice approve's readback
     # superseded: the type went AUTO (superseded_by None: the action runs on its own), or
     # task 14: a newer request for the same case and action type (superseded_by = its id),
     # or the case went back to intake (superseded_by = "reopened": the figure may be stale)
@@ -427,7 +428,8 @@ class State:
         p, private = e.payload, e.private or {}
         approval = Approval(approval_id=p["approval_id"], action_type=p["action_type"],
                             action_key=private.get("action_key", p["approval_id"]),
-                            case_id=e.case_id, summary=p["summary"])
+                            case_id=e.case_id, summary=p["summary"],
+                            detail=private.get("detail"))
         if approval.case_id:  # task 14: the newest request for a case and type is the one
             # the CEO decides; an older pending one may name a figure that is no longer true
             self._supersede(approval.case_id, approval.approval_id, approval.action_type)
@@ -463,7 +465,9 @@ class State:
                 approval.while_paused = True
 
     def _on_ceo_proposed(self, e: Event) -> None:
-        self.proposals[e.payload["proposal_id"]] = {**e.payload, "status": "open"}
+        # v1.8.5: an order's text and readback live in the private part
+        self.proposals[e.payload["proposal_id"]] = {**e.payload, **(e.private or {}),
+                                                    "status": "open"}
 
     def _on_ceo_confirmed(self, e: Event) -> None:
         proposal = self.proposals.get(e.payload["proposal_id"])
