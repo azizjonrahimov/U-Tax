@@ -25,6 +25,7 @@ def h(make_harness):
 
 def auto_email(h):
     h.ok("set_trust", action_type="email", state="AUTO")
+    h.ok("set_trust", action_type="calendar_invite", state="AUTO")  # 25b: outreach invites
 
 
 # ---------------------------------------------------------------- make_ad

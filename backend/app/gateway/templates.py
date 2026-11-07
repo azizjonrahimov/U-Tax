@@ -145,20 +145,21 @@ SPECS: dict[str, Spec] = {
         "Hi there,\n\nU-Tax would like to offer you a paid 1-hour gig: reviewing Delaware "
         "franchise tax memos our AI agents write, before they go to founders.\n\n"
         + AI_SCREEN_LINE + "\n\nWe've sent a calendar invite for a {{minutes}}-minute intro "
-        "call at {{slot_time}}. If it doesn't suit you, reply with a time that does, or just "
-        "say no thanks.\n\n" + SIGN_OFF)),
-    "follow-up-memo_check": Spec(("greeting_name", "masked_name"), builtin=(
-        "Hi {{greeting_name}},\n\nJust checking that our franchise tax memo reached you, and "
-        "whether you have any questions about it. Reply here any time.\n\n" + SIGN_OFF)),
+        "call on {{slot_time}}.\n\n" + SIGN_OFF)),
+    "follow-up-memo_check": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,),
+                                 builtin=(
+        "Hi {{greeting_name}},\n\nJust checking that our Delaware franchise tax memo reached "
+        "you.\n\n" + SIGN_OFF + "\n\n" + DISCLAIMER)),
     "follow-up-missing_facts": Spec(("greeting_name", "masked_name", "missing_list"),
-                                    required=("missing_list",), builtin=(
+                                    required=("missing_list",), lines=(DISCLAIMER,), builtin=(
         "Hi {{greeting_name}},\n\nA quick nudge: to finish your Delaware franchise tax check "
         "we still need {{missing_list}}. Reply here and we'll take it from there.\n\n"
-        + SIGN_OFF)),
+        + SIGN_OFF + "\n\n" + DISCLAIMER)),
     "follow-up-call_reminder": Spec(("greeting_name", "masked_name", "call_time"),
-                                    required=("call_time",), builtin=(
-        "Hi {{greeting_name}},\n\nA reminder of your 15-minute franchise tax review call at "
-        "{{call_time}}. The invite is in your calendar.\n\n" + SIGN_OFF)),
+                                    required=("call_time",), lines=(DISCLAIMER,), builtin=(
+        "Hi {{greeting_name}},\n\nA reminder of your 15-minute franchise tax review call on "
+        "{{call_time}}. The invite is in your calendar.\n\n" + SIGN_OFF + "\n\n"
+        + DISCLAIMER)),
     "ceo-update-email": Spec(("headline", "lead", "summary", "action_line", "console_url"),
                              required=("summary",), builtin=(
         "U-Tax needs you: {{headline}}\n\n{{lead}}\n\n{{summary}}\n\n{{action_line}}\n\n"
