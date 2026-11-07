@@ -81,3 +81,4 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-07 09:15Z READY lane/backend c194f916359c report refresh (docs only, crew/reports/backend.md); MERGED. Backend lane resting; may rerun e2e on final main
 - 2026-11-07 09:30Z DECISION (auto) /talk blocker: the voice session must mint input_audio_transcription server-side (default whisper-1) and return realtime_url; contract v1.7.5; backend task 11 (small). Frontend may repeat a transcription-only session.update
 - 2026-11-07 09:45Z READY lane/backend 0458bde4f708 task 11 (controller on export: 810 passed); MERGED. Backend e2e rerun on final main clean (slots as approved, CRM in stage order, no boot digest, $127,030). Backend resting
+- 2026-11-07 10:05Z STALL frontend: no file changes ~20 min, last commit 31 min (15:33), 4 uncommitted; status ask at 16:00 unanswered. Likely a permission prompt or held message in its tab; surfaced to owner
