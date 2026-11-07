@@ -13,6 +13,7 @@ import {
   approveReleases,
   logStillMatches,
   readableSummary,
+  briefParagraphs,
   logWasReset,
   briefSince,
   MAX_ORDER_CHARS,
@@ -106,6 +107,17 @@ describe("what the CEO is shown", () => {
     expect(out).not.toMatch(/2026-11-07T/);
     expect(out).toMatch(/^Call for Team #2 at .+, \$450 → \$400$/);
     expect(readableSummary("no times here")).toBe("no times here");
+  });
+
+  it("reads the brief as paragraphs, joining the gateway's wrapped lines", () => {
+    expect(briefParagraphs("Welcome back. Since you were last here, the firm served 3 new clients and sent
+0 memos.
+5 approvals waiting on you.
+
+That's the brief.")).toEqual([
+      "Welcome back. Since you were last here, the firm served 3 new clients and sent 0 memos. 5 approvals waiting on you.",
+      "That's the brief.",
+    ]);
   });
 
   it("notices a gateway reset and briefs from the start after one", () => {

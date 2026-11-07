@@ -123,6 +123,16 @@ export function approveReleases(pending: readonly Approval[], a: Approval, trust
   return { others: others.length, outdated: others.filter((x) => outdated.has(x.approvalId)).length };
 }
 
+/** The brief as paragraphs: blank lines separate them; the gateway's single line breaks are just wrapping. */
+export const briefParagraphs = (text: string) =>
+  text
+    .split(/
+\s*
+/)
+    .map((p) => p.replace(/\s*
+\s*/g, " ").trim())
+    .filter(Boolean);
+
 /** ISO timestamps in gateway summaries read as local times. */
 export function readableSummary(s: string, locale?: string): string {
   return s.replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\b/g, (iso) => {

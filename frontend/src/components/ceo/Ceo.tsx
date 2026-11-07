@@ -12,6 +12,7 @@ import {
   ACTION_LABEL,
   ACTION_TYPES,
   approveReleases,
+  briefParagraphs,
   briefSince,
   canDecide,
   ceoError,
@@ -518,7 +519,11 @@ export function Ceo() {
           <h1 id="brief-h">Your brief</h1>
           {brief ? (
             <>
-              <p className="brief-text">{readableSummary(brief.text)}</p>
+              <div className="brief-text">
+                {briefParagraphs(readableSummary(brief.text)).map((p, i) => (
+                  <p key={i}>{p}</p>
+                ))}
+              </div>
               <button className="secondary" onClick={() => token && void playBrief(brief, token)}>
                 Play the brief
               </button>

@@ -28,7 +28,8 @@
 .ceo .empty { margin: 0; padding: 14px 16px; border: 1px dashed var(--line); border-radius: 10px; }
 
 .ceo .brief { display: flex; flex-direction: column; gap: 14px; align-items: flex-start; padding: 22px 24px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
-.ceo .brief-text { margin: 0; font-size: 20px; line-height: 1.55; white-space: pre-line; max-width: 70ch; }
+.ceo .brief-text { font-size: 20px; line-height: 1.55; max-width: 70ch; display: flex; flex-direction: column; gap: 10px; }
+.ceo .brief-text p { margin: 0; }
 
 .ceo .items { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
 .ceo .items li { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; background: var(--panel); overflow-wrap: anywhere; }
