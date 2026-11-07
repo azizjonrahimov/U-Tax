@@ -1,5 +1,7 @@
 # Report: agents lane (P3: Naïve agents, prompts, voice)
 
+> Windows: run every `naive` command below as `naive.cmd` (PowerShell blocks `naive.ps1` by default).
+
 ## Outcome
 Tasks 1, 2 and 4 are done, merged and checked offline. Task 3 waits for Saturday, when the owner
 gets Naïve access (D26).

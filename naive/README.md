@@ -12,9 +12,10 @@ paid and escalation tools are denied by name.
 | `src/policy.ts` | deny-by-default toolsets |
 | `prompts/*.md` | one system prompt per agent; `_firm-rules.md` is appended to each |
 | `prompts/voice-intake.md` | the `/talk` voice agent (OpenAI Realtime, run by the backend; not a Naïve agent, no tools) |
+| `prompts/ceo-voice.md` | the `/ceo` voice agent for the CEO (OpenAI Realtime, run by the backend; not a Naïve agent; only the contract §5b CEO tools, every start action a proposal the CEO confirms) |
 | `templates/memo.md` | the client memo (contract §7 placeholders only) |
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
-| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts, every template's rules, bad-env guard tests |
+| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), every template's rules, bad-env guard tests |
 
 ## Templates for the gateway (values come from code and projections, never from an agent)
 Status: the gateway loads `memo.md` today. The others are the agreed wording with these exact
