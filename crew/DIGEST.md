@@ -1,13 +1,17 @@
-# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 08:05 local · SATURDAY PREP
+# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 08:05 local · SATURDAY LIVE SETUP
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (at the event, after Naïve access): I'll walk you through, in chat: Naïve login + `naive up` (crew/reports/agents.md), the public URL (tokens are already in backend/.env), then sponsor keys one at a time, AgentMail first, with a test run after each.
-- B (when you pick the host): Render: New > Blueprint > azizjonrahimov/U-Tax (render.yaml), and paste the values Render asks for from backend/.env. Vercel: import the repo with Root Directory `frontend`.
-- C (optional): old frontend test servers. In your own PowerShell: `Stop-Process -Id 21180,16628,22596,22464,9664,16056`.
+- A (now): start the tunnel in your own PowerShell and paste its https URL: `& "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --no-autoupdate --url http://localhost:8000` (the gateway is already running on this laptop)
+- B (then): `powershell -ExecutionPolicy Bypass -File .\crew\scripts\naive-up.ps1 -Url <that URL>` (dry run) and paste the output
+- C (after the event): rotate the utax-gateway key (it was pasted in chat)
 
 ## New
+
+- captain · 0m · Naïve: org U-Tax live, Pro plan active, both models exist; gateway key saved + verified; gateway running locally; tunnel = owner step (classifier)
+- backend · 10m · MERGED task 18 CEO voice gateway (1077 tests); 18b started
+- captain · 15m · main red then fixed: the frontend fixture copy (my miss)
 
 - agents · 0m · MERGED task 5: the CEO voice agent prompt + check rule 12 + the 20-second demo voice beat
 - backend · 10m · MERGED task 17 (964 tests, CI green); 17b open (8 items), Monid held local; task 18 (CEO voice) started
