@@ -170,6 +170,25 @@ function confirm(body) {
   return [200, { kind: "done", summary }];
 }
 
+/** A silent 8 kHz mono 8-bit WAV of `ms` milliseconds (a playable stand-in for the TTS audio). */
+function silentWav(ms) {
+  const n = Math.round(8 * ms);
+  const b = Buffer.alloc(44 + n, 128);
+  b.write("RIFF", 0);
+  b.writeUInt32LE(36 + n, 4);
+  b.write("WAVEfmt ", 8);
+  b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20);
+  b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(8000, 24);
+  b.writeUInt32LE(8000, 28);
+  b.writeUInt16LE(1, 32);
+  b.writeUInt16LE(8, 34);
+  b.write("data", 36);
+  b.writeUInt32LE(n, 40);
+  return b;
+}
+
 function touchCounts() {
   const n = (t) => events.filter((e) => e.type === t).length;
   return { training: n("touch.training"), operating: n("touch.operating"), engineering: n("touch.engineering") };
@@ -202,6 +221,22 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
   };
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
+  // The customer mint (/talk) is public, like the gateway's; with no voice provider it is 503 (D30).
+  if (req.method === "POST" && url.pathname === "/api/voice/session" && (!body || body.mode !== "ceo")) {
+    return out(503, { error: { code: "voice_unavailable", message: "no Realtime provider" } });
+  }
+  // v1.10 §5c: POST /api/tts {text, purpose}. "ceo" needs the admin token, "talk" is public.
+  // MOCK_TTS=503 answers voice_unavailable; otherwise a short silent WAV sized to the text.
+  if (req.method === "POST" && url.pathname === "/api/tts") {
+    const purpose = body && body.purpose;
+    const text = body && typeof body.text === "string" ? body.text : "";
+    if (purpose !== "ceo" && purpose !== "talk") return out(400, { error: { code: "bad_input", message: "purpose" } });
+    if (purpose === "ceo" && req.headers.authorization !== `Bearer ${ADMIN}`) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
+    if (!text || text.length > (purpose === "ceo" ? 1500 : 600)) return out(400, { error: { code: "bad_input", message: "text" } });
+    if (process.env.MOCK_TTS === "503") return out(503, { error: { code: "voice_unavailable", message: "no voice key" } });
+    console.log(JSON.stringify({ t: Date.now(), method: "POST", path: "/api/tts", body: { purpose, chars: text.length, auth: Boolean(req.headers.authorization) }, status: 200 }));
+    return res.writeHead(200, { ...cors, "Content-Type": "audio/wav" }).end(silentWav(Math.min(4000, 300 + text.length * 25)));
+  }
   // The theater token reads (state, events, stream), so the projector can be checked against this mock.
   if (req.method === "GET" && url.searchParams.get("token") === THEATER && req.headers.authorization === undefined) {
     if (url.pathname === "/api/state") return out(200, { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
