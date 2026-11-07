@@ -9,13 +9,15 @@ export type Speaker = "customer" | "agent";
 export interface Turn {
   speaker: Speaker;
   text: string;
+  /** Realtime item id: a customer slot reserved when they stop speaking, filled when Whisper finishes. */
+  id?: string;
 }
 
 /** One turn on screen and in the request. Longer speech is clipped, never dropped. */
 export const MAX_TURN_CHARS = 1000;
 /** The gateway refuses a customer transcript over 4000 characters (too_long). */
 export const MAX_CUSTOMER_CHARS = 4000;
-/** The gateway keeps at most 60 turns of context. */
+/** The gateway keeps 60 turns of context; past that, agent turns go first (customer turns never). */
 export const MAX_TURNS = 60;
 
 const clipChars = (s: string, n: number) => {
@@ -40,8 +42,42 @@ export function addTurn(turns: readonly Turn[], speaker: Speaker, raw: string): 
     next = clipChars(text, room);
   }
   const out = [...turns, { speaker, text: next }];
-  return { turns: out.length > MAX_TURNS ? out.slice(out.length - MAX_TURNS) : out, full: customerChars(out) >= MAX_CUSTOMER_CHARS };
+  return { turns: trimAgents(out), full: customerChars(out) >= MAX_CUSTOMER_CHARS };
 }
+
+/** Over MAX_TURNS: drop the oldest agent turns. Customer turns are the facts and are bounded by the character cap. */
+function trimAgents(turns: Turn[]): Turn[] {
+  let extra = turns.length - MAX_TURNS;
+  if (extra <= 0) return turns;
+  return turns.filter((t) => {
+    if (t.speaker === "agent" && extra > 0) {
+      extra -= 1;
+      return false;
+    }
+    return true;
+  });
+}
+
+/** Voice: hold the customer's place when they stop speaking; the transcript arrives later. */
+export function reserveTurn(turns: readonly Turn[], id: string): Turn[] {
+  if (turns.some((t) => t.id === id)) return [...turns];
+  return trimAgents([...turns, { speaker: "customer", text: "", id }]);
+}
+
+/** Fill a reserved slot (or append when none was reserved). Empty or over-cap text removes the slot. */
+export function fillTurn(turns: readonly Turn[], id: string, raw: string): { turns: Turn[]; full: boolean } {
+  const at = turns.findIndex((t) => t.id === id);
+  const others = at < 0 ? [...turns] : turns.filter((_, i) => i !== at);
+  const placed = addTurn(others, "customer", raw); // clipped and capped against the other turns
+  const added = placed.turns.length > others.length || placed.turns.at(-1) !== others.at(-1) ? placed.turns.at(-1) : undefined;
+  if (!added || added.speaker !== "customer") return { turns: at < 0 ? [...turns] : others, full: placed.full };
+  const turn = { ...added, id };
+  if (at < 0) return { turns: [...placed.turns.slice(0, -1), turn], full: placed.full };
+  return { turns: [...turns.slice(0, at), turn, ...turns.slice(at + 1)], full: placed.full };
+}
+
+/** Customer turns still waiting for their transcript. */
+export const pendingTurns = (turns: readonly Turn[]) => turns.filter((t) => t.speaker === "customer" && !t.text).length;
 
 /** Same rule as the gateway (`^[^@\s]+@[^@\s]+\.[^@\s]+$`), so the button never offers a refused send. */
 export const isEmail = (s: string) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.trim()) && s.trim().length <= 320;
@@ -56,10 +92,16 @@ export interface VoiceBody {
 
 /** POST /api/voice body. Agent turns go along as labelled context; only customer words count (gateway). */
 export function voiceBody(turns: readonly Turn[], email: string, channel: "voice" | "typed", requestId: string): VoiceBody {
-  return { turns: turns.map((t) => ({ ...t })), channel, speaker: "customer", reply_email: email.trim(), request_id: requestId };
+  return {
+    turns: turns.filter((t) => t.text).map((t) => ({ speaker: t.speaker, text: t.text })),
+    channel,
+    speaker: "customer",
+    reply_email: email.trim(),
+    request_id: requestId,
+  };
 }
 
-export const canSend = (turns: readonly Turn[], email: string) => turns.some((t) => t.speaker === "customer") && isEmail(email);
+export const canSend = (turns: readonly Turn[], email: string) => turns.some((t) => t.speaker === "customer" && t.text) && isEmail(email);
 
 // ------------------------------------------------------------------ typed fallback
 
@@ -122,14 +164,10 @@ export function parseVoiceSession(raw: unknown): VoiceSession | null {
   return { clientSecret: client_secret, model, sdpUrl: u.toString() };
 }
 
-/** The only session field the page sets: transcription of the caller's audio (never instructions or tools). */
-export const TRANSCRIPTION_UPDATE = {
-  type: "session.update",
-  session: { input_audio_transcription: { model: "whisper-1" } },
-} as const;
-
 export type RealtimeSignal =
   | { kind: "turn"; speaker: Speaker; text: string }
+  | { kind: "reserve"; id: string }
+  | { kind: "fill"; id: string; text: string; failed?: boolean }
   | { kind: "state"; state: "listening" | "thinking" | "speaking" | "idle" }
   | { kind: "error"; message: string };
 
@@ -139,8 +177,14 @@ export function realtimeSignal(raw: unknown): RealtimeSignal | null {
   const e = raw as Record<string, unknown>;
   const str = (v: unknown) => (typeof v === "string" ? v : "");
   switch (e.type) {
+    case "input_audio_buffer.committed":
+      // The customer's turn exists now, in order; its words arrive with ...transcription.completed.
+      return str(e.item_id) ? { kind: "reserve", id: str(e.item_id) } : null;
     case "conversation.item.input_audio_transcription.completed":
+      if (str(e.item_id)) return { kind: "fill", id: str(e.item_id), text: str(e.transcript) };
       return str(e.transcript).trim() ? { kind: "turn", speaker: "customer", text: str(e.transcript) } : null;
+    case "conversation.item.input_audio_transcription.failed":
+      return str(e.item_id) ? { kind: "fill", id: str(e.item_id), text: "", failed: true } : null;
     case "response.audio_transcript.done":
     case "response.output_audio_transcript.done":
       return str(e.transcript).trim() ? { kind: "turn", speaker: "agent", text: str(e.transcript) } : null;
@@ -208,25 +252,27 @@ export function followCase(p: CaseProgress, events: readonly UTaxEvent[]): CaseP
     const pl = (e.payload ?? {}) as Record<string, unknown>;
     switch (e.type) {
       case "facts.extracted":
-        s = { ...s, stage: up("facts"), askedFor: [] };
+        s = { ...s, stage: up("facts"), askedFor: [], awaitingCeo: false };
         break;
       case "client.asked":
       case "facts.missing":
-        s = { ...s, askedFor: Array.isArray(pl.missing) ? pl.missing.filter((m): m is string => typeof m === "string").slice(0, 8) : [] };
+        // Can come after a computation too (a QA re-ask): the question replaces the estimate line.
+        s = { ...s, awaitingCeo: false, askedFor: Array.isArray(pl.missing) ? pl.missing.filter((m): m is string => typeof m === "string").slice(0, 8) : [] };
         break;
       case "tax.computed":
         if (Number.isSafeInteger(pl.total_cents) && (pl.total_cents as number) >= 0) {
-          s = { ...s, stage: up("computed"), totalCents: pl.total_cents as number, method: pl.chosen === "authorized" ? "authorized" : "assumed_par" };
+          s = { ...s, stage: up("computed"), askedFor: [], totalCents: pl.total_cents as number, method: pl.chosen === "authorized" ? "authorized" : "assumed_par" };
         }
         break;
       case "qa.passed":
         s = { ...s, stage: up("checked") };
         break;
       case "memo.sent":
-        s = { ...s, stage: up("sent"), blocked: false, awaitingCeo: false };
+        s = { ...s, stage: up("sent"), blocked: false, awaitingCeo: false, askedFor: [] };
         break;
       case "approval.requested":
-        if (pl.action_type === "email") s = { ...s, awaitingCeo: true };
+        // Only the memo's sign-off: re-ask and not-eligible mails ask for approval too, before a computation.
+        if (pl.action_type === "email" && s.totalCents !== null && !s.askedFor.length) s = { ...s, awaitingCeo: true };
         break;
       case "case.not_eligible":
         s = { ...s, notEligible: typeof pl.reason === "string" ? pl.reason : "not_eligible" };
@@ -251,11 +297,14 @@ const FACT_WORDS: Record<string, string> = {
   foreign_owner_25: "foreign ownership",
 };
 
+/** The case reached an end the page can stop following at. */
+export const caseDone = (p: CaseProgress) => p.stage === "sent" || p.notEligible !== null;
+
 /** The line the page shows and speaks for where the case is now. */
 export function progressLine(p: CaseProgress): string {
   if (p.notEligible) return "This checkup is for Delaware corporations, so the firm is emailing you a short note on what to do instead.";
   if (p.blocked) return "A human at U-Tax is taking a look. You'll get an email.";
-  if (p.askedFor.length && p.stage === "received") {
+  if (p.askedFor.length && p.stage !== "sent") {
     const words = p.askedFor.map((f) => FACT_WORDS[f] ?? f.replace(/_/g, " "));
     return `The firm emailed you one question: ${words.join(", ")}.`;
   }

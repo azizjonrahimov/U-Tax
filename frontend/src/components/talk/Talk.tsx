@@ -15,16 +15,20 @@ import { stateUrl, streamUrl, seedFromState, type Endpoints } from "@/theater/li
 import {
   addTurn,
   canSend,
+  caseDone,
   emptyProgress,
+  fillTurn,
   followCase,
   friendlyError,
+  isEmail,
   MAX_TURN_CHARS,
   nextTypedQuestion,
   parseVoiceSession,
+  pendingTurns,
   progressLine,
   realtimeSignal,
+  reserveTurn,
   STAGES,
-  TRANSCRIPTION_UPDATE,
   voiceBody,
   type CaseProgress,
   type Turn,
@@ -33,6 +37,18 @@ import "./talk.css";
 
 const HAS_GATEWAY = Boolean(process.env.NEXT_PUBLIC_API_URL);
 const THEATER: Endpoints = { base: API_URL, token: process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "" };
+
+/** Timeouts: a slow gateway or a blocked network drops to typed chat instead of hanging. */
+const MINT_MS = 8000;
+const SDP_MS = 10000;
+const CHANNEL_MS = 15000;
+const STATE_MS = 3000;
+const SEND_MS = 20000;
+/** A WebRTC "disconnected" often recovers; only one that lasts this long ends the call. */
+const DISCONNECT_GRACE_MS = 4000;
+/** On Send, wait this long for the last spoken answer's transcript. */
+const TRANSCRIPT_WAIT_MS = 2500;
+const QUESTION_DELAY_MS = 450;
 
 type Phase = "consent" | "talk" | "sending" | "following";
 type Mode = "voice" | "typed";
@@ -59,6 +75,8 @@ const hush = () => {
 const newRequestId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `talk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
 interface Call {
   pc: RTCPeerConnection;
   mic: MediaStream;
@@ -83,13 +101,31 @@ export function Talk() {
   const [followFrom, setFollowFrom] = useState(0);
   /** The turns as of the last change: handlers read this, never a state updater with side effects. */
   const turnsRef = useRef<Turn[]>([]);
+  const phaseRef = useRef<Phase>("consent");
   const callRef = useRef<Call | null>(null);
+  /**
+   * Bumped whenever a voice attempt stops being wanted (End voice, Send, Start over, leaving
+   * the page). Every await in startVoice checks it, so a late mint, mic prompt or SDP answer
+   * never opens a call nobody asked for.
+   */
+  const attemptRef = useRef(0);
   /** One id per conversation, made at the first send: a retry reuses it, so the gateway returns the same case. */
   const requestId = useRef<string | null>(null);
+  /** The stream start measured for that request id (a retry must not move it past the case's events). */
+  const requestAfter = useRef<number | null>(null);
+  /** Typed script: where it started in the transcript, or null when no script runs (after a voice drop). */
+  const scriptFrom = useRef<number | null>(0);
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
   const soundRef = useRef(sound);
   const usedVoice = useRef(false);
   const spoken = useRef<string>("");
   const listRef = useRef<HTMLOListElement | null>(null);
+  const focusRef = useRef<HTMLElement | null>(null);
+
+  const go = useCallback((p: Phase) => {
+    phaseRef.current = p;
+    setPhase(p);
+  }, []);
 
   // Keep the newest turn in view.
   useEffect(() => {
@@ -97,20 +133,47 @@ export function Talk() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
+  // A new step takes focus, so keyboard and screen-reader users land on it.
+  useEffect(() => {
+    focusRef.current?.focus();
+  }, [phase, mode]);
+
   useEffect(() => {
     soundRef.current = sound;
+    if (callRef.current) callRef.current.audio.muted = !sound;
     if (!sound) hush();
   }, [sound]);
 
-  const push = useCallback((speaker: Turn["speaker"], text: string): Turn[] => {
-    const r = addTurn(turnsRef.current, speaker, text);
-    turnsRef.current = r.turns;
-    setTurns(r.turns);
-    setFull(r.full);
-    return r.turns;
+  const setAll = useCallback((next: Turn[], isFull: boolean) => {
+    turnsRef.current = next;
+    setTurns(next);
+    setFull(isFull);
   }, []);
 
+  const push = useCallback(
+    (speaker: Turn["speaker"], text: string): Turn[] => {
+      const r = addTurn(turnsRef.current, speaker, text);
+      setAll(r.turns, r.full);
+      return r.turns;
+    },
+    [setAll],
+  );
+
+  const later = useCallback((fn: () => void, ms: number) => {
+    const t = setTimeout(() => {
+      timers.current.delete(t);
+      fn();
+    }, ms);
+    timers.current.add(t);
+  }, []);
+  const clearTimers = useCallback(() => {
+    timers.current.forEach(clearTimeout);
+    timers.current.clear();
+  }, []);
+
+  /** End the current call and any voice attempt still connecting. */
   const hangUp = useCallback(() => {
+    attemptRef.current += 1;
     const c = callRef.current;
     callRef.current = null;
     if (!c) return;
@@ -119,150 +182,222 @@ export function Talk() {
     c.audio.pause();
     c.audio.srcObject = null;
   }, []);
-  useEffect(() => () => {
-    hangUp();
-    hush();
-  }, [hangUp]);
-
-  /** Typed mode: the agent asks the next scripted question (spoken when sound is on). */
-  const askNext = useCallback(
-    (current: Turn[]) => {
-      const q = nextTypedQuestion(current);
-      if (!q) return;
-      window.setTimeout(() => {
-        if (nextTypedQuestion(turnsRef.current) !== q) return; // asked already (or the page moved on)
-        push("agent", q);
-        if (soundRef.current) say(q);
-      }, 450);
+  useEffect(
+    () => () => {
+      hangUp();
+      clearTimers();
+      hush();
     },
-    [push],
+    [hangUp, clearTimers],
   );
 
+  /** Typed mode: the agent asks the next scripted question (spoken when sound is on). */
+  const askNext = useCallback(() => {
+    if (scriptFrom.current === null || phaseRef.current !== "talk") return;
+    const q = nextTypedQuestion(turnsRef.current.slice(scriptFrom.current));
+    if (!q) return;
+    later(() => {
+      if (phaseRef.current !== "talk" || scriptFrom.current === null) return;
+      if (nextTypedQuestion(turnsRef.current.slice(scriptFrom.current)) !== q) return; // asked already
+      push("agent", q);
+      if (soundRef.current) say(q);
+    }, QUESTION_DELAY_MS);
+  }, [later, push]);
+
+  /** Switch to typing. Only from the conversation step: a late voice failure never drags a sent case back. */
   const startTyped = useCallback(
     (why: string | null) => {
       hangUp();
+      if (phaseRef.current !== "talk" && phaseRef.current !== "consent") return;
       setMode("typed");
-      setPhase("talk");
+      go("talk");
       setNotice(why);
-      askNext(turnsRef.current);
+      // A fresh conversation runs the five questions; after a voice drop the caller just finishes typing.
+      const hadAnswers = turnsRef.current.some((t) => t.speaker === "customer" && t.text);
+      scriptFrom.current = hadAnswers ? null : turnsRef.current.length;
+      askNext();
     },
-    [askNext, hangUp],
+    [askNext, go, hangUp],
   );
 
   /** "I agree, start talking": mint a session, then ask for the mic (only now), then connect. */
   const startVoice = useCallback(async () => {
+    hangUp();
+    const attempt = attemptRef.current;
+    const stale = () => attempt !== attemptRef.current;
+    const fail = (why: string) => {
+      if (!stale()) startTyped(why);
+    };
     setError(null);
+    setNotice(null);
     setMode("voice");
-    setPhase("talk");
+    go("talk");
     setVoiceState("connecting");
+
     let session;
     try {
-      session = parseVoiceSession(await apiFetch<unknown>("/voice/session", { method: "POST", body: "{}" }));
+      session = parseVoiceSession(await apiFetch<unknown>("/voice/session", { method: "POST", body: "{}", signal: AbortSignal.timeout(MINT_MS) }));
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
       const code = e instanceof ApiError ? e.code : "network_error";
-      return startTyped(status === 503 ? "Voice isn't available right now, so let's type. Same questions, same estimate." : friendlyError(status, code));
+      return fail(status === 503 ? "Voice isn't available right now, so let's type. Same questions, same estimate." : friendlyError(status, code));
     }
-    if (!session) return startTyped("Voice isn't available right now, so let's type.");
+    if (stale()) return;
+    if (!session) return fail("Voice isn't available right now, so let's type.");
+
     let mic: MediaStream;
     try {
       mic = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      return startTyped("The microphone is off, so let's type instead.");
+      return fail("The microphone is off, so let's type instead.");
     }
+    if (stale()) {
+      mic.getTracks().forEach((t) => t.stop()); // the caller moved on while the prompt was open
+      return;
+    }
+
     const pc = new RTCPeerConnection();
     const audio = new Audio();
     audio.autoplay = true;
+    audio.muted = !soundRef.current;
     callRef.current = { pc, mic, audio };
     pc.ontrack = (e) => {
       audio.srcObject = e.streams[0];
     };
     mic.getTracks().forEach((t) => pc.addTrack(t, mic));
     const dc = pc.createDataChannel("oai-events");
+    let opened = false;
     dc.onopen = () => {
+      if (stale()) return;
+      opened = true;
       usedVoice.current = true;
-      // Transcription only (the gateway sets instructions and tools when minting), then the opener.
-      dc.send(JSON.stringify(TRANSCRIPTION_UPDATE));
+      // The gateway sets instructions, tools and transcription when minting; the page only starts the opener.
       dc.send(JSON.stringify({ type: "response.create" }));
       setVoiceState("speaking");
     };
     dc.onmessage = (m) => {
+      if (stale()) return;
       let sig;
       try {
         sig = realtimeSignal(JSON.parse(m.data));
       } catch {
+        console.warn("[talk] unreadable realtime message");
         return;
       }
       if (!sig) return;
       if (sig.kind === "turn") push(sig.speaker, sig.text);
-      else if (sig.kind === "state") setVoiceState(sig.state);
+      else if (sig.kind === "reserve") setAll(reserveTurn(turnsRef.current, sig.id), false);
+      else if (sig.kind === "fill") {
+        const r = fillTurn(turnsRef.current, sig.id, sig.text);
+        setAll(r.turns, r.full);
+        if (sig.failed) setNotice("U-Tax didn't catch that last answer. Please say it again, or type it.");
+      } else if (sig.kind === "state") setVoiceState(sig.state);
       else console.warn("[talk] realtime error", sig.message);
     };
+    let grace: ReturnType<typeof setTimeout> | undefined;
     pc.onconnectionstatechange = () => {
-      if (callRef.current?.pc !== pc) return;
-      if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
-        startTyped("The voice line dropped. Let's finish by typing; your answers so far are kept.");
+      if (stale()) return;
+      clearTimeout(grace);
+      if (pc.connectionState === "failed") fail("The voice line dropped. Let's finish by typing; your answers so far are kept.");
+      else if (pc.connectionState === "disconnected") {
+        grace = setTimeout(() => {
+          if (pc.connectionState !== "connected") fail("The voice line dropped. Let's finish by typing; your answers so far are kept.");
+        }, DISCONNECT_GRACE_MS);
       }
     };
+    later(() => {
+      if (!stale() && !opened) fail("Voice couldn't connect on this network, so let's type. Same questions, same estimate.");
+    }, CHANNEL_MS);
+
     try {
       const offer = await pc.createOffer();
+      if (stale()) return;
       await pc.setLocalDescription(offer);
       const r = await fetch(session.sdpUrl, {
         method: "POST",
         body: offer.sdp,
         headers: { Authorization: `Bearer ${session.clientSecret}`, "Content-Type": "application/sdp" },
+        signal: AbortSignal.timeout(SDP_MS),
       });
+      if (stale()) return;
       if (!r.ok) throw new Error(`realtime ${r.status}`);
-      await pc.setRemoteDescription({ type: "answer", sdp: await r.text() });
+      const sdp = await r.text();
+      if (stale()) return;
+      await pc.setRemoteDescription({ type: "answer", sdp });
     } catch (e) {
+      if (stale()) return; // closed on purpose (End voice, Send, Start over): not a failure
       console.warn("[talk] voice connect failed", e);
-      startTyped("Voice couldn't connect, so let's type. Same questions, same estimate.");
+      fail("Voice couldn't connect, so let's type. Same questions, same estimate.");
     }
-  }, [push, startTyped]);
+  }, [go, hangUp, later, push, setAll, startTyped]);
 
   const sendLine = () => {
     const text = draft;
     if (!text.trim() || full) return;
     setDraft("");
-    const next = push("customer", text);
-    if (mode === "typed") askNext(next);
+    push("customer", text);
+    if (mode === "typed") askNext();
   };
 
   /** Send the conversation: the gateway opens a fast-path case and returns its id. */
   const submit = async () => {
-    if (!canSend(turns, email) || phase === "sending") return;
+    if (!canSend(turnsRef.current, email) || phaseRef.current !== "talk") return;
     setError(null);
-    setPhase("sending");
+    go("sending");
+    clearTimers();
+    // The last spoken answer is still being transcribed for a moment after it was said.
+    for (let waited = 0; callRef.current && pendingTurns(turnsRef.current) > 0 && waited < TRANSCRIPT_WAIT_MS; waited += 100) await sleep(100);
+    const wasVoice = mode === "voice";
     hangUp();
     hush();
-    // Where the stream should start: just before our case opens (so we don't replay the night).
-    let after = 0;
-    try {
-      const r = await fetch(stateUrl(THEATER), { cache: "no-store" });
-      if (r.ok) after = seedFromState(await r.json()).lastId ?? 0;
-    } catch {
-      /* the case still opens; following starts from the beginning */
+    if (wasVoice) setMode("typed"); // the call is over either way; a failed send continues by typing
+
+    requestId.current ??= newRequestId();
+    // Where the stream should start: just before our case opens. Measured once per request id.
+    if (requestAfter.current === null) {
+      requestAfter.current = 0;
+      for (let tries = 0; tries < 2; tries++) {
+        try {
+          const r = await fetch(stateUrl(THEATER), { cache: "no-store", signal: AbortSignal.timeout(STATE_MS) });
+          if (r.ok) {
+            requestAfter.current = seedFromState(await r.json()).lastId ?? 0;
+            break;
+          }
+        } catch {
+          console.warn("[talk] /api/state unavailable; following from the start of the log");
+        }
+      }
     }
     try {
       const res = await apiFetch<{ case_id?: unknown; masked_name?: unknown }>("/voice", {
         method: "POST",
-        body: JSON.stringify(voiceBody(turns, email, usedVoice.current ? "voice" : "typed", (requestId.current ??= newRequestId()))),
+        body: JSON.stringify(voiceBody(turnsRef.current, email, usedVoice.current ? "voice" : "typed", requestId.current)),
+        signal: AbortSignal.timeout(SEND_MS),
       });
       if (typeof res.case_id !== "string") throw new ApiError(500, "bad_response", "no case id");
       setCaseName(typeof res.masked_name === "string" ? res.masked_name : null);
-      setFollowFrom(after);
-      setProgress({ ...emptyProgress(res.case_id), lastId: after });
-      setPhase("following");
+      setFollowFrom(requestAfter.current);
+      setProgress({ ...emptyProgress(res.case_id), lastId: requestAfter.current });
+      go("following");
     } catch (e) {
-      setError(e instanceof ApiError ? friendlyError(e.status, e.code) : friendlyError(0, "network_error"));
-      setPhase("talk"); // the same request_id on retry: the gateway returns the same case
+      const status = e instanceof ApiError ? e.status : 0;
+      setError(friendlyError(status, e instanceof ApiError ? e.code : "network_error"));
+      // A clear refusal saved nothing: the next try is a new request. Otherwise (timeout, network,
+      // 5xx) the case may exist, so the same id comes back with the same case.
+      if (status >= 400 && status < 500) {
+        requestId.current = null;
+        requestAfter.current = null;
+      }
+      if (wasVoice) setNotice("The voice call ended. You can still type and send.");
+      go("talk");
     }
   };
 
-  // Follow the case on the public theater stream.
+  // Follow the case on the public theater stream until it reaches an end.
   const caseId = progress?.caseId ?? null;
+  const done = progress ? caseDone(progress) : false;
   useEffect(() => {
-    if (!caseId) return;
+    if (!caseId || done) return;
     const es = new EventSource(streamUrl(THEATER, followFrom));
     let fails = 0;
     es.onmessage = (m) => {
@@ -271,6 +406,7 @@ export function Talk() {
       try {
         e = JSON.parse(m.data) as UTaxEvent;
       } catch {
+        console.warn("[talk] unreadable stream message");
         return;
       }
       if (e?.case_id !== caseId) return;
@@ -281,9 +417,9 @@ export function Talk() {
       if (++fails >= 3 || es.readyState === EventSource.CLOSED) setStreamDown(true);
     };
     return () => es.close();
-  }, [caseId, followFrom]);
+  }, [caseId, done, followFrom]);
 
-  // Read the numbers back (and the memo), once each.
+  // Read the numbers back (and what happens next), once per change.
   const line = progress ? progressLine(progress) : "";
   useEffect(() => {
     if (!progress || !line || line === spoken.current) return;
@@ -294,14 +430,15 @@ export function Talk() {
 
   const startOver = () => {
     hangUp();
+    clearTimers();
     hush();
     requestId.current = null;
+    requestAfter.current = null;
+    scriptFrom.current = 0;
     usedVoice.current = false;
     spoken.current = "";
-    turnsRef.current = [];
+    setAll([], false);
     setFollowFrom(0);
-    setTurns([]);
-    setFull(false);
     setDraft("");
     setEmail("");
     setProgress(null);
@@ -309,11 +446,18 @@ export function Talk() {
     setNotice(null);
     setError(null);
     setStreamDown(false);
-    setPhase("consent");
+    setMode("typed");
+    go("consent");
   };
 
+  const hasAnswer = turns.some((t) => t.speaker === "customer" && t.text);
+  const emailBad = email.trim() !== "" && !isEmail(email);
   const ready = canSend(turns, email);
+  const ended = progress !== null && (progress.notEligible !== null || progress.blocked);
   const stageIndex = progress ? STAGES.findIndex((s) => s.id === progress.stage) : -1;
+  const focusTarget = (el: HTMLElement | null) => {
+    focusRef.current = el;
+  };
 
   return (
     <div className="talk">
@@ -321,8 +465,8 @@ export function Talk() {
         <span className="logo">U</span>
         <span className="title">Talk to U-Tax</span>
         <span className="sub">Free Delaware franchise tax estimate · educational, not tax advice</span>
-        <button className="ghost" aria-pressed={sound} onClick={() => setSound((v) => !v)}>
-          {sound ? "Sound on" : "Sound off"}
+        <button className="ghost" onClick={() => setSound((v) => !v)}>
+          {sound ? "Mute U-Tax" : "Unmute U-Tax"}
         </button>
       </header>
 
@@ -335,7 +479,9 @@ export function Talk() {
 
         {phase === "consent" && (
           <section className="consent" aria-labelledby="consent-h">
-            <h1 id="consent-h">Ask U-Tax what your Delaware franchise tax really is.</h1>
+            <h1 id="consent-h" tabIndex={-1} ref={focusTarget}>
+              Ask U-Tax what your Delaware franchise tax really is.
+            </h1>
             <p className="lead">
               You&rsquo;ll talk with U-Tax&rsquo;s <b>AI intake agent</b>. It asks five short questions, reads your numbers back, and the firm
               emails you a memo.
@@ -364,16 +510,16 @@ export function Talk() {
               </p>
             )}
             {mode === "voice" && (
-              <div className={`orb ${voiceState}`} role="status" aria-live="polite">
+              <div className={`orb ${voiceState}`} role="status" aria-live="polite" tabIndex={-1} ref={focusTarget}>
                 <span className="ring" aria-hidden />
                 {VOICE_LABEL[voiceState]}
               </div>
             )}
             <ol className="turns" ref={listRef} aria-live="polite" aria-label="Transcript">
               {turns.map((t, i) => (
-                <li key={i} className={t.speaker}>
+                <li key={t.id ?? i} className={`${t.speaker}${t.text ? "" : " pending"}`}>
                   <small>{t.speaker === "agent" ? "U-Tax (AI)" : "You"}</small>
-                  {t.text}
+                  {t.text || "…"}
                 </li>
               ))}
               {turns.length === 0 && mode === "typed" && <li className="agent pending">U-Tax is getting ready…</li>}
@@ -391,6 +537,7 @@ export function Talk() {
               </label>
               <input
                 id="answer"
+                ref={mode === "typed" ? focusTarget : undefined}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 maxLength={MAX_TURN_CHARS}
@@ -422,14 +569,16 @@ export function Talk() {
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@startup.com"
                   maxLength={320}
+                  aria-invalid={emailBad || undefined}
+                  aria-describedby="email-hint"
                   disabled={phase === "sending"}
                 />
                 <button className="primary" type="submit" disabled={!ready || phase === "sending" || !HAS_GATEWAY}>
                   {phase === "sending" ? "Sending…" : "Send to U-Tax"}
                 </button>
               </div>
-              <p className="hint">
-                {turns.some((t) => t.speaker === "customer") ? "Your email is only used for this memo." : "Answer at least one question first."}
+              <p className="hint" id="email-hint">
+                {emailBad ? "Check the email address." : hasAnswer ? "Your email is only used for this memo." : "Answer at least one question first."}
               </p>
               {error && (
                 <p className="error" role="alert">
@@ -447,31 +596,38 @@ export function Talk() {
 
         {phase === "following" && progress && (
           <section className="follow" aria-labelledby="follow-h">
-            <h1 id="follow-h">{caseName ? `${caseName} is with the firm.` : "Your case is with the firm."}</h1>
-            <div className="estimate" aria-live="polite">
-              {progress.totalCents !== null ? (
-                <>
-                  <small>Estimated Delaware franchise tax</small>
-                  <b>{formatCents(progress.totalCents)}</b>
-                </>
-              ) : (
-                <small>Working on your numbers…</small>
-              )}
-            </div>
+            <h1 id="follow-h" tabIndex={-1} ref={focusTarget}>
+              {caseName ? `${caseName} is with the firm.` : "Your case is with the firm."}
+            </h1>
+            {!ended && (
+              <div className="estimate">
+                {progress.totalCents !== null ? (
+                  <>
+                    <small>Estimated Delaware franchise tax</small>
+                    <b>{formatCents(progress.totalCents)}</b>
+                  </>
+                ) : (
+                  <small>Working on your numbers…</small>
+                )}
+              </div>
+            )}
             <p className="said" role="status">
               {line}
             </p>
-            <ol className="steps">
-              {STAGES.map((s, i) => (
-                <li key={s.id} className={i < stageIndex ? "done" : i === stageIndex ? "now" : ""} aria-current={i === stageIndex ? "step" : undefined}>
-                  <span className="tick" aria-hidden>
-                    {i <= stageIndex ? "✓" : ""}
-                  </span>
-                  {s.label}
-                </li>
-              ))}
-            </ol>
-            {streamDown && <p className="hint">Live updates paused. The memo still arrives by email.</p>}
+            {!ended && (
+              <ol className="steps">
+                {STAGES.map((s, i) => (
+                  <li key={s.id} className={i < stageIndex ? "done" : i === stageIndex ? "now" : ""} aria-current={i === stageIndex ? "step" : undefined}>
+                    <span className="tick" aria-hidden>
+                      {i <= stageIndex ? "✓" : ""}
+                    </span>
+                    {s.label}
+                    <span className="sr-only">{i <= stageIndex ? " (done)" : " (not yet)"}</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {streamDown && !done && <p className="hint">Live updates paused. The memo still arrives by email.</p>}
             <div className="actions">
               <Link className="secondary" href="/">
                 Watch the firm work

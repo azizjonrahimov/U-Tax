@@ -3,6 +3,10 @@ import type { UTaxEvent } from "@/theater/events";
 import {
   addTurn,
   canSend,
+  caseDone,
+  fillTurn,
+  pendingTurns,
+  reserveTurn,
   customerChars,
   emptyProgress,
   followCase,
@@ -52,11 +56,32 @@ describe("turns and the request body (contract §6e)", () => {
     expect(addTurn(t, "agent", "Thanks!").turns).toHaveLength(t.length + 1); // the agent can still speak
   });
 
-  it("keeps the last 60 turns", () => {
-    let t: Turn[] = [];
+  it("past 60 turns drops the oldest agent turns, never a customer answer", () => {
+    let t = addTurn([], "customer", "yes, Delaware Inc").turns;
     for (let i = 0; i < MAX_TURNS + 5; i++) t = addTurn(t, i % 2 ? "customer" : "agent", `t${i}`).turns;
     expect(t).toHaveLength(MAX_TURNS);
+    expect(t[0].text).toBe("yes, Delaware Inc");
+    expect(t.filter((x) => x.speaker === "customer")).toHaveLength(1 + Math.floor((MAX_TURNS + 5) / 2));
     expect(t.at(-1)?.text).toBe(`t${MAX_TURNS + 4}`);
+  });
+
+  it("voice: a reserved slot keeps the customer's place until the transcript lands (a bare No. keeps its question)", () => {
+    let t = addTurn([], "agent", "Any foreign owner with 25% or more?").turns;
+    t = reserveTurn(t, "item_1");
+    t = addTurn(t, "agent", "And the par value?").turns; // the agent's next line finishes first
+    expect(pendingTurns(t)).toBe(1);
+    expect(canSend(t, "a@b.co")).toBe(false); // nothing said yet
+    t = fillTurn(t, "item_1", "No.").turns;
+    expect(t.map((x) => x.text)).toEqual(["Any foreign owner with 25% or more?", "No.", "And the par value?"]);
+    expect(voiceBody(t, "a@b.co", "voice", "r").turns.every((x) => !("id" in x))).toBe(true);
+  });
+
+  it("voice: an empty or failed transcript removes its slot; one without a slot is appended", () => {
+    let t = reserveTurn([], "item_9");
+    expect(fillTurn(t, "item_9", "  ").turns).toEqual([]);
+    t = fillTurn([], "item_2", "10M authorized").turns;
+    expect(t).toEqual([{ speaker: "customer", text: "10M authorized", id: "item_2" }]);
+    expect(voiceBody(reserveTurn(t, "item_3"), "a@b.co", "voice", "r").turns).toEqual([{ speaker: "customer", text: "10M authorized" }]);
   });
 
   it("sends labelled turns, the typed email and the page's request id; never sends without both", () => {
@@ -111,6 +136,9 @@ describe("voice session (contract §5, v1.7.5)", () => {
 describe("realtime events → page", () => {
   it("maps transcripts (beta and GA names) and speaking states", () => {
     expect(realtimeSignal({ type: "conversation.item.input_audio_transcription.completed", transcript: "Yes, an Inc." })).toEqual({ kind: "turn", speaker: "customer", text: "Yes, an Inc." });
+    expect(realtimeSignal({ type: "input_audio_buffer.committed", item_id: "it_1" })).toEqual({ kind: "reserve", id: "it_1" });
+    expect(realtimeSignal({ type: "conversation.item.input_audio_transcription.completed", item_id: "it_1", transcript: "No." })).toEqual({ kind: "fill", id: "it_1", text: "No." });
+    expect(realtimeSignal({ type: "conversation.item.input_audio_transcription.failed", item_id: "it_1" })).toEqual({ kind: "fill", id: "it_1", text: "", failed: true });
     expect(realtimeSignal({ type: "response.audio_transcript.done", transcript: "Great." })).toEqual({ kind: "turn", speaker: "agent", text: "Great." });
     expect(realtimeSignal({ type: "response.output_audio_transcript.done", transcript: "Great." })?.kind).toBe("turn");
     expect(realtimeSignal({ type: "input_audio_buffer.speech_started" })).toEqual({ kind: "state", state: "listening" });
@@ -153,6 +181,21 @@ describe("following the case", () => {
     expect(p.lastId).toBe(12);
     const bad = followCase(emptyProgress("case_7"), [ev(5, "tax.computed", { total_cents: -1 }), ev(6, "qa.passed", {}, { status: "failed" })]);
     expect(bad).toMatchObject({ stage: "received", totalCents: null });
+  });
+
+  it("never moves the stage back (a client reply after the memo)", () => {
+    const p = followCase(emptyProgress("case_7"), [ev(1, "qa.passed", { checks: [] }), ev(2, "memo.sent", {}), ev(3, "facts.extracted", { facts: {}, quotes: {}, assumed: [] })]);
+    expect(p.stage).toBe("sent");
+    expect(caseDone(p)).toBe(true);
+  });
+
+  it("a QA re-ask after the computation shows the question, not the estimate", () => {
+    let p = followCase(emptyProgress("case_7"), [ev(11, "facts.extracted", { facts: {}, quotes: {}, assumed: [] }), tax]);
+    p = followCase(p, [ev(13, "qa.failed", { checks: [] }, { actor: "qa" }), ev(14, "facts.missing", { missing: ["issued_shares"], asks_so_far: 0 })]);
+    expect(progressLine(p)).toBe("The firm emailed you one question: issued shares.");
+    // The re-ask mail's approval is not the memo's sign-off.
+    p = followCase(p, [ev(15, "approval.requested", { approval_id: "a", action_type: "email", summary: "s" }, { actor: "system" })]);
+    expect(p.awaitingCeo).toBe(false);
   });
 
   it("says when the firm needs more facts, is not eligible, or waits on a human", () => {
