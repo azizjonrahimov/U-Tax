@@ -16,7 +16,7 @@ paid and escalation tools are denied by name.
 | `prompts/talk-phrases.json` | the only lines the public `/talk` voice speaks (contract v1.10.2): a flat key → line map the gateway renders for `POST /api/tts` purpose `talk`, numbers only in `{placeholders}` |
 | `templates/memo.md` | the client memo (contract §7 placeholders only) |
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
-| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, word-for-word questions), every template's rules, bad-env guard tests |
+| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, the page's questions word for word), the Chief of Staff's card rules and firm rules 9 and 11 kept word for word, every template's rules, bad-env guard tests |
 
 ## Templates for the gateway (values come from code and projections, never from an agent)
 Status: the gateway loads `memo.md` today. The others are the agreed wording with these exact

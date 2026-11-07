@@ -113,7 +113,7 @@ through every department is the proof.
       through the cursors lining up under "Saved vs spent".
 - [ ] Trust staged in `/ceo`'s Standing orders ("runs on its own" comes from approving one action
       of that kind): social posts running on their own for shot 2 (Resume them if a live demo
-      paused them), email and calendar invites running on their own for shots 8 and 10 (or the
+      paused them), email and calendar invites running on their own for shots 8, 10, 12 and 14 (or the
       step waits for a click), and a candidate shortlisted before shot 14.
 - [ ] Record on a fresh event store (a new gateway data file) if a demo or rehearsal ran first,
       and let the crew run a night's work on it before shot 15, so "the whole night, replayed"

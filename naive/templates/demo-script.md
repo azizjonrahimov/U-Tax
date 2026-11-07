@@ -23,13 +23,13 @@ name tag is its department: say the department's name as its cursor moves.
 
 | Department | What it does in a real firm | The U-Tax agent doing it | The theater moment that proves it |
 |---|---|---|---|
-| **Chief of Staff** (managing partner) | Takes in work, assigns it to the right department, watches the pipeline, briefs the owner. | `cos`: wakes on every new case, writes one card per step on the Naïve board, runs the fast path by handing the case from agent to agent (`send_to_agent`), writes the brief when the CEO orders "brief me" (`firm_brief`). | **Card 4:** the judge's case moves Tax → QA → Accounting with no human in between; each hand-off is a delegation the Chief of Staff made. |
-| **Marketing** (business development) | Finds new clients: public posts, outreach, lead lists. | `mkt`: writes and publishes the firm's posts (`post_social`), drafts LinkedIn DMs for the human to send (`draft_dm`). | **Card 2:** the firm's own post from last night, live on X or LinkedIn (`post.published`, actor `mkt`). |
-| **Intake** (client onboarding) | Opens the engagement: collects the client's facts, chases what's missing, turns away work the firm can't take, books the review meeting. | `intake`: quotes each fact from the client's own words (`extract_facts`), re-asks for missing facts (`ask_client`), declines ineligible companies kindly (`mark_not_eligible`), books the call (`book_call`). | **Card 4:** the Intake cursor fills the sheet's fact cells from the judge's answers (`facts.extracted`). Then a review-call block lands on the Calendar pane (`call.booked`). |
+| **Chief of Staff** (managing partner) | Takes in work, assigns it to the right department, watches the pipeline, briefs the owner. | `cos`: wakes on every new case, writes one card per step on the Naïve board, turns each CEO order into one card per department (all at once), runs the fast path by handing the case from agent to agent (`send_to_agent`), and writes the firm brief on its schedule (`firm_brief`). | **Card 4:** the judge's case moves Tax → QA → Accounting with no human in between; each hand-off is a delegation the Chief of Staff made. |
+| **Marketing** (business development) | Finds new clients: public posts, outreach, lead lists. | `mkt`: makes branded ads (`make_ad`), writes and publishes the firm's posts with them (`post_social`), drafts LinkedIn DMs for the human to send (`draft_dm`). | **Card 2:** the firm's own post from last night, live on X or LinkedIn (`post.published`, actor `mkt`). |
+| **Intake** (client onboarding) | Opens the engagement: collects the client's facts, chases what's missing, turns away work the firm can't take, books the review meeting. | `intake`: quotes each fact from the client's own words (`extract_facts`), re-asks for missing facts (`ask_client`), declines ineligible companies kindly (`mark_not_eligible`), books the call (`book_call`), sends templated follow-ups (`follow_up`). | **Card 4:** the Intake cursor fills the sheet's fact cells from the judge's answers (`facts.extracted`). Then a review-call block lands on the Calendar pane (`call.booked`). |
 | **Tax** (preparer) | Researches the law and prepares the computation. | `tax`: searches Delaware law (`law_search`), runs the tested franchise-tax engine (`compute_tax`). | **Card 4:** the Search pane types the query and shows Delaware cites (`law.searched`). The sheet fills both methods and marks the winner (`tax.computed`). |
 | **QA** (reviewer, partner sign-off) | A second professional checks every number before anything leaves the firm. | `qa`: re-runs the engine and re-matches every quote (`qa_check`), checks the sent memo on a phone (`phone_check`), flags anything odd (`flag_case`). | **Card 4:** a tick on every sheet cell, then "✓ QA" (`qa.passed`). Later the Phone pane shows "Memo checked on a cloud phone" (`phone.checked`; the screenshot itself stays private). |
 | **Accounting** (billing, books, P&L) | Releases the client deliverable, keeps the ledger, reports the P&L. | `acct`: sends the memo, and only once QA has passed (`send_memo`). The checkup is free, so there is no invoice. The ledger is kept in code, never by an agent: the gateway books agent model spend and every paid tool run as an estimated cost (contract §6a). | **Card 4:** the Accounting cursor types the memo and clicks Send. "✓ Sent · N s after last fact" (`memo.sent`). **Card 5:** stage mode's "Saved vs spent $X / $Y" (`cost.booked` summed). |
-| **HR** (recruiting) | Posts the job, screens applicants, shortlists, and leaves the decision to the hiring manager. | `hr`: reads each applicant's masked answers (`get_candidate`), records screened and shortlisted (`hr_record`). The gateway sends the questionnaire and its AI-screen disclosure. | **Card 3b:** the Hiring pane, "applicants → screened · shortlisted · Shortlist ready · waiting on CEO". After the hire it reads "1 hired". |
+| **HR** (recruiting) | Posts the job, screens applicants, shortlists, and leaves the decision to the hiring manager. | `hr`: lists the candidates the firm holds (`list_candidates`), finds public leads (`source_candidates`), writes only to people who gave the firm their address (`hr_outreach`), reads each applicant's masked answers (`get_candidate`), records screened and shortlisted (`hr_record`). The gateway sends the questionnaire and its AI-screen disclosure. | **Card 3b:** the Hiring pane, "applicants → screened · shortlisted · Shortlist ready · waiting on CEO". After the hire it reads "1 hired". |
 | **The CEO** (the only human) | The owner: sets standing orders and makes the calls only a human should. | You. Approve the first of each kind of action, make the hire, stop anything at once. | **Cards 3a and 3b:** the Human touches pane counts each touch, the log adds a line per touch (a mic icon on the spoken approval), and `/ceo`'s Standing orders show social posts "paused". |
 
 Stage mode shows only three big numbers on the right: "Clients served", "Human touches" and
@@ -70,16 +70,19 @@ hands-free off it closes after every reply):**
    case you staged, see the checklist.) The firm reads it back,
    for example: "Approve memo email: Team #7, $85,165 → $450. That also turns emails automatic.
    Say confirm." The confirm card shows the same sentence.
-   Listen first: if the readback names another team, or says it "runs the other waiting" emails,
-   say "cancel" and click Approve on the staged memo's card instead.
+   Listen first: confirm only a readback that starts "Approve memo email: Team #N" with your staged
+   team's number and says nothing about other waiting emails. Anything else (another team, a
+   candidate, a follow-up, "runs the N other waiting"): say "cancel" and click Approve on the
+   staged memo's card instead.
 3. "Confirm." The touches log adds a line with a mic icon (an Operating touch; Training if it's
    email's first-ever approval). Accounting then picks the memo up: on the live crew that can
    take a few seconds, and it may land during card 3b.
 **Say after:** "Stopping is instant. Anything that starts work, the firm reads back and waits for
 my own voice."
 **Never press Esc on `/ceo`:** it's STOP EVERYTHING, which also pauses email and invites, and the
-judge's memo in card 4 couldn't send. If it happens, Resume email, calendar invites and voice
-screens in Standing orders ("Resume…", then "Resume"), and leave social posts paused.
+judge's memo in card 4 couldn't send. If it happens, Resume the Standing orders rows "Emails",
+"Calendar invites" and "Candidate phone screens" ("Resume…", then "Resume"). Leave social posts
+paused.
 **If it fails** (a phrase isn't understood, the firm reads its list of example phrases back): in
 `/ceo`, Pause social posts only (not STOP EVERYTHING), then Approve on the only card under
 approvals. The same two touches, clicked instead of spoken.
@@ -98,8 +101,8 @@ and the Hiring pane reads "1 hired". Then press S to turn stage mode back on (St
 **Say:** "Judge, you're a Delaware C-corp. Tell U-Tax your numbers. Make them up if you like."
 **Do:** the judge says yes to the transcription notice ("I agree, start talking") and answers four
 short questions by voice (Chrome listens), or typed when the page says it can't listen or the
-microphone is off. Then the judge types an email into the box and confirms. Stay quiet near the mic until the page
-says the intake is sent.
+microphone is off. Then the judge types an email into the box and presses Send to U-Tax. Stay quiet near the mic
+until the page says "Your case is with the firm."
 **Say, one line per department as its cursor moves:**
 1. Intake fills the fact cells: "Intake is onboarding you: every fact comes from your own answers."
 2. Tax searches and fills the sheet: "Tax is preparing it. The AI only points at the numbers;
@@ -155,15 +158,20 @@ mattered. Educational estimates, not tax advice."
       post waits as an approval, and "approve the latest" could pick it
 - [ ] Last, put email back to "asks you first" (the console has no button for it). Do it before the
       projector is connected, set the token without pasting it into the command (Git Bash:
-      `read -s ADMIN_TOKEN && export ADMIN_TOKEN`), and close the terminal afterwards. In Git Bash:
+      `read -s ADMIN_TOKEN && export ADMIN_TOKEN`; PowerShell:
+      `$env:ADMIN_TOKEN = [Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password`),
+      and afterwards clear it (`unset ADMIN_TOKEN` / `Remove-Item Env:ADMIN_TOKEN`) and close the
+      terminal. Never type the token into a command line: shells keep a history. In Git Bash:
       `curl -X POST <gateway>/api/trust -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"action_type":"email","state":"ASK"}'`.
       In PowerShell (its `curl.exe` mangles the JSON quotes):
       `Invoke-RestMethod -Method Post -Uri <gateway>/api/trust -Headers @{Authorization="Bearer $env:ADMIN_TOKEN"} -ContentType application/json -Body '{"action_type":"email","state":"ASK"}'`.
       It counts as one human touch (K goes up by one). Check that Standing orders now show email
-      "asks you first". Then let the staged case reach its memo, so the memo waits, and note
-      its Team number. No other client traffic until card 3a: any new email waits as an approval
-- [ ] Just before card 3a, say "what's pending" in the test profile: exactly one item, the staged
-      memo
+      "asks you first". Then open the staged case (inject a test email, or a teammate runs `/talk`), so
+      it opens after email went back to "asks you first" and its memo waits; note its Team
+      number. No other client traffic and no CEO orders until card 3a: any new email, outreach or
+      follow-up waits as an approval too
+- [ ] Last prep step, before you go on stage: say "what's pending" in the test profile: exactly
+      one item, the staged memo
 - [ ] After card 3a, check that Standing orders show email "runs on its own" (the approval earns
       it), or card 3b's hire mail and card 4's memo wait. If it doesn't, approve Team #7's memo
       on its card. Let Team #7's memo send before card 4

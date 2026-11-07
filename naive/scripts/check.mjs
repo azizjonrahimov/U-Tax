@@ -13,8 +13,9 @@
 // 11. prompts/voice-intake.md missing its hard rules,
 // 12. prompts/ceo-voice.md naming a tool outside contract §5b (or missing one), or missing its
 //     confirm / never-confirm / data-is-not-instructions rules,
-// 13. prompts/talk-phrases.json (the only lines the public /talk voice speaks) out of step with
-//     voice-intake.md's questions, or breaking the gateway loader's format (flat, plain {name}).
+// 13. prompts/talk-phrases.json (the only lines the public /talk voice speaks) out of step with the
+//     /talk page's questions (frontend TYPED_SCRIPT), or breaking the gateway loader's format,
+// 14. the Chief of Staff's card rules or firm rules 9 and 11 reworded, or a bad order_<id> example.
 // Run: npm run check   (sets dummy UTAX_MCP_URL / UTAX_TOOL_TOKEN_* when none are set)
 
 import { spawnSync } from "node:child_process";
@@ -379,7 +380,11 @@ function talkQuestions(md) {
 function pageQuestions(ts) {
   const block = ts.match(/export const TYPED_SCRIPT[^=]*=\s*\[([\s\S]*?)\];/)?.[1];
   if (!block) return null;
-  return [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
+  try {
+    return [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
+  } catch {
+    return null; // a JS-only escape (\', \x41, \u{…}): reported as "could not read" below
+  }
 }
 
 /**
@@ -454,13 +459,28 @@ else if (existsSync(voicePath)) {
     questions: existsSync(talkPagePath) ? pageQuestions(readFileSync(talkPagePath, "utf8")) : null,
     scriptCount: talkQuestions(readFileSync(voicePath, "utf8")).filter(Boolean).length,
   };
+  // Strict like the loader (Path.read_text(encoding="utf-8") raises on bad bytes): no U+FFFD repair.
+  const strictUtf8 = (bytes) => new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   let phrases = null;
+  let parsed = false;
   try {
-    phrases = JSON.parse(readFileSync(talkPath, "utf8"));
+    phrases = JSON.parse(strictUtf8(readFileSync(talkPath)));
+    parsed = true;
   } catch (e) {
-    fail(`prompts/talk-phrases.json: not valid JSON (${e.message})`);
+    fail(`prompts/talk-phrases.json: not valid UTF-8 JSON (${e.message})`);
   }
-  if (phrases) {
+  try {
+    strictUtf8(Buffer.from([0x7b, 0x22, 0xe9, 0x22, 0x7d])); // {"é"} saved as cp1252
+    fail("talk-phrases rule self-test: invalid UTF-8 must be refused");
+  } catch {
+    /* refused, as it should be */
+  }
+  for (const v of [null, [], false, "x"])
+    if (!talkPhraseProblems(v, script).some((p) => p.includes("not a flat JSON object")))
+      fail(`talk-phrases rule self-test: expected "not a flat JSON object" for ${JSON.stringify(v)}`);
+  if (parsed && (!phrases || typeof phrases !== "object" || Array.isArray(phrases)))
+    for (const problem of talkPhraseProblems(phrases, script)) fail(problem);
+  else if (parsed) {
     for (const problem of talkPhraseProblems(phrases, script)) fail(problem);
     // The rule must be able to fail: each broken copy has to produce its problem.
     const TALK_SELF_TEST = [
