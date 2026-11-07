@@ -101,6 +101,31 @@ export function consoleFromState(raw: unknown): Console | null {
   return { lastEventId: int(raw.last_event_id), cases, trust, candidates };
 }
 
+/**
+ * Several approvals for the same case and kind (the facts changed, or QA rejected a figure):
+ * only the newest is current. The older ones stay pending at the gateway, but approving one
+ * could send a figure the CEO never saw, so the console never offers Approve on them.
+ */
+export function outdatedApprovals(pending: readonly Approval[]): Set<string> {
+  const newest = new Map<string, string>();
+  for (const a of pending) if (a.caseId) newest.set(`${a.caseId}|${a.actionType}`, a.approvalId); // fold order = event order
+  return new Set(pending.filter((a) => a.caseId && newest.get(`${a.caseId}|${a.actionType}`) !== a.approvalId).map((a) => a.approvalId));
+}
+
+/** ISO timestamps in gateway summaries read as local times. */
+export function readableSummary(s: string, locale?: string): string {
+  return s.replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})\b/g, (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleString(locale, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  });
+}
+
+/** The gateway's log went backwards (a reset or a new data dir): everything the console folded is void. */
+export const logWasReset = (stateLastId: number | null, foldedLastId: number) => stateLastId !== null && stateLastId < foldedLastId;
+
+/** since_id for the login brief: what this device last saw, unless the gateway's log is now behind it. */
+export const briefSince = (lastSeen: number, stateLastId: number | null) => (stateLastId !== null && lastSeen > stateLastId ? 0 : lastSeen);
+
 /** Hire/Decline for every screened candidate (contract v1.5), not only shortlisted ones. */
 export const canDecide = (stage: string) => stage === "screened" || stage === "shortlisted";
 
@@ -124,14 +149,12 @@ export interface LogView {
 
 export const emptyLog = (): LogView => ({ pending: new Map(), blockedReason: new Map(), lastId: 0 });
 
-/** Seed the pending list from the brief (authoritative at login). */
-export function seedPending(v: LogView, pending: readonly Approval[]): LogView {
-  const next = new Map(v.pending);
-  for (const a of pending) if (!next.has(a.approvalId)) next.set(a.approvalId, a);
-  return { ...v, pending: next };
-}
-
-/** Fold admin events: an approval is pending until a touch carries its approval_id. */
+/**
+ * Fold admin events (from id 0, so this is the one source of truth for what waits on the CEO):
+ * an approval is pending until a touch carries its approval_id, or its type flips to AUTO
+ * (the gateway then marks the others of that type superseded, with no event of their own).
+ * Flips to PAUSED or ASK keep them pending: the gateway still waits on those.
+ */
 export function foldLog(v: LogView, events: readonly UTaxEvent[]): LogView {
   let pending = v.pending;
   let blocked = v.blockedReason;
@@ -178,6 +201,7 @@ export const orderBody = (text: string) => ({ text: text.trim().slice(0, MAX_ORD
 /** Gateway error → a sentence for the CEO. */
 export function ceoError(status: number, code: string, message: string): string {
   if (status === 401 || code === "unauthorized") return "The admin token was rejected. Sign in again.";
+  if (code === "timeout") return "The gateway is taking too long. Check the list before trying again.";
   if (status === 0 || code === "network_error") return "Can't reach the gateway. Check it's running and try again.";
   if (code === "wrong_status") return "That case already moved on; the list is refreshing.";
   if (code === "no_facts") return "Retry needs the client's facts first. Use Re-ask instead.";

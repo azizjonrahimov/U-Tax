@@ -9,8 +9,12 @@ import {
   orderBody,
   parseBrief,
   readLastSeen,
-  seedPending,
+  outdatedApprovals,
+  readableSummary,
+  logWasReset,
+  briefSince,
   MAX_ORDER_CHARS,
+  type Approval,
 } from "./ceo";
 
 const ev = (id: number, type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent =>
@@ -61,8 +65,10 @@ describe("admin /api/state", () => {
 
 describe("the log: pending approvals and blocked reasons", () => {
   it("an approval is pending until a touch carries its id; replays are ignored", () => {
-    let v = seedPending(emptyLog(), [{ approvalId: "apr_0", actionType: "email", summary: "old", caseId: null }]);
-    v = foldLog(v, [
+    let v = foldLog(emptyLog(), [
+      ev(1, "approval.requested", { approval_id: "apr_0", action_type: "email", summary: "old" }),
+    ]);
+    v = foldLog({ ...v, lastId: 0 }, [
       ev(1, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: "First memo" }, { case_id: "case_1" }),
       ev(2, "case.blocked", { reason: "qa failed twice", needs: "human" }, { case_id: "case_2" }),
     ]);
@@ -71,14 +77,42 @@ describe("the log: pending approvals and blocked reasons", () => {
     expect(v.blockedReason.get("case_2")).toBe("qa failed twice");
     v = foldLog(v, [ev(3, "touch.training", { note: "email → AUTO", approval_id: "apr_1" }), ev(4, "touch.operating", { note: "denied", approval_id: "apr_0" })]);
     expect(v.pending.size).toBe(0);
-    // A flip to AUTO supersedes the other approvals of that type (the gateway emits nothing per approval).
-    const flip = foldLog(seedPending(v, [{ approvalId: "apr_2", actionType: "email", summary: "", caseId: null }, { approvalId: "apr_6", actionType: "calendar_invite", summary: "", caseId: null }]), [
-      ev(5, "trust.changed", { action_type: "email", from: "ASK", to: "AUTO", reason: "approved" }),
+    // A flip to AUTO (from ASK or PAUSED) supersedes the other approvals of that type; PAUSED/ASK keep them.
+    const two = foldLog(v, [
+      ev(5, "approval.requested", { approval_id: "apr_2", action_type: "email", summary: "" }),
+      ev(6, "approval.requested", { approval_id: "apr_6", action_type: "calendar_invite", summary: "" }),
     ]);
-    expect([...flip.pending.keys()]).toEqual(["apr_6"]);
+    expect([...foldLog(two, [ev(7, "trust.changed", { action_type: "email", from: "ASK", to: "AUTO" })]).pending.keys()]).toEqual(["apr_6"]);
+    expect([...foldLog(two, [ev(7, "trust.changed", { action_type: "email", from: "PAUSED", to: "AUTO" })]).pending.keys()]).toEqual(["apr_6"]);
+    for (const to of ["PAUSED", "ASK"]) expect(foldLog(two, [ev(7, "trust.changed", { action_type: "email", from: "AUTO", to })]).pending.size).toBe(2);
+    expect(foldLog(two, [ev(7, "trust.changed", { action_type: "email", to: "AUTO" }, { status: "failed" })]).pending.size).toBe(2);
     const again = foldLog(v, [ev(1, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: "x" })]);
     expect(again.pending.size).toBe(0); // id 1 is behind lastId
     expect(foldLog(v, [ev(9, "approval.requested", { approval_id: "apr_9" }, { status: "failed" })]).pending.size).toBe(0);
+  });
+});
+
+describe("what the CEO is shown", () => {
+  const a = (approvalId: string, caseId: string | null, actionType = "email"): Approval => ({ approvalId, caseId, actionType, summary: "" });
+
+  it("only the newest approval per case and kind is current; older ones never get Approve", () => {
+    expect([...outdatedApprovals([a("apr_1", "case_1"), a("apr_2", "case_2"), a("apr_3", "case_1"), a("apr_4", null), a("apr_5", null), a("apr_6", "case_1", "calendar_invite")])]).toEqual(["apr_1"]);
+  });
+
+  it("reads ISO times in summaries as local times and leaves the rest alone", () => {
+    const out = readableSummary("Call for Team #2 at 2026-11-07T17:00:00.000Z, $450 → $400", "en-US");
+    expect(out).not.toMatch(/2026-11-07T/);
+    expect(out).toMatch(/^Call for Team #2 at .+, \$450 → \$400$/);
+    expect(readableSummary("no times here")).toBe("no times here");
+  });
+
+  it("notices a gateway reset and briefs from the start after one", () => {
+    expect(logWasReset(12, 90)).toBe(true);
+    expect(logWasReset(90, 90)).toBe(false);
+    expect(logWasReset(null, 90)).toBe(false);
+    expect(briefSince(91, 12)).toBe(0);
+    expect(briefSince(40, 90)).toBe(40);
+    expect(briefSince(40, null)).toBe(40);
   });
 });
 
@@ -94,5 +128,10 @@ describe("actions", () => {
     [409, "wrong_status", "case_3 is READY", /already moved on/],
     [400, "no_facts", "", /Use Re-ask/],
     [400, "bad_input", "decision must be hire or decline", /decision must be/],
+    [404, "not_found", "no approval apr_9", /That item is gone/],
+    [429, "", "", /Too many requests/],
+    [429, "rate_limited", "", /Too many requests/],
+    [0, "timeout", "", /taking too long/],
+    [500, "boom", "", /The gateway refused that/],
   ])("%i %s reads as a sentence", (status, code, message, re) => expect(ceoError(status, code, message)).toMatch(re));
 });
