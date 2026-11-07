@@ -696,6 +696,7 @@ export function Ceo() {
 
         <section aria-labelledby="tr-h">
           <h2 id="tr-h">Standing orders</h2>
+          <p className="hint">A kind that asks you first runs on its own after you approve one. Pause stops one that runs on its own.</p>
           {loading ? (
             <p className="empty">Loading…</p>
           ) : (
@@ -741,7 +742,6 @@ export function Ceo() {
                             {working(key) ? "Working…" : "Resume…"}
                           </button>
                         )}
-                        {state === "ASK" && <span className="dim small">Approve one to let it run on its own</span>}
                       </div>
                     </div>
                     {confirmRow(key)}
