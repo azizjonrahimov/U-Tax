@@ -96,7 +96,7 @@ function propose(name, args, source) {
   else readback = `${name.replace(/_/g, " ")} ${JSON.stringify(args)}. Say confirm.`;
   const id = `prop_${nextProposal++}`;
   const expires = new Date(Date.now() + TTL_MS).toISOString();
-  proposals.set(id, { ...pin, id, expires, used: false });
+  proposals.set(id, { ...pin, id, expires, used: false, readback });
   emit("ceo.proposed", { proposal_id: id, tool: name, args, readback, expires_at: expires, source }, { actor: "ceo" });
   return [200, { kind: "proposal", proposal_id: id, readback, expires_at: expires }];
 }
@@ -113,6 +113,13 @@ function tool(name, args, source) {
 }
 
 function command(text) {
+  // v1.8.4: confirm and cancel words (and "approve it" with an approve open) point at the newest open proposal.
+  const open = [...proposals.values()].filter((p) => !p.used && Date.now() < Date.parse(p.expires)).at(-1);
+  const w = words(text).trim();
+  if (open && (/^(?:ok |okay )?(?:confirm|yes|do it|go ahead)$/.test(w) || (w === "approve it" && open.name === "approve"))) {
+    return [200, { kind: "confirm", proposal_id: open.id, readback: open.readback }];
+  }
+  if (open && /^(?:no|cancel|cancel it|never mind)$/.test(w)) return [200, { kind: "cancel", proposal_id: open.id, readback: open.readback }];
   if (has(text, "everything") && (has(text, "stop") || has(text, "pause"))) return tool("pause", { action_type: "everything" }, "command");
   if (has(text, "stop posting")) return tool("pause", { action_type: "social_post" }, "command");
   if (has(text, "approve")) return tool("approve", { approval: "latest" }, "command");
