@@ -461,6 +461,9 @@ same messages and plays the agents' tool calls through `/mcp/<actor>` with their
   `POST /v1/sessions/{id}/tool_confirmations` `{tool_call_id, decision, reason}`:
   - `allow` (one call, no session scope) when `name` is `board_read`, `board_write`, or
     `utax.<tool>` with `<tool>` in that agent's own §6 column;
+  - v1.10.3 (owner: "allow handoffs"): for the **Chief of Staff only**, also `send_to_agent`,
+    `wait_for_agents` and `list_agents`, Naïve's coordinator tools, which hand work to our own
+    agents and reach no outside party. Any other agent asking for them is denied.
   - `deny` for anything else, with a CEO notice (`ceo.notified` reason `flagged`, summary
     "Naïve asked to run <name>; denied").
 - `kind: "question"` (`ask_operator`) is never answered by the gateway. It goes to the CEO
@@ -584,6 +587,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.10.3 (2026-11-07, owner "allow handoffs"): the confirm resolver also allows the CoS's coordinator tools.
 
 - v1.10.2 (2026-11-07, frontend review): /api/tts talk speaks phrase keys only (registry naive/prompts/talk-phrases.json); ceo is unmasked.
 
