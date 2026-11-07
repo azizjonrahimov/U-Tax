@@ -340,6 +340,7 @@ class Gateway:
         self._outbox_tries: dict[str, tuple[int, float]] = {}
         self._outbox_inflight: set[str] = set()
         self._digest_backoff_until = 0.0
+        self._public_cap_retry_at = 0.0  # task 13: next try of a failed at-capacity notice
         # failed wake deliveries: (message, waker, attempt, due monotonic time)
         self._wake_retries: list[tuple[str, Callable[[str], None], int, float]] = []
 
@@ -452,6 +453,46 @@ class Gateway:
         if isinstance(payload.get("quotes"), dict):
             payload["quotes"] = {k: self.HIDDEN for k in payload["quotes"]}
         return {**out, "payload": payload}
+
+    def public_case_cap(self) -> int:
+        """PUBLIC_CASES_PER_DAY, else 50 (200 with PUBLIC_MODE=event: the finale crowd)."""
+        cap = self.settings.public_cases_per_day
+        if cap is None:
+            return 200 if self.settings.public_mode == "event" else 50
+        return max(0, cap)
+
+    def voice_refusal(self, kind: str) -> str | None:
+        """Task 13: why paid voice (`realtime` mint, `tts` brief) can't run now, else None.
+        Read under the lock. Typed chat and the browser's own speech keep working.
+
+        - SPEND_CAP_USD reached.
+        - Mints only (the public, unauthenticated one): /talk is at its daily case cap, or
+          today's mints reached 2 x PUBLIC_CASES_PER_DAY. That bounds what anonymous mints
+          can book a day (2 x 50 x $0.30 = $30 by default), so they can't run the firm-wide
+          budget out overnight."""
+        cap = self.settings.spend_cap_usd
+        with self._lock:
+            if cap is not None and self.state.spent_usd() >= cap:
+                return "budget"
+            if kind != "realtime":
+                return None
+            day = iso_ts(self._now())[:10]
+            cases = self.public_case_cap()
+            if self.state.public_cases_by_day.get(day, 0) >= cases:
+                return "at_capacity"
+            if self.state.voice_mints_by_day.get(day, 0) >= 2 * cases:
+                return "mints"
+        return None
+
+    def book_voice(self, kind: str, model: str) -> None:
+        """Task 13: one estimated cost.booked per Realtime mint or TTS brief (OpenAI reports
+        no cost on either call). Booked after the paid call; never fails the request."""
+        from app.gateway.pricing import VOICE_USD
+
+        result = self.perform("book_spend", {"provider": "openai", "model": f"{kind}:{model}"[:120],
+                                             "cost_usd": str(VOICE_USD[kind]), "estimated": True})
+        if result.status != "done":
+            log.warning("voice %s spend not booked: %s", kind, result.error)
 
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The
@@ -993,10 +1034,53 @@ class Gateway:
         return [NewEvent(type="case.status", actor="system", case_id=case_id,
                          payload={"from": current, "to": "INTAKE_PENDING"})]
 
+    def _public_cap(self) -> None:
+        """Task 13: at most PUBLIC_CASES_PER_DAY new /talk cases a UTC day, so an overnight
+        flood can't drain the agents' budgets. At the cap: one CEO notice a day, then 429."""
+        day = iso_ts(self._now())[:10]
+        cap = self.public_case_cap()
+        if self.state.public_cases_by_day.get(day, 0) < cap:
+            return
+        key = f"ceo:public-cap:{day}"
+        # the logged ceo.notified keeps it to one a day (across restarts too); a failed mail
+        # is tried again 10 minutes later, never on every flood request under the lock
+        if time.monotonic() >= self._public_cap_retry_at and self._done_from(key) is None:
+            self._public_cap_retry_at = time.monotonic() + 600
+            summary = (f"public /talk reached its {cap} new cases for {day} (UTC); new /talk "
+                       "cases are refused until tomorrow. Email still opens cases.")
+            # own body: the "paused" template's lines ("resume it in the console") don't
+            # apply, this lifts itself at midnight UTC (or raise PUBLIC_CASES_PER_DAY)
+            self._notify_ceo("paused", "public /talk at capacity", summary, key=key,
+                             body=f"{summary}\n\nIt lifts itself at midnight UTC; to take more "
+                                  "today, raise PUBLIC_CASES_PER_DAY and restart.\n\n"
+                                  f"{self.settings.ceo_console_url}")
+        inbox = self.settings.inbox_clients or "our clients inbox"
+        raise Refused("at_capacity", f"We're at capacity for today. Please email {inbox} and "
+                                     "we'll pick your case up from there.")
+
+    MAX_TURNS = 120  # a long /talk intake is ~60 turns; past this it's not a conversation
+
     def _voice(self, args: dict) -> dict:
+        speaker = _one_of(args, "speaker", ("customer", "ceo"))
+        reply = request_id = None
+        if speaker == "customer":
+            # task 13: the cheap refusals and the retry come first, before any per-turn work,
+            # so what the Send limiter doesn't count (bad_input, a retry) stays cheap
+            reply = _str(args, "reply_email", max_len=320)
+            if not _EMAIL_RE.match(reply or ""):
+                raise Refused("bad_input", "a customer case needs reply_email")
+            request_id = _str(args, "request_id", required=False, max_len=80)
+            if request_id:  # the page's own id for this submission: a retry is the same case
+                seen = self._done_from(f"voice:{request_id}")
+                if seen is not None:
+                    return {"case_id": seen.case_id, "duplicate": True, "priority": True}
         turns = args.get("turns")
         context: list[dict] = []  # /talk turns kept for agents as labelled context
         if turns is not None:
+            if isinstance(turns, list) and (len(turns) > self.MAX_TURNS or any(
+                    isinstance(t, dict) and isinstance(t.get("text"), str)
+                    and len(t["text"]) > 4000 for t in turns)):
+                raise Refused("too_long", f"at most {self.MAX_TURNS} turns of 4000 characters")
             # v1.5: only what the customer said counts; the AI's read-back never becomes a
             # quote (it would echo numbers back as if the client had written them)
             if not isinstance(turns, list) or not all(
@@ -1013,7 +1097,6 @@ class Gateway:
             args = {**args, "text": joined}
         text = _str(args, "text", max_len=4000)
         channel = _one_of(args, "channel", ("voice", "typed"), default="typed")
-        speaker = _one_of(args, "speaker", ("customer", "ceo"))
         text, _ = redact_ids(text)
         text = mask_spoken_emails(text)
         if speaker == "ceo":
@@ -1027,14 +1110,7 @@ class Gateway:
             ])
             self._wake(f"CEO: {text}")
             return {"forwarded": True}
-        reply = _str(args, "reply_email", max_len=320)
-        if not _EMAIL_RE.match(reply or ""):
-            raise Refused("bad_input", "a customer case needs reply_email")
-        request_id = _str(args, "request_id", required=False, max_len=80)
-        if request_id:  # the page's own id for this submission: a retry is the same case
-            seen = self._done_from(f"voice:{request_id}")
-            if seen is not None:
-                return {"case_id": seen.case_id, "duplicate": True, "priority": True}
+        self._public_cap()
         # Public, unauthenticated page: always a fresh case. Never join (or reveal) a case
         # by the email typed in, or anyone could read or redirect someone else's case.
         number = self._new_case_number()

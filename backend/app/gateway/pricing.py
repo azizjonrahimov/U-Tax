@@ -45,3 +45,12 @@ APIFY_RUN_USD = Decimal("0.10")  # ApifyScrape caps each run at maxTotalChargeUs
 MOBILERUN_STEP_USD = Decimal("0.01")  # UNVERIFIED: no published per-step price read tonight
 MOBILERUN_MAX_STEPS = 25  # MobilerunDevice.start() sends maxSteps 25
 MOBILERUN_RUN_USD = MOBILERUN_STEP_USD * MOBILERUN_MAX_STEPS
+
+# Task 13: OpenAI voice, booked per call with estimated: true (neither call reports a cost).
+# UNVERIFIED placeholders, deliberately on the high side: a Realtime mint is priced as one
+# whole /talk intake (a few minutes of audio in and out, capped at 600 output tokens a
+# response); a TTS brief as one short spoken digest (input is clipped to 4000 characters).
+VOICE_USD = {
+    "realtime": Decimal("0.30"),
+    "tts": Decimal("0.02"),
+}

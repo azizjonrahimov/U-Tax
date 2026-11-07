@@ -37,7 +37,7 @@ SSE_QUEUE_MAX = 2000
 _REFUSED_STATUS = {
     "not_found": 404, "bad_input": 400, "unknown_action": 404, "not_local": 403,
     "tool_not_allowed": 403, "wrong_status": 409, "paused": 409, "denied": 409,
-    "qa_gate": 409,
+    "qa_gate": 409, "at_capacity": 429,
 }
 _ERROR_STATUS = {"store_unavailable": 503, "internal_error": 500}
 
@@ -65,7 +65,17 @@ class RateLimiter:
         self._all: deque[float] = deque()
         self._lock = threading.Lock()
 
-    def check(self, key: str) -> None:
+    def refund(self, key: str, stamp: float) -> None:
+        """Task 13: give back the per-key hit that `check` counted (a retried request_id, bad
+        input). The global count keeps it: free requests from rotating IPs still stop at
+        `global_limit`, so nothing reaches the gateway lock unbounded."""
+        with self._lock:
+            hits = self._hits.get(key)
+            if hits is not None and stamp in hits:
+                hits.remove(stamp)
+
+    def check(self, key: str) -> float:
+        """Count one hit for `key`, or raise 429; returns the hit's stamp for `refund`."""
         now = time.monotonic()
         with self._lock:
             while self._all and now - self._all[0] > self.window:
@@ -82,6 +92,7 @@ class RateLimiter:
             if len(self._hits) > 1000:  # prune idle keys: no unbounded growth
                 for k in [k for k, v in self._hits.items() if not v or now - v[-1] > self.window]:
                     del self._hits[k]
+            return now
 
 
 def _same(given: str | None, expected: str) -> bool:
@@ -222,13 +233,22 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
 
     @router.post("/api/voice")
     def voice(request: Request, body: dict = Body(...), authorization: str | None = Header(None)):
+        args = _pick(body, "text", "channel", "speaker", "reply_email", "turns", "request_id")
         if body.get("speaker") == "ceo":
             require_admin(authorization)  # a typed order is the CEO's
-        else:
-            _talk_limit(send_limiter, SEND_LIMITS)
-            send_limiter.check(_client_ip(request))  # the public /talk page's Send
-        return act("voice", _pick(body, "text", "channel", "speaker", "reply_email", "turns",
-                                  "request_id"))
+            return act("voice", args)
+        _talk_limit(send_limiter, SEND_LIMITS)
+        ip = _client_ip(request)
+        stamp = send_limiter.check(ip)  # the public /talk page's Send
+        try:
+            out = act("voice", args)
+        except APIError as err:
+            if err.code == "bad_input":  # task 13: a typo costs nothing, so it isn't counted
+                send_limiter.refund(ip, stamp)
+            raise
+        if out.get("duplicate"):  # task 13: a retried request_id is the same Send
+            send_limiter.refund(ip, stamp)
+        return out
 
     @router.post("/api/trust")
     def trust(body: dict = Body(...), authorization: str | None = Header(None)):
@@ -260,6 +280,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if not instructions:  # never mint a general assistant on the firm's key
             log.error("voice prompt %s missing or empty; refusing to mint", prompt_path)
             raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat")
+        if gw().voice_refusal("realtime"):  # task 13: budget, the case cap, the mint cap
+            raise APIError(503, "voice_unavailable", "voice is resting; use typed chat")
         try:
             session = gw().ports.voice.create_session(instructions)
         except NotConfigured as exc:
@@ -267,6 +289,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         except PortError as exc:  # provider detail stays in the server log
             log.warning("voice session failed: %s", exc)
             raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat") from exc
+        if gw().ports.voice.provider == "openai":
+            gw().book_voice("realtime", session.model)
         return {"client_secret": session.client_secret, "model": session.model,
                 "expires_at": session.expires_at, "realtime_url": session.realtime_url}
 
@@ -281,6 +305,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
                       if e.id == event_id), None)
         if event is None or event.type != "brief.generated":
             raise APIError(404, "not_found", f"no brief.generated event {event_id}")
+        if gw().voice_refusal("tts"):  # task 13: SPEND_CAP_USD covers TTS too
+            raise APIError(503, "voice_unavailable", "audio is resting; use speechSynthesis")
         try:
             audio = gw().ports.voice.speak(event.payload["text"])
         except NotConfigured as exc:
@@ -288,6 +314,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         except PortError as exc:
             log.warning("brief audio failed: %s", exc)
             raise APIError(503, "voice_unavailable", "audio is unavailable; use speechSynthesis") from exc
+        if gw().ports.voice.provider == "openai":
+            gw().book_voice("tts", getattr(gw().ports.voice, "tts_model", "tts"))
         if len(audio_cache) > 200:
             audio_cache.pop(next(iter(audio_cache)))
         audio_cache[event_id] = audio
