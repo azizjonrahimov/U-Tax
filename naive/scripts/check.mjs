@@ -516,11 +516,12 @@ else if (existsSync(voicePath)) {
       mutate(copy);
       if (!talkPhraseProblems(copy, script).some((p) => p.includes(why))) fail(`talk-phrases rule self-test: expected "${why}"`);
     }
+    // These two build their own script, so they test the rule whatever the real page and prompt hold.
     const noAi = "Is your company a Delaware corporation?";
-    if (!talkPhraseProblems({ ...phrases, "question.1": noAi }, { ...script, questions: script.questions?.map((q, i) => (i ? q : noAi)) })
-      .some((p) => p.includes("talking to an AI")))
+    if (!talkPhraseProblems({ "question.1": noAi }, { questions: [noAi], scriptCount: 1 }).some((p) => p.includes("talking to an AI")))
       fail('talk-phrases rule self-test: expected "talking to an AI"');
-    if (!talkPhraseProblems(phrases, { ...script, scriptCount: script.scriptCount + 1 }).some((p) => p.includes("they are one script")))
+    if (!talkPhraseProblems({ "question.1": "Hi, I'm an AI." }, { questions: ["Hi, I'm an AI."], scriptCount: 2 })
+      .some((p) => p.includes("they are one script")))
       fail('talk-phrases rule self-test: expected "they are one script"');
     if (talkPlaceholders("A literal {{brace}} and {total_cents}.").names?.join() !== "total_cents")
       fail("talk-phrases rule self-test: {{ }} must read as a literal brace");
