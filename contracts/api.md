@@ -1,4 +1,4 @@
-# API contract (v1.7): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.8): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -89,7 +89,9 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `voice.command` | ceo / intake | `{text, channel: "voice"\|"typed", speaker: "customer"\|"ceo", case_id, masked_name}` (`masked_name` set for customer cases) (actor `intake` and `case_id` set for customer conversations) |
 | `ceo.notified` | cos | `{channel: "email"\|"login", subject, summary, reason: "approval"\|"blocked"\|"flagged"\|"shortlisted"\|"paused"\|"digest"\|"login"}` |
 | `approval.requested` | system | `{approval_id, action_type, summary}` |
-| `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id}` |
+| `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id, channel: "click"\|"voice"\|"typed"\|"email"}` (`channel` v1.8; absent on older events = `click`) |
+| `ceo.proposed` | ceo | `{proposal_id, tool, args, readback, expires_at, source: "realtime"\|"command"}` (§5b) |
+| `ceo.confirmed` / `ceo.cancelled` | ceo | `{proposal_id, via: "voice"\|"click", heard}` (`heard` = the CEO's transcribed words, ≤ 200 chars; cancelled also has `reason: "spoken"\|"clicked"\|"expired"\|"superseded"`) |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
 | `tool.bought` | any agent | `{tool, provider}` (amount in envelope `cost_usd`) |
@@ -209,6 +211,63 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/dev/inject-email` `{from, subject, body}` → local MailPort only; produces
   `email.received` exactly as a real inbound mail would. Refused unless `ADAPTER_MAIL=local`.
 - `POST /hooks/agentmail` (Saturday): AgentMail webhook; idempotency key = message id.
+
+## 5b. CEO voice console (v1.8, design D28)
+
+All admin token. One registry of CEO tools (design table "CEO tool set") serves both paths below;
+the tool names, kinds and args are fixed here:
+
+| Tool | Kind | Args |
+|---|---|---|
+| `get_brief` | read | `{since_id?}` |
+| `list_approvals` | read | `{}` |
+| `get_case` | read | `{case}`: `"case_7"`, `"7"` or `"Team 7"` |
+| `get_money` | read | `{}` |
+| `get_trust` | read | `{}` |
+| `get_hiring` | read | `{}` |
+| `recent_activity` | read | `{minutes?}` (default 60, max 720) |
+| `pause` | stop | `{action_type}`: an action type or `"everything"` |
+| `approve` / `deny` | start | `{approval}`: an `approval_id`, `"latest"`, or a case reference |
+| `set_trust` | start | `{action_type, state: "AUTO"\|"ASK"\|"RESUME"}` |
+| `unblock_case` | start | `{case, to: "INTAKE_PENDING"\|"READY"\|"NOT_ELIGIBLE"}` |
+| `decide_candidate` | start | `{candidate, decision: "hire"\|"decline"}` (`candidate`: `cand_N` or `"Candidate B"`) |
+| `order` | start | `{text}` (≤ 500 chars) |
+
+- `POST /api/voice/session` `{mode: "customer"|"ceo"}` (absent = `customer`). `mode: "ceo"` needs
+  the admin token (else `401`), uses `naive/prompts/ceo-voice.md` (missing/empty → `503
+  voice_unavailable`), carries the read/stop/start tool schemas from the registry, has input
+  transcription on, and its own mint cap (10 an hour). Same response shape as today.
+- `POST /api/ceo/tool` `{name, args, call_id}` →
+  - read: `200 {kind: "read", data}`. `data` is masked like theater-token reads: labels only;
+    no mail bodies, addresses or quotes; flagged cases read as `"flagged by QA, content hidden"`.
+  - stop: `200 {kind: "done", summary}`, carried out at once and idempotent. Writes
+    `trust.changed` plus `touch.operating` (`channel: "voice"`).
+  - start: `200 {kind: "proposal", proposal_id, readback, expires_at}`, nothing carried out.
+    Writes `ceo.proposed`. `readback` is one spoken sentence built by code from the pinned
+    target (e.g. `"Approve the memo for Team #7: $450 to their inbox. Say confirm."`).
+  - Refusals: `400 unknown_tool`, `400 bad_args`, `404 not_found` (e.g. no such case or
+    approval; the message names what is open), `409 nothing_pending` (`"latest"` with no
+    pending approval).
+- `POST /api/ceo/confirm` `{proposal_id, decision: "confirm"|"cancel", via: "voice"|"click", heard}`
+  - Confirm carries out the pinned action through the same code as the §5 routes, and
+    returns `200 {kind: "done", summary}`. The action's own events carry `channel: "voice"` or
+    `"click"` on the touch, plus `ceo.confirmed`.
+  - Single use: a second confirm answers `409 used`. After `expires_at` (60 s) it answers
+    `409 expired`. A superseded approval answers `409 superseded` (§5 body).
+  - With `via: "voice"`, the gateway re-checks `heard` against the confirm grammar
+    (`confirm`, `yes`, `do it`, `approve it`, `go ahead`, case-insensitive, whole words). A
+    miss answers `400 not_a_confirm`. A cancel word (`no`, `cancel`, `stop`, `wait`) in `heard`
+    always cancels.
+- `POST /api/ceo/command` `{text}`: the fallback, for browser speech or typing. The
+  gateway's deterministic grammar maps the text to one tool call and answers exactly like
+  `/api/ceo/tool`. Text it can't parse answers `200 {kind: "unknown", say}`, where `say`
+  lists example commands. Confirm and cancel words are matched against the newest open
+  proposal (the console then calls `/api/ceo/confirm`).
+- `POST /api/trust` `{action_type: "*", state: "PAUSED"}` pauses every action type
+  (`"everything"`). Only `PAUSED` is accepted with `"*"`.
+- Never in the CEO tool set: `resolve-purchase`, keys, deploys, `/api/dev/*`.
+- Open proposals are gateway state rebuilt from `ceo.proposed|confirmed|cancelled` events.
+  After a restart, an expired one is cancelled with `reason: "expired"`.
 
 ## 6. MCP tools for Naïve agents
 
@@ -385,8 +444,25 @@ falls back to a built-in template if the file is missing.
   the brief from `GET /api/ceo/brief`, lists pending approvals with Approve/Deny
   (`POST /api/approve`), and has an optional typed order box (`POST /api/voice`,
   `speaker: "ceo"`, `channel: "typed"`).
+- **`/ceo` voice mode (v1.8, design D28):**
+  - Inputs: a mic button (push-to-talk), a hands-free toggle, and a STOP EVERYTHING
+    button (also `Esc`), which sends `pause everything` with no confirm.
+  - Realtime session from `POST /api/voice/session {mode: "ceo"}`. Function calls go to
+    `POST /api/ceo/tool`, and their results go back to the model.
+  - A proposal shows a confirm card with the `readback`. Confirmation comes from the CEO's
+    own `input_audio_transcription.completed` text, matched by the same grammar in the
+    console, then `POST /api/ceo/confirm` with `via: "voice"` and `heard`. A click works
+    too. Model output never confirms.
+  - Hands-free speaks each new `approval.requested` and `case.blocked` from the stream.
+  - Fallback without a session: browser `SpeechRecognition` (or typing) →
+    `POST /api/ceo/command`, with answers spoken by `speechSynthesis`.
+  - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.8 (2026-11-07, design D28): the CEO runs the firm by voice. §5b CEO tool registry; `/api/ceo/tool`,
+  `/api/ceo/confirm`, `/api/ceo/command`; `/api/voice/session` `mode: "ceo"`; `trust` `"*"` pause;
+  events `ceo.proposed|confirmed|cancelled`; touch `channel`; `/ceo` voice mode (§8).
 
 - v1.7.8 (2026-11-07, backend task 14): supersede triggers and `superseded_by`; console refetches on 409.
 

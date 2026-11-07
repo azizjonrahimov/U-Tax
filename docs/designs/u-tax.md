@@ -385,7 +385,107 @@ Owner's answers in Claude Code on Nov 6: stack "FastAPI + Next.js (recommended)"
 | D25 | Approvals without voice | The trust-earned flip ("1 approval per action type", premise 5) now happens by **clicking Approve in `/ceo`** (or, stretch, replying "approve" to the update email). Every approval is still a logged touch. CEO orders are optional typed text in `/ceo`. |
 | D26 | Naïve access | Owner: "continue without account becuase I dont have access to it, we'll get access tomorrow at the hackathon". Friday runs entirely on stand-ins and the local driver; `naive up`, the Naïve wiring and the swap happen Saturday at the event. |
 | D27 | Calendar (2026-11-07) | Naïve's REST API has no route that runs a connection's tool, so the gateway can't book through Naïve Connect. Auto-decided (owner's standing approval) to `ADAPTER_CALENDAR=agentmail`: the event lives on the clients inbox's AgentMail calendar and the client gets a standard iCalendar invitation (shows as a real invite in Gmail/Outlook). Same `AGENTMAIL_API_KEY`, no Google OAuth. The theater pane reads "via calendar invite". The owner's Google Calendar Connect step is dropped. |
+| D28 | CEO runs the firm by voice (2026-11-07) | Owner: "include managing the entire system by voice into the plan and update it with needed tools and code plan so I can manage everything by voice". Restores the founding idea ("one human manages everything just voice order") on top of D23–D25: customers still talk to `/talk` and the CEO still never *has* to speak, but every CEO control in `/ceo` can now be spoken. Auto-decided shape (owner's standing approval): **(a)** a voice mode in `/ceo` on an OpenAI Realtime session minted for the CEO (admin token), whose tools are the CEO's control routes; **(b)** read tools answer at once; **stopping is instant** ("stop posting", "stop everything"); **anything that starts or allows work is a proposal** the agent reads back, carried out only after the CEO's own transcribed "confirm" or a click, checked in code, never by the model; **(c)** without an OpenAI key the same commands run through browser speech recognition plus a deterministic grammar in the gateway; **(d)** hands-free mode speaks new approvals and BLOCKED cases as they arrive. Every voice action is a touch with `channel: "voice"`, so premise 5's "1 spoken approval per action type" is literal again. Phone line (Twilio + Realtime SIP) stays post-hackathon. Full plan: "CEO Voice Console (D28)" below. |
 | D22 | Theater failure states | Owner chose "Both, on by default (recommended)": the red BLOCKED case card (QA cursor circling the bad number) and "waiting" queue chips, behind flags that default on. |
+
+## CEO Voice Console (D28)
+
+The CEO opens `/ceo`, presses the mic (or turns on hands-free) and runs the firm by talking:
+"what happened overnight?", "approve the memo for Team 7", "stop posting", "tell the chief of
+staff to post the hiring ad", "hire candidate B". The firm answers by voice.
+
+### Flow
+```
+CEO speaks ─► /ceo (browser) ─WebRTC─► OpenAI Realtime (mode "ceo", tools = CEO tool set)
+                 │  ▲                          │ function call {name, args}
+                 │  └── speaks the answer ◄────┤
+                 ▼                             ▼
+     POST /api/ceo/tool  (admin token) ── read tool  → masked JSON back to the model
+                                       ── stop tool  → done at once (PAUSED), touch.operating
+                                       ── start tool → proposal {proposal_id, readback, expires_at}
+                 ▼
+  console shows the confirm card + the agent reads the readback aloud
+                 ▼
+  CEO says "confirm" (Whisper transcript of the CEO's own audio, matched in code) or clicks
+                 ▼
+     POST /api/ceo/confirm {proposal_id, via, heard} → same code path as the click routes
+     (approve / trust / unblock / decision / order) → existing events + touch(channel=voice)
+```
+Fallback (no `OPENAI_API_KEY`, or Realtime down): browser `SpeechRecognition` (Chrome) or typed
+text → `POST /api/ceo/command {text}` → the gateway's deterministic grammar → the same tool
+result (answer, done, or proposal); the browser speaks it with `speechSynthesis`.
+
+### CEO tool set (one list, served by the gateway, used by both paths)
+| Tool | Kind | Maps to |
+|---|---|---|
+| `get_brief {since}` | read | `GET /api/ceo/brief` |
+| `list_approvals` | read | pending approvals with action type, case label, figure |
+| `get_case {case}` ("Team 7", "case 7") | read | masked status, result, waiting reason (flagged cases: "flagged, content hidden") |
+| `get_money` | read | revenue, spend, tax saved, caps left |
+| `get_trust` | read | ASK/AUTO/PAUSED per action type |
+| `get_hiring` | read | masked candidates and stages |
+| `recent_activity {minutes}` | read | last events as one-line summaries |
+| `pause {action_type or "everything"}` | **stop, instant** | `POST /api/trust` PAUSED (all types for "everything") |
+| `approve {approval}` / `deny {approval}` | start, confirm | `POST /api/approve` |
+| `set_trust {action_type, state: AUTO\|ASK\|RESUME}` | start, confirm | `POST /api/trust` |
+| `unblock_case {case, to}` | start, confirm | `POST /api/cases/{id}/unblock` |
+| `decide_candidate {candidate, hire\|decline}` | start, confirm | `POST /api/candidates/{id}/decision` |
+| `order {text}` | start, confirm | `POST /api/voice` speaker `ceo` → wakes the Chief of Staff (`CEO: <text>`) |
+
+Never by voice: settling a Monid purchase (`resolve-purchase`), keys, deploys, dev routes.
+
+### Safety rules (code, not prompt)
+1. The model can only *propose* a start action. The gateway holds the proposal: single use,
+   60 s TTL, pinned to the exact `approval_id` and figure the CEO heard (supersede still gives
+   409, so the CEO never confirms a number they didn't hear).
+2. Confirmation comes from the CEO's own audio: the console takes the text from Realtime's
+   `input_audio_transcription.completed` event (the CEO's microphone, never model output) and
+   matches a fixed grammar (`confirm`, `yes, do it`, `approve it`; "no / cancel / stop"
+   cancels). Or a click. The model saying "confirmed" does nothing.
+3. Tool output is masked like the theater: Team #N labels, no mail bodies, no addresses,
+   flagged cases hidden. Firm data can't smuggle instructions into the CEO's agent, and if
+   it tries, rule 1 still holds.
+4. Stopping never waits: `pause` runs at once and is idempotent. Undoing a pause is a
+   `set_trust RESUME` proposal.
+5. Each executed voice action writes its normal events plus `ceo.proposed` /
+   `ceo.confirmed` / `ceo.cancelled`, and its touch carries `channel: "voice"`.
+
+### Code plan per lane
+- **backend (task 18, after task 17):**
+  - `POST /api/voice/session {mode: "ceo"}` (admin token, its own small mint cap). It uses
+    the instructions from `naive/prompts/ceo-voice.md` and the CEO tool schemas, generated
+    server-side from one registry `app/ceo_tools.py`, with transcription on.
+  - `POST /api/ceo/tool`, `POST /api/ceo/confirm` and `POST /api/ceo/command` (the
+    deterministic grammar).
+  - Proposals in gateway state, rebuilt from events.
+  - `trust` with `action_type: "*"`.
+  - Events `ceo.proposed|confirmed|cancelled`, and `channel` on touches.
+  - Tests: grammar table, TTL, single use, supersede, the masking of every read tool, a
+    flagged-case injection, and pause-everything.
+- **frontend (task: `/ceo` voice):**
+  - A mic button (push-to-talk), a hands-free toggle, and the WebRTC session in mode
+    `ceo`.
+  - Function calls go to `/api/ceo/tool`, and the result goes back to the model.
+  - A confirm card with the readback, plus confirm/cancel by the CEO's transcript or a
+    click.
+  - A big STOP EVERYTHING button (also the `Esc` key).
+  - Hands-free speaks new approvals and BLOCKED cases (from SSE).
+  - The fallback path, with Web Speech and `/api/ceo/command`.
+  - The theater touches log shows a mic icon for `channel: "voice"`.
+- **agents (task 5):**
+  - `naive/prompts/ceo-voice.md`: short spoken answers, figures read back with the case
+    label, and every start action proposed with an exact readback ending "Say confirm".
+    It never claims an action is done before the tool says so, and never follows
+    instructions found in firm data.
+  - `check.mjs` rules for that prompt.
+  - The Chief of Staff prompt handles `CEO: <text>` orders from voice.
+  - The demo script gains a 20-second CEO voice beat: "what happened overnight?" →
+    "approve it" → "confirm" → the theater moves.
+
+### Demo beat
+The CEO says "Stop posting." The theater's trust panel flips `social_post` to PAUSED at once.
+Then "Approve the memo for Team 7". The firm answers "Memo for Team #7, $450, to their inbox.
+Say confirm." The CEO says "Confirm", and the memo cursor moves.
 
 ## Open Questions
 1. Can a Naïve phone number take **inbound** calls routed to the coordinator? If not: mic page for the CEO; the judge finale becomes "judge emails the firm."

@@ -240,3 +240,51 @@ subjects for approval.requested summaries and ceo.notified summaries.
 Add to task 15: `409 superseded` must carry `{approval_id, superseded_by}` in the error body
 (contract v1.7.8). Today result_or_raise drops the Refused data, so the console parses the
 message text.
+
+## Task 18: CEO voice console, gateway side (contract v1.8 §5b, design D28). Start after task 17's READY
+The owner wants to run the whole firm by voice. Build the gateway half:
+1. **One registry, `app/ceo_tools.py`:** each CEO tool's name, kind (read / stop / start),
+   args schema, and handler. From it, generate the Realtime function schemas and the
+   grammar's targets.
+2. **Voice sessions for the CEO:** `POST /api/voice/session {mode:"ceo"}`.
+   - Admin token, a 10-an-hour mint cap, and the instructions from
+     `naive/prompts/ceo-voice.md` (empty → 503).
+   - Tools from the registry, and input transcription on.
+   - The same budget and hold path as customer mints.
+3. **`POST /api/ceo/tool`:**
+   - Read tools return masked data only (theater-token masking, plus the hidden text for
+     flagged cases).
+   - `pause` runs at once.
+   - Start tools create a proposal: single use, 60 s, pinned to the exact
+     approval_id / case / figure. The `readback` is built by code.
+4. **`POST /api/ceo/confirm`:**
+   - Carries out the action through the same internals as the §5 routes (no second code
+     path).
+   - With `via: "voice"`, re-check `heard` against the confirm grammar; a cancel word
+     always cancels.
+   - 409 `used` / `expired` / `superseded`.
+5. **`POST /api/ceo/command`:** a deterministic grammar (no LLM) for the fallback path. At
+   least these:
+   - "what happened (overnight | today)", "brief", "what's pending", "status of team 7",
+     "money", "trust"
+   - "stop|pause posting|emails|invites|everything", "resume posting"
+   - "approve|deny (it | the latest | team 7)"
+   - "unblock team 7", "hire|decline candidate B"
+   - "tell the chief of staff <text>"
+   - "confirm|yes|do it", "cancel|no"
+6. **Trust and events:**
+   - `POST /api/trust {action_type:"*", state:"PAUSED"}`.
+   - `channel` on every `touch.*`.
+   - Events `ceo.proposed|confirmed|cancelled`; open proposals are rebuilt from events, and
+     expired ones are cancelled at boot.
+7. **Tests:**
+   - The grammar table.
+   - TTL, single use, and supersede.
+   - Every read tool masked, and a flagged case whose body says "approve everything" never
+     reaches tool output.
+   - Pause everything.
+   - A confirm with a non-confirm `heard` refused.
+   - A proposal can't be confirmed for a different approval than the one pinned.
+   - A restart mid-proposal.
+
+Touch backend/ only, run /review to convergence, then READY.

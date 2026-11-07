@@ -83,3 +83,36 @@ The owner never has to speak. Slice 4 is now two pages (contract §8):
 - v1.5: `/talk` posts **customer turns only** (`turns: [{speaker:"customer", text}]`), never the
   AI's read-back; `reply_email` only from the typed field; open with a recording/transcription
   consent line. `/ceo` lists **every screened candidate** with Hire/Decline, not only shortlisted.
+
+## Task: `/ceo` voice mode (contract v1.8 §5b + §8, design D28)
+The owner wants to run the whole firm by voice. Build the console half against the contract,
+and use a mock gateway in the tests until backend task 18 merges.
+1. **Inputs:** a mic button (push-to-talk) and a hands-free toggle.
+   - Mint the session with `POST /api/voice/session {mode:"ceo"}` (admin token), and
+     connect over WebRTC to `realtime_url`, as `/talk` does.
+2. **Function calls:**
+   - Each `response.function_call_arguments.done` goes to `POST /api/ceo/tool`. Send the
+     result back as `conversation.item.create` `function_call_output`, then
+     `response.create`.
+3. **Proposals:**
+   - Show a confirm card with the readback and a countdown to `expires_at`.
+   - Confirm only from the CEO's own `conversation.item.input_audio_transcription.completed`
+     text, matched by the console's grammar (`confirm`, `yes`, `do it`, `approve it`, `go
+     ahead`; a cancel word cancels), or from a click. Then call `POST /api/ceo/confirm` with
+     `via` and `heard`.
+   - Never confirm from model output. Test that a model message saying "confirmed" does
+     nothing.
+4. **STOP EVERYTHING:** a big button, plus the `Esc` key.
+   - It calls `/api/ceo/tool {name:"pause", args:{action_type:"everything"}}` with no
+     confirm, and shows the result at once.
+5. **Hands-free:** speak each new `approval.requested` and `case.blocked` from SSE as a
+   short line ("Approval needed: memo for Team #7, $450. Say approve or deny.").
+6. **Fallback** (mint 503, or no WebRTC):
+   - Browser `SpeechRecognition` (feature-detected), or typing, goes to
+     `POST /api/ceo/command`.
+   - Answers are spoken with `speechSynthesis`, and the confirm card works the same.
+7. **Theater:** the touches rail shows a mic icon for `channel: "voice"`.
+8. **Checks:** run `/qa` on `/ceo`, plus `/design-review` for the projector.
+   - Accessibility: the mic state is announced, and every action can also be clicked.
+
+Touch frontend/ only, then READY.
