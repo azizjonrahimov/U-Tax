@@ -52,9 +52,23 @@ def test_shared_sub_objects_cannot_multiply_the_walk():
         node = [node, node]
     assert _http.too_nested(node)  # the value budget stops it, quickly
     port, calls = buyer()
-    with pytest.raises(Rejected):
+    with pytest.raises(Rejected, match="nest at most"):
         port.buy("enrichment", {"q": node}, key="k")
     assert calls == []
+
+
+def test_the_value_budget_fails_fast():
+    # 16 levels of shared halves: 65536 paths, cheap to walk even if the budget broke
+    node: object = "leaf"
+    for _ in range(16):
+        node = [node, node]
+    assert not _http.too_nested(node, max_values=10**6)
+    assert _http.too_nested(node)
+
+
+def test_dict_keys_count_toward_the_budget():
+    assert _http.too_nested({str(i): 0 for i in range(5000)})  # 1 + 5000 keys + 5000 values
+    assert not _http.too_nested({str(i): 0 for i in range(4999)})
 
 
 def test_too_nested_edges():

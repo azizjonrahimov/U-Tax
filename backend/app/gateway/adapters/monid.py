@@ -111,7 +111,8 @@ def _has_email(value: object) -> bool:
     """Any string (key or value) anywhere in `value` that holds an email. Iterative: a deep
     input must be refused, never crash the walk (CI run 42389174209, RecursionError).
     Precondition: `value` is parsed JSON already bounded by `_http.too_nested` (no cycles,
-    no shared sub-objects); buy() only calls it that way."""
+    no shared sub-objects); _checked() only calls it that way (after too_nested and a
+    json round-trip)."""
     stack = [value]
     while stack:
         node = stack.pop()

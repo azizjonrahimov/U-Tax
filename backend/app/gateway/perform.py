@@ -297,6 +297,7 @@ class Gateway:
         self._epoch: str | None = None
         self._booted_at = self._now()  # the first CEO digest waits a full period from here
         self._law_inflight = 0
+        self._buy_inflight: set[str] = set()  # buy keys between their intent and their events
         self._outbox_paused_until = 0.0  # a CRM rate limit pauses the whole outbox
         self._outbox_limited: dict[str, int] = {}  # rate limits per job (then it backs off)
         self._fee_tried_at = 0.0
@@ -564,8 +565,8 @@ class Gateway:
             return ToolResult("refused", error={"code": "tool_not_allowed",
                                                 "message": f"{actor} may not call {name}"})
         args = dict(args or {})
-        args.pop("_actor", None)  # never caller-supplied
-        args.pop("_prefetch", None)
+        for private in ("_actor", "_prefetch", "_law_reserved", "_buy_reserved"):
+            args.pop(private, None)  # never caller-supplied
         if actor is not None:
             args["_actor"] = actor
         slow = self._slow_reads.get(name)
@@ -574,14 +575,13 @@ class Gateway:
                 args["_prefetch"] = slow(args)  # outside the lock
             except Exception:  # noqa: BLE001 - a broken adapter must not kill the server
                 log.exception("%s failed unexpectedly before the lock", name)
+                self._release(args)
                 return ToolResult("error", error={"code": "internal_error",
                                                   "message": f"{name} failed unexpectedly"})
         try:
             result, wakes = self._perform_locked(name, handler, args)
         finally:
-            if args.get("_law_reserved"):
-                with self._lock:
-                    self._law_inflight -= 1
+            self._release(args)
         if name == "phone_check" and result.status == "done" and result.data.get("pending"):
             try:
                 self.advance_phone_jobs()  # outside the lock: a local device is done now
@@ -590,6 +590,14 @@ class Gateway:
         # Outside the lock: a slow Naïve call or CRM mirror never blocks the next write.
         self._deliver_wakes(wakes)
         return result
+
+    def _release(self, args: dict) -> None:
+        """Give back what a slow read reserved: after its handler ran, or after it failed."""
+        with self._lock:
+            if args.get("_law_reserved"):
+                self._law_inflight -= 1
+            if args.get("_buy_reserved"):
+                self._buy_inflight.discard(args["_buy_reserved"])
 
     def _perform_locked(self, name: str, handler: Callable[[dict], dict],
                         args: dict) -> tuple[ToolResult, list[str]]:
@@ -1739,6 +1747,7 @@ class Gateway:
     _BUY_KEY = re.compile(r"[A-Za-z0-9_.:-]{1,120}")
     BUY_INPUT_MAX = 2000  # characters of JSON: a data call needs a query, not a document
     BUY_RESULT_KEPT = 20_000  # a result up to this size is kept (private) for repeats
+    BUY_RESULT_DEPTH = 100  # a deeper result is neither stored nor relayed (json's C limit is the OS's)
 
     @staticmethod
     def _buy_fingerprint(tool: str, data: dict) -> str:
@@ -1787,6 +1796,10 @@ class Gateway:
             cap = self.settings.spend_cap_usd
             if cap is not None and self.state.spent_usd() >= cap:
                 return {"refused": f"the firm's budget (SPEND_CAP_USD {cap}) is spent"}
+            if port_key in self._buy_inflight:  # never touch the intent of a call still running
+                return {"refused": f"purchase {key} is already in flight; retry when it returns"}
+            self._buy_inflight.add(port_key)  # released after the handler ran (perform)
+            args["_buy_reserved"] = port_key
             known = self._done_from(f"tool:{port_key}")
             unsure = self._done_from(f"tool:unsure:{port_key}")
             resolved = self._done_from(f"tool:resolved:{port_key}")
@@ -1838,11 +1851,20 @@ class Gateway:
             raise (ToolError if fetched.get("retryable") and not fetched.get("unsure")
                    else Refused)(fetched["error"], f"buy_tool: {fetched['message']}")
         purchase = fetched["purchase"]
+        from app.gateway.adapters import _http
+
+        result = purchase.result
+        if _http.too_nested(result, max_depth=self.BUY_RESULT_DEPTH, max_values=1_000_000):
+            # paid for, but json.dumps of the event (and the MCP reply) could raise
+            # RecursionError after the charge: book the cost, drop the result
+            log.warning("buy_tool %s: result nests over %d levels; dropped", key,
+                        self.BUY_RESULT_DEPTH)
+            result = None
         kept = None
         try:
-            if len(json.dumps(purchase.result, ensure_ascii=False)) <= self.BUY_RESULT_KEPT:
-                kept = purchase.result
-        except (TypeError, ValueError):
+            if len(json.dumps(result, ensure_ascii=False)) <= self.BUY_RESULT_KEPT:
+                kept = result
+        except (TypeError, ValueError, RecursionError):
             kept = None
         events = [NewEvent(type="tool.bought", actor="mkt", provider=provider,
                            payload={"tool": tool, "provider": provider},
@@ -1858,7 +1880,7 @@ class Gateway:
         self._emit(events)
         self._buy_intents.put(fetched["port_key"], None)
         return {"tool": tool, "key": key, "bought": purchase.bought,
-                "cost_usd": purchase.cost_usd, "result": purchase.result}
+                "cost_usd": purchase.cost_usd, "result": result}
 
     def _resolve_purchase(self, args: dict) -> dict:
         """POST /api/dev/... or the CEO console: an unsure purchase checked in Monid's
