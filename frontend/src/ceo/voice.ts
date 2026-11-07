@@ -13,6 +13,7 @@
 //   never matched.
 
 import type { UTaxEvent } from "@/theater/events";
+import { ECHO_TAIL_MS } from "@/lib/tts";
 
 // ------------------------------------------------------------------ the tool registry (§5b)
 
@@ -302,8 +303,8 @@ export type VoiceEffect =
   | { type: "response"; active: boolean }
   | { type: "error"; message: string; code: string };
 
-/** Speech that starts this soon after agent audio stops may be the room's echo of it. */
-export const ECHO_TAIL_MS = 800;
+/** Speech that starts this soon after agent audio stops may be the room's echo of it (one value for every page: §5c). */
+export { ECHO_TAIL_MS };
 const MAX_WINDOWS = 12;
 
 /** The open confirm card, as the reducer tracks it. */

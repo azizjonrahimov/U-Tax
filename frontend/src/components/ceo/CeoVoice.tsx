@@ -47,6 +47,7 @@ import {
 } from "@/ceo/voice";
 import { MicIcon } from "@/components/MicIcon";
 import { Speaker } from "@/lib/tts";
+import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition } from "@/lib/recognition";
 import { API, authJson } from "./gateway";
 
 const MINT_MS = 8000;
@@ -91,24 +92,6 @@ export const announceAgentAudio = (source: string, on: boolean) => {
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(AGENT_AUDIO_EVENT, { detail: { source, on } }));
 };
 
-// Browser speech recognition (Chrome ships it prefixed); feature-detected, typed minimally.
-interface Recognition {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((e: { error: string }) => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-}
-type RecognitionCtor = new () => Recognition;
-const recognitionCtor = (): RecognitionCtor | null => {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-};
 
 
 interface Call {
@@ -285,10 +268,14 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
 
   /** The firm's voice (v1.10 §5c): POST /api/tts (ElevenLabs), the browser's voice on a 503. */
   const speakerRef = useRef<Speaker | null>(null);
-  const speaker = useCallback(() => {
-    speakerRef.current ??= new Speaker({ purpose: "ceo", api: API, token: () => token });
-    return speakerRef.current;
+  const tokenRef = useRef(token);
+  useEffect(() => {
+    tokenRef.current = token;
   }, [token]);
+  const speaker = useCallback(() => {
+    speakerRef.current ??= new Speaker({ purpose: "ceo", api: API, token: () => tokenRef.current });
+    return speakerRef.current;
+  }, []);
 
   /**
    * Read a line aloud, queued. While anything plays, the browser's own ear is closed and the
@@ -300,6 +287,10 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     (text: string, onDone?: (played: boolean) => void) => {
       if (!text.trim()) {
         onDone?.(true);
+        return;
+      }
+      if (!alive.current) {
+        onDone?.(false); // the console is gone: nothing more is said
         return;
       }
       if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", true, Date.now());
@@ -326,6 +317,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   );
   const hush = useCallback(() => {
     speakerRef.current?.stop(); // every queued line ends as not heard
+    // ...and the brief, when the browser reads it (Ceo.tsx): STOP silences every voice on the console.
+    if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
   }, []);
 
   /** The browser can't listen (no recognition, mic blocked, or it keeps failing): hands-free still reads alerts. */
@@ -356,12 +349,12 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     };
     let failed = false;
     r.onerror = (e) => {
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      if (isBlockedError(e.error)) {
         goDeaf("The microphone is blocked for this page. Type commands below; hands-free still reads alerts aloud.");
-      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+      } else if (!isQuietError(e.error)) {
         failed = true;
         earErrors.current += 1;
-        if (earErrors.current >= 3) goDeaf("The browser's speech recognition keeps failing. Type commands below; hands-free still reads alerts aloud.");
+        if (earErrors.current >= MAX_EAR_FAILURES) goDeaf("The browser's speech recognition keeps failing. Type commands below; hands-free still reads alerts aloud.");
       }
     };
     r.onend = () => {

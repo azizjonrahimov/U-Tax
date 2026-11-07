@@ -229,10 +229,20 @@ const server = createServer(async (req, res) => {
   // MOCK_TTS=503 answers voice_unavailable; otherwise a short silent WAV sized to the text.
   if (req.method === "POST" && url.pathname === "/api/tts") {
     const purpose = body && body.purpose;
-    const text = body && typeof body.text === "string" ? body.text : "";
     if (purpose !== "ceo" && purpose !== "talk") return out(400, { error: { code: "bad_input", message: "purpose" } });
     if (purpose === "ceo" && req.headers.authorization !== `Bearer ${ADMIN}`) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
-    if (!text || text.length > (purpose === "ceo" ? 1500 : 600)) return out(400, { error: { code: "bad_input", message: "text" } });
+    let text = "";
+    if (purpose === "ceo") text = typeof body.text === "string" ? body.text : "";
+    else {
+      // v1.10.2: registry keys only (the lane's proposed keys), numeric args only, never free text.
+      const keys = { "question.1": [], "question.2": [], "question.3": [], "question.4": [], "question.5": [], "estimate.authorized": ["total_cents"], "estimate.assumed_par": ["total_cents"], "memo.on_its_way": [] };
+      const args = body.args && typeof body.args === "object" ? body.args : {};
+      const want = keys[body.phrase];
+      const ok = body.text === undefined && want && Object.keys(args).every((k) => want.includes(k) && Number.isInteger(args[k]) && String(args[k]).length <= 12) && want.every((k) => k in args);
+      if (!ok) return out(400, { error: { code: "bad_input", message: "unknown phrase, extra or non-numeric args, or free text" } });
+      text = `${body.phrase} ${Object.values(args).join(" ")}`;
+    }
+    if (!text || text.length > 1500) return out(400, { error: { code: "bad_input", message: "text" } });
     if (process.env.MOCK_TTS === "503") return out(503, { error: { code: "voice_unavailable", message: "no voice key" } });
     console.log(JSON.stringify({ t: Date.now(), method: "POST", path: "/api/tts", body: { purpose, chars: text.length, auth: Boolean(req.headers.authorization) }, status: 200 }));
     return res.writeHead(200, { ...cors, "Content-Type": "audio/wav" }).end(silentWav(Math.min(4000, 300 + text.length * 25)));

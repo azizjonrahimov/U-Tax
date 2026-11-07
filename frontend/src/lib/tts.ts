@@ -5,6 +5,15 @@
 
 export type TtsPurpose = "ceo" | "talk";
 
+/**
+ * v1.10.2: the public /talk voice speaks registry lines only. The gateway renders `phrase` from
+ * naive/prompts/talk-phrases.json with numeric `args`; free text is never sent for "talk".
+ */
+export interface TalkPhrase {
+  phrase: string;
+  args?: Record<string, number>;
+}
+
 /** The gateway's text limits per purpose (§5c). */
 export const TTS_MAX: Readonly<Record<TtsPurpose, number>> = { ceo: 1500, talk: 600 };
 /** Pieces are at most this long either way: a short piece starts playing sooner. */
@@ -78,6 +87,8 @@ export interface SpeakerOptions {
 }
 
 interface Line {
+  /** A registry line (purpose talk): sent as a key, and `pieces` is only the browser voice's text. */
+  phrase?: TalkPhrase;
   /** Called once with whether every piece actually played to the end. */
   onDone?: (played: boolean) => void;
   pieces: string[];
@@ -100,14 +111,18 @@ export class Speaker {
     return this.current !== null || this.queue.length > 0;
   }
 
-  /** Queue a line. `onDone(played)` runs once it finished (played: heard to the end, every piece). */
-  say(text: string, onDone?: (played: boolean) => void) {
-    const pieces = ttsChunks(text, Math.min(PIECE_MAX, TTS_MAX[this.opts.purpose]));
+  /**
+   * Queue a line. `onDone(played)` runs once it finished (played: heard to the end, every piece).
+   * `phrase`: for purpose "talk", the registry key the gateway speaks; without one a /talk line
+   * never reaches the gateway (no free text, v1.10.2) and the browser's voice reads `text`.
+   */
+  say(text: string, onDone?: (played: boolean) => void, phrase?: TalkPhrase) {
+    const pieces = phrase ? [text.replace(/\s+/g, " ").trim()].filter(Boolean) : ttsChunks(text, Math.min(PIECE_MAX, TTS_MAX[this.opts.purpose]));
     if (!pieces.length) {
       onDone?.(true);
       return;
     }
-    this.queue.push({ onDone, pieces, played: true });
+    this.queue.push({ onDone, pieces, played: true, phrase });
     if (!this.current) {
       this.opts.onAudio?.(true);
       void this.pump();
@@ -137,7 +152,7 @@ export class Speaker {
     this.current = { line, stop };
     for (const piece of line.pieces) {
       if (stop.signal.aborted) break;
-      const ok = await this.withWatchdog(piece, stop);
+      const ok = await this.withWatchdog(piece, stop, line.phrase);
       if (!ok) line.played = false;
     }
     if (this.current?.line !== line) return; // stopped meanwhile (stop() already reported it)
@@ -149,7 +164,7 @@ export class Speaker {
   }
 
   /** One piece, never longer than its stall limit (a stalled voice is silenced and counts as not heard). */
-  private withWatchdog(piece: string, stop: AbortController): Promise<boolean> {
+  private withWatchdog(piece: string, stop: AbortController, phrase?: TalkPhrase): Promise<boolean> {
     return new Promise((resolve) => {
       let settled = false;
       const pieceStop = new AbortController();
@@ -167,13 +182,15 @@ export class Speaker {
         pieceStop.abort();
         finish(false);
       }, FETCH_MS + 2 * lineLimitMs(piece));
-      this.speakPiece(piece, pieceStop.signal).then(finish, () => finish(false));
+      this.speakPiece(piece, pieceStop.signal, phrase).then(finish, () => finish(false));
     });
   }
 
-  private async speakPiece(text: string, stop: AbortSignal): Promise<boolean> {
-    if (this.deps.now() >= this.downUntil) {
-      const blob = await this.fetchTts(text, stop);
+  private async speakPiece(text: string, stop: AbortSignal, phrase?: TalkPhrase): Promise<boolean> {
+    // /talk speaks only registry lines through the gateway (v1.10.2); anything else stays local.
+    const gateway = this.opts.purpose === "ceo" || phrase !== undefined;
+    if (gateway && this.deps.now() >= this.downUntil) {
+      const blob = await this.fetchTts(text, stop, phrase);
       if (stop.aborted) return false;
       if (blob) {
         const played = await this.deps.playBlob(blob, stop);
@@ -186,7 +203,7 @@ export class Speaker {
   }
 
   /** POST /api/tts. Null on any failure; a 503 also rests the gateway voice for a minute. */
-  private async fetchTts(text: string, stop: AbortSignal): Promise<Blob | null> {
+  private async fetchTts(text: string, stop: AbortSignal, phrase?: TalkPhrase): Promise<Blob | null> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const token = this.opts.token?.();
     if (token) headers.Authorization = `Bearer ${token}`;
@@ -195,7 +212,7 @@ export class Speaker {
       const r = await this.deps.fetch(`${this.opts.api}/tts`, {
         method: "POST",
         headers,
-        body: JSON.stringify({ text, purpose: this.opts.purpose }),
+        body: JSON.stringify(phrase ? { purpose: this.opts.purpose, phrase: phrase.phrase, args: phrase.args ?? {} } : { text, purpose: this.opts.purpose }),
         cache: "no-store",
         signal: anySignal(stop, FETCH_MS + lineLimitMs(text)),
       });
