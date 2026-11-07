@@ -493,6 +493,8 @@ class Gateway:
         injection, every event of that case, earlier ones too, has its subject and body
         replaced. The admin token still sees the originals."""
         out = event.public()
+        if not admin:
+            out = self._without_ceo_words(event, out)
         if admin or not self.flagged_injection(event.case_id):
             return out
         payload = dict(out["payload"])
@@ -504,6 +506,23 @@ class Gateway:
             payload["text"] = self.HIDDEN
         if isinstance(payload.get("quotes"), dict):
             payload["quotes"] = {k: self.HIDDEN for k in payload["quotes"]}
+        return {**out, "payload": payload}
+
+    ORDER_READBACK_PUBLIC = "An order for the Chief of Staff. Say confirm."
+
+    def _without_ceo_words(self, event: Event, out: dict[str, Any]) -> dict[str, Any]:
+        """v1.8.5: the CEO's spoken words and order text are private. Rows written before
+        that kept them in the payload; theater readers get the same shape as new rows."""
+        payload = out["payload"]
+        if event.type in ("ceo.confirmed", "ceo.cancelled") and "heard" in payload:
+            payload = {k: v for k, v in payload.items() if k != "heard"}
+            payload["heard_len"] = len(out["payload"]["heard"] or "")
+        elif (event.type == "ceo.proposed" and payload.get("tool") == "order"
+              and "text" in (payload.get("args") or {})):
+            payload = {**payload, "args": {"text_len": len(payload["args"]["text"] or "")},
+                       "readback": self.ORDER_READBACK_PUBLIC}
+        else:
+            return out
         return {**out, "payload": payload}
 
     def public_case_cap(self) -> int:
@@ -794,7 +813,7 @@ class Gateway:
     NOTE_MAX = 160  # touch notes ("approved: <summary>", the CEO's unblock note)
 
     def _gate(self, action_type: str, action_key: str, summary: str, case_id: str | None,
-              *, public: bool = False) -> None:
+              *, public: bool = False, detail: str | None = None) -> None:
         """Trust earned: ASK needs an approval, AUTO runs (until a cap), PAUSED needs a human.
 
         `public`: the action serves a case opened from the anonymous /talk page. Those sends
@@ -845,7 +864,8 @@ class Gateway:
                              payload={"approval_id": approval_id, "action_type": action_type,
                                       "summary": summary},
                              idempotency_key=f"approval:{action_key}:{approval_id}",
-                             private={"action_key": action_key})])
+                             private={"action_key": action_key,
+                                      **({"detail": detail} if detail else {})})])
         # anonymous traffic is throttled; so is an agent going back and forth between two
         # requests (slot A, B, A...): the console lists the newest, one mail was enough
         if not (public and self._recent_public_notice()) and not replaced:
@@ -2662,7 +2682,7 @@ class Gateway:
                                       f"X allows {X_MAX_CHARS}")
         self._gate("social_post", key,
                    _cap(f"{self._first('social_post')}post on {channel}: {clip(text, 80)}"),
-                   None)
+                   None, detail=f'the {channel} post, word for word: "{text}"')
         try:
             posted = self._with_retry("social post", lambda: self.ports.social.post(
                 Post(channel=channel, text=text, image_url=image_url), key))
@@ -2863,9 +2883,13 @@ class Gateway:
     # _released, _touch_channel, flagged_injection, UNBLOCK_TARGETS. Rename with care.
     def _ceo_tool(self, args: dict) -> dict:
         """POST /api/ceo/tool: a read, a stop carried out at once, or a start proposed."""
-        return self._ceo_run(_str(args, "name", max_len=40), args.get("args"), "realtime")
+        # task 18b: the console's STOP button is a click; the model's tool call is voice
+        channel = _one_of(args, "channel", ("voice", "click"), default="voice")
+        return self._ceo_run(_str(args, "name", max_len=40), args.get("args"), "realtime",
+                             channel=channel)
 
-    def _ceo_run(self, name: str, raw_args: Any, source: str) -> dict:
+    def _ceo_run(self, name: str, raw_args: Any, source: str,
+                 channel: str | None = None) -> dict:
         from app import ceo_tools
 
         tool = ceo_tools.REGISTRY.get(name)
@@ -2877,7 +2901,7 @@ class Gateway:
             if tool.kind == "read":
                 return {"kind": "read", "data": tool.read(self, tool_args)}
             if tool.kind == "stop":
-                with self._channel("voice" if source == "realtime" else "typed"):
+                with self._channel(channel or ("voice" if source == "realtime" else "typed")):
                     return {"kind": "done", "summary": tool.carry(self, tool_args)}
             pinned, readback = tool.pin(self, tool_args)
         except ceo_tools.ToolRefused as err:
@@ -2894,7 +2918,8 @@ class Gateway:
     def _proposal_cancel(proposal: dict, reason: str, via: str, heard: str) -> NewEvent:
         return NewEvent(type="ceo.cancelled", actor="ceo",
                         payload={"proposal_id": proposal["proposal_id"], "via": via,
-                                 "heard": heard, "reason": reason})
+                                 "heard_len": len(heard), "reason": reason},
+                        private={"heard": heard} if heard else None)
 
     def _propose(self, tool: str, pinned: dict, readback: str, source: str) -> dict:
         """A start tool's single-use proposal: pinned to its exact target, 60 s. A newer
@@ -2911,9 +2936,19 @@ class Gateway:
         approval = self.state.approvals.get(pinned.get("approval_id") or "")
         if approval is not None:
             case_id = approval.case_id
+        public_args, public_readback, private = pinned, readback, None
+        if tool == "order":  # v1.8.5: the CEO's words stay private; the theater sees a length
+            public_args = {"text_len": len(pinned["text"])}
+            public_readback = self.ORDER_READBACK_PUBLIC
+            private = {"args": pinned, "readback": readback}
+        elif approval is not None and approval.detail and approval.detail in readback:
+            # a post read back word for word: unapproved agent text stays off the public log
+            public_readback = readback.replace(approval.detail, approval.summary)
+            private = {"readback": readback}
         events.append(NewEvent(type="ceo.proposed", actor="ceo", case_id=case_id, payload={
-            "proposal_id": proposal_id, "tool": tool, "args": pinned, "readback": readback,
-            "expires_at": expires_at, "source": source}))
+            "proposal_id": proposal_id, "tool": tool, "args": public_args,
+            "readback": public_readback, "expires_at": expires_at, "source": source},
+            private=private))
         self._emit(events)
         return {"kind": "proposal", "proposal_id": proposal_id, "readback": readback,
                 "expires_at": expires_at}
@@ -2968,7 +3003,9 @@ class Gateway:
             raise Refused("superseded", why)
         # used before it runs: a failure after this never lets the same words act twice
         self._emit([NewEvent(type="ceo.confirmed", actor="ceo",
-                             payload={"proposal_id": proposal_id, "via": via, "heard": heard})])
+                             payload={"proposal_id": proposal_id, "via": via,
+                                      "heard_len": len(heard)},
+                             private={"heard": heard} if heard else None)])
         try:
             with self._channel(via):
                 summary = tool.carry(self, pinned)
@@ -3031,6 +3068,11 @@ class Gateway:
             to = self.state.trust_before_pause.get(action_type, "ASK") \
                 if current == "PAUSED" else current
         if current == to:
+            if to == "PAUSED":  # a repeat stop still stops what waits for a confirm (18b)
+                stopped = [self._proposal_cancel(p, "superseded", "click", "")
+                           for p in self._open_proposals()]
+                if stopped:
+                    self._emit(stopped)
             return {"action_type": action_type, "trust": to, "duplicate": True}
         waiting = self._pending_of(action_type) if to == "AUTO" else []
         released = self._released(action_type, current)

@@ -3,7 +3,7 @@
 ## Outcome
 
 The U-Tax gateway is done for the event. It is a FastAPI backend built to `contracts/api.md`
-v1.7.4. An append-only event store is the only source of truth, and every action goes through
+v1.8.6. An append-only event store is the only source of truth, and every action goes through
 one place, `perform()`. That function applies the rules for the QA gate, trust
 (ASK / AUTO / PAUSED), caps, masking, idempotency and fail-closed writes. Slow sponsor calls
 (the cloud phone, scrapes, data purchases, the fee page, the CRM mirror) run outside the
@@ -19,7 +19,11 @@ per-seat MCP, then take each case through these steps:
 4. memo (with its `Reference: UTX-…` line), sent after CEO approval
 5. phone check, then book the review call (an iCalendar invitation)
 
-Each step leaves an event that the theater streams over SSE. There are 807 tests (7 skipped:
+The CEO runs the firm from the console by voice (task 18, contract §5b): reads answer at once,
+a pause runs at once, and every other action is a single-use 60-second proposal, read back in
+full and carried out only on a spoken (or clicked) confirm.
+
+Each step leaves an event that the theater streams over SSE. There are 1096 tests (7 skipped:
 Postgres and the live sponsor smoke tests, which need keys). Every READY passed a `/review`
 adversarial pass, and fixes were made before merge. A full local end-to-end run on main (all
 5 fixtures, the stand-in crew, the CEO approving) ended with no failed events and no errors.
@@ -32,7 +36,10 @@ Unverified:
 - **Public URL:** the cloudflared tunnel URL shape. My session's permission check blocked
   `npx cloudflared`, and the controller said it isn't needed tonight.
 - **Naïve's MCP client:** never connected to `/mcp/<seat>`, because Naïve access arrives at
-  the event.
+  the event. On 2026-11-07 the controller checked all 7 seats from outside through the tunnel
+  (each seat's own tools, and a cross-seat token answering 401).
+- **The CEO voice console:** a real OpenAI Realtime session carrying the CEO tools, and the
+  frontend console against `/api/ceo/*`. Both are tested only against fakes and HTTP probes.
 - **Driver patterns:** the stand-in Intake patterns are tuned on hand-written sentences, not
   real founder mail. When a pattern is unsure it re-asks the client; it never guesses a fact.
 - **Prices:** Mobilerun's per-step price ($0.01) is a placeholder.
@@ -54,6 +61,16 @@ Unverified:
 | 1d9bcd5 | Task 9: contract v1.7 / v1.7.1: slow ports off the lock (async phone check, pre-lock law search, the fee warmed at boot), the phone screenshot private, `memo_ref`, law query cleaning and cap, per-run spend; flagged cases hidden from the theater; Mobilerun and Apify wired |
 | ee9b2f1 | E2e run fixes: a slot waiting on the CEO is never offered to another case; HTML-only `.eml` injects |
 | e614001 | Task 10: HubSpot and Monid wired; `buy_tool` for seat mkt (contract v1.7.3) with fail-closed money handling and a boot replay; the CRM mirror off the request path, in stage order, honouring Retry-After; the first CEO digest waits a period after boot |
+| 7d451b4 | Task 11: the voice session mints input transcription and returns `realtime_url` |
+| 14cfd60 | Task 12: separate voice limiters; spend read from `cost.booked` only |
+| 68236d7 | Task 13: the public `/talk` daily case cap, free retries, voice spend holds |
+| e49bcd1 | Task 14: superseded approvals, approvals allowed while paused carried out on resume, trust ASK / RESUME, the token boot guard |
+| f63c64e | Task 15: word-boundary approval summaries, the 409 `superseded` body |
+| 2bf3a38 | `buy_tool` hardening: depth bound (fixed Linux CI), pre-send refusals, in-flight key guard |
+| 4a3bb6d | Task 17: `buy_tool` hardening, timeboxed (open items in 17b; Monid held local) |
+| 566d13a | Task 18: the CEO voice console, gateway side (D28): one tool registry for the Realtime tools and the typed grammar, single-use pinned proposals, the strict confirm grammar, `/api/ceo/tool\|confirm\|command`, the admin CEO voice mint |
+| d3c2c14 | Task 18b: the STOP button's click channel; a repeat pause cancels open proposals; words the grammar can't read never confirm |
+| 8e4aabd | Task 18c: a post is read back word for word; the CEO's words and order text are private on the log |
 
 ## What the owner must do (Saturday)
 
@@ -73,6 +90,22 @@ Unverified:
    - `NAIVE_API_KEY`
    - `CEO_EMAIL`, `MAIL_INBOX_CLIENTS`, `MAIL_INBOX_HIRING`
    - Leave `UTAX_DRIVER` empty when the real crew runs.
+   - The CEO voice console uses `naive/prompts/ceo-voice.md` (override with
+     `UTAX_CEO_VOICE_PROMPT`); an empty prompt answers 503. It needs `ADAPTER_VOICE=openai`
+     and the admin token, and allows 10 sessions an hour.
+
+   **Always set `PUBLIC_MODE=event` at the venue**, even on the jsonl store behind a tunnel.
+   The boot guard can't see a tunnel: it refuses empty `ADMIN_TOKEN` / `THEATER_TOKEN` only
+   when `STORE=postgres`, `PUBLIC_MODE=event` or an https `PUBLIC_TALK_URL` says the gateway
+   is public. `PUBLIC_MODE=event` also raises the limits for a crowd sharing one venue IP
+   (send 90/min, mint 60/min, 200 `/talk` cases a day).
+
+   **Set `PUBLIC_TALK_URL` once and never change it** during the event. A social post's
+   approval is keyed on its text without the link, so a link changed between the CEO's
+   approval and the post would publish a link the CEO never heard read back. The tunnel host
+   (`https://<public-host>`, e.g. today's `https://identify-racks-peter-brown.trycloudflare.com`)
+   changes on every tunnel restart, so point `PUBLIC_TALK_URL` at the theater's stable
+   `/talk` page, not at the tunnel.
 4. **Turn on the sponsors one at a time** with the swap table below: paste the key and set
    the switch, restart, then run one fixture end to end (`/api/dev/inject-email`) and watch
    the theater. A switch whose key or setup is missing refuses to boot, with the missing
@@ -157,6 +190,60 @@ Accepted for the hackathon by the controller, to fix afterwards:
   against the known client names, as `post_social` does.
 - **A crash-looping server never sends a CEO digest** (each restart waits a full
   `CEO_DIGEST_HOURS`). Decided for the demo; revisit for production.
+
+Also accepted (tasks 13 to 18c):
+
+- **Task 13 (voice spend, `/talk` cap):**
+  - The at-capacity CEO mail is sent under the lock (at most once per 10 minutes).
+  - `_SPOKEN_EMAIL` is super-linear on long "a dot a dot" input.
+  - Day buckets come from event timestamps, so a clock step moves them.
+  - A bad `PUBLIC_CASES_PER_DAY` crashes the boot.
+  - Voice prices are unverified.
+- **Task 14 (supersede, resume):**
+  - There is no `approval.superseded` event; the console refetches on a 409.
+  - "kind" is the action type.
+  - A supersede by the AUTO flip answers 200 duplicate.
+  - ASK is not sticky.
+  - Old logs replay under the new supersede rules.
+  - `_carry_out` sends mail under the lock.
+  - A crash between `trust.changed` and the carry-out loses the agent wakes (posts).
+  - The boot guard can't see a jsonl store behind a tunnel (hence `PUBLIC_MODE=event`, owner
+    step 3).
+  - `_supersede` is O(N).
+- **Task 15:** old events keep their mid-word summaries on replay.
+- **Task 17b (`buy_tool` money), open; `ADAPTER_TOOLBUY` stays `local` until it merges:**
+  - A replayed resolve can settle a newer, unchecked episode.
+  - A charged resolution whose commit ack is lost is not re-projected into the spend.
+  - A stale adapter hold after a lost not-charged ack gives a phantom "unsure".
+  - A charge under $0.0001 is refused.
+  - The held-by-process refusal fires even when the purchase is already logged.
+  - Every `_KeyedJson` write is fsynced.
+  - An intents file that isn't a JSON object crashes the boot.
+  - A dead prefetched `episode` field.
+- **Task 18 to 18c (the CEO voice console):**
+  - A typed "yes" on `/api/ceo/command` confirms the newest proposal firm-wide, so two
+    consoles can confirm each other's.
+  - `heard` and `via` are asserted by the client.
+  - The readback ends "Say confirm.": if echo cancellation leaks the model's own last word,
+    the server can't tell it from the CEO. The client should ignore transcripts while the
+    model speaks.
+  - A readback that holds a confirm word (an order, a post) is confirmed by click only.
+  - An approve, or a change to AUTO, runs the other waiting approvals that the readback
+    counts but never reads.
+  - Agent-written text reaches the voice model, which can call pause unconfirmed (fail-safe).
+  - The cap auto-pause doesn't cancel open proposals; the trust re-check still catches the
+    approve and set_trust cases.
+  - A voice unblock of a flagged case is allowed.
+  - A bare "stop" with nothing open does nothing ("stop everything" pauses).
+  - `call_id` is ignored, and "pause everything" is not atomic.
+  - Proposals are never pruned, and there is no "resume everything".
+  - The CEO and customer voice mints share one in-flight counter.
+  - A confirmed order is public word for word through `voice.command` (the show); only
+    cancelled or expired orders stay private.
+  - The post approval key leaves out the link and the image (keep `PUBLIC_TALK_URL` fixed),
+    and the image is not read back.
+  - System cancels (supersede, pause, expiry at boot) are logged `via: "click"`.
+  - "Pause everything" is coded twice.
 
 ## Lesson
 

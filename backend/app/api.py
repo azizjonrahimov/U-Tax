@@ -44,7 +44,7 @@ _REFUSED_STATUS = {
     "qa_gate": 409, "at_capacity": 429, "too_long": 400,
     # v1.8 §5b: the CEO console
     "unknown_tool": 400, "bad_args": 400, "not_a_confirm": 400, "nothing_pending": 409,
-    "used": 409, "expired": 409, "flagged": 409,
+    "used": 409, "expired": 409, "flagged": 409, "console_only": 409,
 }
 _ERROR_STATUS = {"store_unavailable": 503, "internal_error": 500}
 # refusal data the contract puts in the HTTP error object (the rest stays agent-only)
@@ -380,7 +380,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     @router.post("/api/ceo/tool")
     def ceo_tool(body: dict = Body(...), authorization: str | None = Header(None)):
         require_admin(authorization)
-        return _console("ceo_tool", _pick(body, "name", "args", "call_id"))
+        return _console("ceo_tool", _pick(body, "name", "args", "call_id", "channel"))
 
     @router.post("/api/ceo/confirm")
     def ceo_confirm(body: dict = Body(...), authorization: str | None = Header(None)):

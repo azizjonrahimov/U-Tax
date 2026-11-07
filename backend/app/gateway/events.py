@@ -67,8 +67,8 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "case.flagged": ("kind",),
     # v1.8 §5b: the CEO voice console's proposals
     "ceo.proposed": ("proposal_id", "tool", "args", "readback", "expires_at", "source"),
-    "ceo.confirmed": ("proposal_id", "via", "heard"),
-    "ceo.cancelled": ("proposal_id", "via", "heard", "reason"),
+    "ceo.confirmed": ("proposal_id", "via", "heard_len"),  # v1.8.5: heard is private
+    "ceo.cancelled": ("proposal_id", "via", "heard_len", "reason"),
 }
 
 FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",
