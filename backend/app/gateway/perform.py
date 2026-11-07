@@ -341,6 +341,8 @@ class Gateway:
         self._outbox_inflight: set[str] = set()
         self._digest_backoff_until = 0.0
         self._public_cap_retry_at = 0.0  # task 13: next try of a failed at-capacity notice
+        self._voice_pending: dict[str, int] = {}  # task 13: paid voice calls in flight
+        self._voice_pending_usd = Decimal(0)
         # failed wake deliveries: (message, waker, attempt, due monotonic time)
         self._wake_retries: list[tuple[str, Callable[[str], None], int, float]] = []
 
@@ -472,7 +474,7 @@ class Gateway:
           budget out overnight."""
         cap = self.settings.spend_cap_usd
         with self._lock:
-            if cap is not None and self.state.spent_usd() >= cap:
+            if cap is not None and self.state.spent_usd() + self._voice_pending_usd >= cap:
                 return "budget"
             if kind != "realtime":
                 return None
@@ -480,19 +482,48 @@ class Gateway:
             cases = self.public_case_cap()
             if self.state.public_cases_by_day.get(day, 0) >= cases:
                 return "at_capacity"
-            if self.state.voice_mints_by_day.get(day, 0) >= 2 * cases:
+            if (self.state.voice_mints_by_day.get(day, 0)
+                    + self._voice_pending.get("realtime", 0)) >= 2 * cases:
                 return "mints"
         return None
 
-    def book_voice(self, kind: str, model: str) -> None:
-        """Task 13: one estimated cost.booked per Realtime mint or TTS brief (OpenAI reports
-        no cost on either call). Booked after the paid call; never fails the request."""
+    def reserve_voice(self, kind: str, *, paid: bool) -> str | None:
+        """Task 13: check `voice_refusal` and, for a paid provider, hold the estimate as in
+        flight (counted against the budget and the mint cap) in one step under the lock,
+        BEFORE the paid call, so concurrent calls can't all pass the same check. A store
+        that can't be written refuses the call ("unbooked"): the spend couldn't be recorded.
+        Every reservation that returns None must be settled with `settle_voice`."""
         from app.gateway.pricing import VOICE_USD
 
-        result = self.perform("book_spend", {"provider": "openai", "model": f"{kind}:{model}"[:120],
-                                             "cost_usd": str(VOICE_USD[kind]), "estimated": True})
+        with self._lock:
+            refusal = self.voice_refusal(kind)
+            if refusal or not paid:
+                return refusal
+            try:
+                self.store.ensure_writable()
+            except EventWriteError as err:
+                log.warning("voice %s refused, spend can't be booked: %s", kind, err)
+                return "unbooked"
+            self._voice_pending[kind] = self._voice_pending.get(kind, 0) + 1
+            self._voice_pending_usd += VOICE_USD[kind]
+        return None
+
+    def settle_voice(self, kind: str, model: str, *, ok: bool) -> None:
+        """Release a `reserve_voice` hold; book the estimated cost.booked only when the
+        call produced a session or audio (OpenAI reports no cost on either), so a provider
+        outage books no phantom spend and never uses up the day's mints."""
+        from app.gateway.pricing import VOICE_USD
+
+        with self._lock:
+            self._voice_pending[kind] = max(0, self._voice_pending.get(kind, 0) - 1)
+            self._voice_pending_usd = max(Decimal(0), self._voice_pending_usd - VOICE_USD[kind])
+            if not ok:
+                return
+            result = self.perform("book_spend", {
+                "provider": "openai", "model": f"{kind}:{model}"[:120],
+                "cost_usd": str(VOICE_USD[kind]), "estimated": True})
         if result.status != "done":
-            log.warning("voice %s spend not booked: %s", kind, result.error)
+            log.error("voice %s spend not booked after the call: %s", kind, result.error)
 
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The
@@ -1058,14 +1089,17 @@ class Gateway:
         raise Refused("at_capacity", f"We're at capacity for today. Please email {inbox} and "
                                      "we'll pick your case up from there.")
 
-    MAX_TURNS = 120  # a long /talk intake is ~60 turns; past this it's not a conversation
+    # task 13: /talk turns. The page keeps ~200 agent turns plus the customer's, so a hard
+    # ceiling only stops abuse; agents get the first 60 non-empty turns, 1000 chars each
+    MAX_TURNS, CONTEXT_TURNS, CONTEXT_CHARS = 1000, 60, 1000
 
     def _voice(self, args: dict) -> dict:
+        # task 13: every refusal (and a retry) is decided before any masking, which is the
+        # costly part (the email scan is quadratic), so a request that opens no case stays
+        # cheap under the lock
         speaker = _one_of(args, "speaker", ("customer", "ceo"))
         reply = request_id = None
         if speaker == "customer":
-            # task 13: the cheap refusals and the retry come first, before any per-turn work,
-            # so what the Send limiter doesn't count (bad_input, a retry) stays cheap
             reply = _str(args, "reply_email", max_len=320)
             if not _EMAIL_RE.match(reply or ""):
                 raise Refused("bad_input", "a customer case needs reply_email")
@@ -1074,13 +1108,11 @@ class Gateway:
                 seen = self._done_from(f"voice:{request_id}")
                 if seen is not None:
                     return {"case_id": seen.case_id, "duplicate": True, "priority": True}
+        channel = _one_of(args, "channel", ("voice", "typed"), default="typed")
         turns = args.get("turns")
-        context: list[dict] = []  # /talk turns kept for agents as labelled context
         if turns is not None:
-            if isinstance(turns, list) and (len(turns) > self.MAX_TURNS or any(
-                    isinstance(t, dict) and isinstance(t.get("text"), str)
-                    and len(t["text"]) > 4000 for t in turns)):
-                raise Refused("too_long", f"at most {self.MAX_TURNS} turns of 4000 characters")
+            if isinstance(turns, list) and len(turns) > self.MAX_TURNS:
+                raise Refused("too_long", f"at most {self.MAX_TURNS} turns")
             # v1.5: only what the customer said counts; the AI's read-back never becomes a
             # quote (it would echo numbers back as if the client had written them)
             if not isinstance(turns, list) or not all(
@@ -1088,15 +1120,27 @@ class Gateway:
                 raise Refused("bad_input", "turns must be [{speaker, text}]")
             customer = [t["text"].strip() for t in turns
                         if t.get("speaker") == "customer" and t["text"].strip()]
-            context = [{"speaker": "customer" if t.get("speaker") == "customer" else "agent",
-                        "text": mask_spoken_emails(agent_text(redact_ids(t["text"])[0]))[:1000]}
-                       for t in turns if t["text"].strip()][:60]
             joined = "\n".join(customer)
             if len(joined) > 4000:
                 raise Refused("too_long", "the customer's transcript is over 4000 characters")
             args = {**args, "text": joined}
         text = _str(args, "text", max_len=4000)
-        channel = _one_of(args, "channel", ("voice", "typed"), default="typed")
+        if speaker == "customer":
+            self._public_cap()
+        context: list[dict] = []  # /talk turns kept for agents as labelled context
+        for t in (turns or []) if speaker == "customer" else []:
+            if len(context) >= self.CONTEXT_TURNS:
+                break
+            raw = t["text"].strip()
+            if raw:  # cut before masking (cheap); when cut, the masked tail is dropped too,
+                # since a contact detail split at the cut edge may not have been masked
+                margin = 200
+                masked = mask_spoken_emails(agent_text(redact_ids(
+                    raw[:self.CONTEXT_CHARS + margin])[0]))
+                if len(raw) > self.CONTEXT_CHARS + margin:
+                    masked = masked[:max(0, len(masked) - margin)]
+                context.append({"speaker": "customer" if t.get("speaker") == "customer"
+                                else "agent", "text": masked[:self.CONTEXT_CHARS]})
         text, _ = redact_ids(text)
         text = mask_spoken_emails(text)
         if speaker == "ceo":
@@ -1110,7 +1154,6 @@ class Gateway:
             ])
             self._wake(f"CEO: {text}")
             return {"forwarded": True}
-        self._public_cap()
         # Public, unauthenticated page: always a fresh case. Never join (or reveal) a case
         # by the email typed in, or anyone could read or redirect someone else's case.
         number = self._new_case_number()

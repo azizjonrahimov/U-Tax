@@ -227,7 +227,7 @@ class State:
             provider = e.provider or "unknown"
             self.spent_by_provider[provider] = (self.spent_by_provider.get(provider, Decimal(0))
                                                 + Decimal(e.cost_usd))
-            if str(e.payload.get("model", "")).startswith("realtime:"):  # Gateway.book_voice
+            if str(e.payload.get("model", "")).startswith("realtime:"):  # Gateway.settle_voice
                 day = e.ts[:10]
                 self.voice_mints_by_day[day] = self.voice_mints_by_day.get(day, 0) + 1
         for action_type, types in CAP_EVENTS.items():

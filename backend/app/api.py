@@ -28,16 +28,20 @@ from app.gateway.ports import NotConfigured, PortError
 log = logging.getLogger("utax.api")
 
 HEARTBEAT_SECONDS = 15.0
+VOICE_MAX_BYTES = 1_000_000  # task 13: POST /api/voice body cap (200 turns of CJK fit)
 # (per-IP, global) per minute, keyed by PUBLIC_MODE == "event"
 MINT_LIMITS = {False: (20, 120), True: (60, 360)}  # POST /api/voice/session (mints)
 SEND_LIMITS = {False: (30, 180), True: (90, 540)}  # POST /api/voice (customer Send)
+# task 13: Sends the gateway turns away cheaply (bad input, a retried request_id) give back
+# their Send hit, up to this many a minute per IP; past it they count like any Send
+FREE_LIMITS = {False: (30, None), True: (90, None)}  # = Send: one IP's global share x2
 SSE_QUEUE_MAX = 2000
 
 # refused codes -> HTTP status (everything else refused is 409)
 _REFUSED_STATUS = {
     "not_found": 404, "bad_input": 400, "unknown_action": 404, "not_local": 403,
     "tool_not_allowed": 403, "wrong_status": 409, "paused": 409, "denied": 409,
-    "qa_gate": 409, "at_capacity": 429,
+    "qa_gate": 409, "at_capacity": 429, "too_long": 400,
 }
 _ERROR_STATUS = {"store_unavailable": 503, "internal_error": 500}
 
@@ -154,6 +158,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     # Values here are the normal mode; _talk_limit raises both in PUBLIC_MODE=event.
     mint_limiter = RateLimiter(limit=MINT_LIMITS[False][0], global_limit=MINT_LIMITS[False][1])
     send_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
+    free_limiter = RateLimiter(limit=FREE_LIMITS[False][0])
     audio_limiter = RateLimiter(limit=30, global_limit=120)
     audio_cache: dict[int, bytes] = {}  # brief text never changes: one TTS call per brief
 
@@ -181,7 +186,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if settings.admin_token and not _same(_bearer(authorization), settings.admin_token):
             raise APIError(401, "unauthorized", "admin token required")
 
-    def _talk_limit(limiter: RateLimiter, limits: dict[bool, tuple[int, int]]) -> None:
+    def _talk_limit(limiter: RateLimiter, limits: dict[bool, tuple[int, int | None]]) -> None:
         # PUBLIC_MODE=event: the finale crowd shares one venue IP, so the per-IP cap rises
         # (the global cap keeps its 6x headroom over it)
         limiter.limit, limiter.global_limit = limits[gw().settings.public_mode == "event"]
@@ -232,22 +237,52 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         return act("approve", _pick(body, "approval_id", "decision", "note"))
 
     @router.post("/api/voice")
-    def voice(request: Request, body: dict = Body(...), authorization: str | None = Header(None)):
+    async def voice(request: Request, authorization: str | None = Header(None)):
+        # task 13: read at most VOICE_MAX_BYTES before parsing, so a huge body can't stall
+        # the event loop ahead of the Send limiter (the page's 200 x 1000-char turns fit)
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > VOICE_MAX_BYTES:
+            raise APIError(413, "too_large", "request body too large")
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > VOICE_MAX_BYTES:
+                raise APIError(413, "too_large", "request body too large")
+        try:
+            body = json.loads(raw)
+        except ValueError as exc:
+            raise APIError(400, "bad_input", "the body must be JSON") from exc
+        if not isinstance(body, dict):
+            raise APIError(400, "bad_input", "the body must be a JSON object")
+        return await asyncio.to_thread(_voice_send, request, body, authorization)
+
+    def _voice_send(request: Request, body: dict, authorization: str | None) -> dict:
         args = _pick(body, "text", "channel", "speaker", "reply_email", "turns", "request_id")
         if body.get("speaker") == "ceo":
             require_admin(authorization)  # a typed order is the CEO's
             return act("voice", args)
         _talk_limit(send_limiter, SEND_LIMITS)
+        _talk_limit(free_limiter, FREE_LIMITS)
         ip = _client_ip(request)
         stamp = send_limiter.check(ip)  # the public /talk page's Send
+
+        def give_back() -> None:
+            # task 13: the gateway refuses bad input (and answers a retry) before any costly
+            # work, so these don't use the Send budget, within their own per-IP allowance
+            try:
+                free_limiter.check(ip)
+            except APIError:
+                return  # past the allowance: it stays counted as a Send
+            send_limiter.refund(ip, stamp)
+
         try:
             out = act("voice", args)
         except APIError as err:
-            if err.code == "bad_input":  # task 13: a typo costs nothing, so it isn't counted
-                send_limiter.refund(ip, stamp)
+            if err.code == "bad_input":
+                give_back()
             raise
-        if out.get("duplicate"):  # task 13: a retried request_id is the same Send
-            send_limiter.refund(ip, stamp)
+        if out.get("duplicate"):  # a retried request_id is the same Send
+            give_back()
         return out
 
     @router.post("/api/trust")
@@ -280,17 +315,24 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if not instructions:  # never mint a general assistant on the firm's key
             log.error("voice prompt %s missing or empty; refusing to mint", prompt_path)
             raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat")
-        if gw().voice_refusal("realtime"):  # task 13: budget, the case cap, the mint cap
+        voice = gw().ports.voice
+        paid = voice.provider == "openai"
+        # task 13: budget, the case cap and the mint cap checked, and the estimate held,
+        # before the paid call; booked only if a session comes back
+        if gw().reserve_voice("realtime", paid=paid):
             raise APIError(503, "voice_unavailable", "voice is resting; use typed chat")
+        session = None
         try:
-            session = gw().ports.voice.create_session(instructions)
+            session = voice.create_session(instructions)
         except NotConfigured as exc:
             raise APIError(503, "voice_unavailable", "no voice key; use typed chat") from exc
         except PortError as exc:  # provider detail stays in the server log
             log.warning("voice session failed: %s", exc)
             raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat") from exc
-        if gw().ports.voice.provider == "openai":
-            gw().book_voice("realtime", session.model)
+        finally:
+            if paid:
+                gw().settle_voice("realtime", session.model if session else "",
+                                  ok=session is not None)
         return {"client_secret": session.client_secret, "model": session.model,
                 "expires_at": session.expires_at, "realtime_url": session.realtime_url}
 
@@ -305,17 +347,22 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
                       if e.id == event_id), None)
         if event is None or event.type != "brief.generated":
             raise APIError(404, "not_found", f"no brief.generated event {event_id}")
-        if gw().voice_refusal("tts"):  # task 13: SPEND_CAP_USD covers TTS too
+        voice = gw().ports.voice
+        paid = voice.provider == "openai"
+        if gw().reserve_voice("tts", paid=paid):  # task 13: SPEND_CAP_USD covers TTS too
             raise APIError(503, "voice_unavailable", "audio is resting; use speechSynthesis")
+        audio = None
         try:
-            audio = gw().ports.voice.speak(event.payload["text"])
+            audio = voice.speak(event.payload["text"])
         except NotConfigured as exc:
             raise APIError(503, "voice_unavailable", "no voice key; use speechSynthesis") from exc
         except PortError as exc:
             log.warning("brief audio failed: %s", exc)
             raise APIError(503, "voice_unavailable", "audio is unavailable; use speechSynthesis") from exc
-        if gw().ports.voice.provider == "openai":
-            gw().book_voice("tts", getattr(gw().ports.voice, "tts_model", "tts"))
+        finally:
+            if paid:
+                gw().settle_voice("tts", getattr(voice, "tts_model", "tts"),
+                                  ok=audio is not None)
         if len(audio_cache) > 200:
             audio_cache.pop(next(iter(audio_cache)))
         audio_cache[event_id] = audio

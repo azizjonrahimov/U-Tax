@@ -22,6 +22,7 @@ def send(client, n=0, **extra):
 
 class FakeVoice:
     provider = "openai"
+    realtime_model = "gpt-realtime"
     tts_model = "gpt-4o-mini-tts"
 
     def __init__(self):
@@ -152,22 +153,45 @@ def test_uncounted_refusals_do_no_per_turn_work(make_harness, monkeypatch):
         raise AssertionError("turns were processed")
 
     monkeypatch.setattr(perform_mod, "redact_ids", boom)
-    turns = [{"speaker": "agent", "text": "x" * 3000}] * 100
-    bad = h.gw.perform("voice", {"speaker": "customer", "reply_email": "nope", "turns": turns})
-    retry = h.gw.perform("voice", {"speaker": "customer", "reply_email": "a@b.co",
-                                   "request_id": "req-1", "turns": turns})
-    assert bad.error["code"] == "bad_input" and retry.data["duplicate"] is True
+    monkeypatch.setattr(perform_mod, "agent_text", boom)
+    turns = [{"speaker": "agent", "text": "x" * 4000}] * 1000
+    ask = {"speaker": "customer", "reply_email": "a@b.co", "turns": turns}
+    bad_email = h.gw.perform("voice", {**ask, "reply_email": "nope"})
+    no_customer_text = h.gw.perform("voice", ask)  # agent turns only: "text is required"
+    bad_channel = h.gw.perform("voice", {**ask, "channel": "fax"})
+    retry = h.gw.perform("voice", {**ask, "request_id": "req-1"})
+    assert {r.error["code"] for r in (bad_email, no_customer_text, bad_channel)} == {"bad_input"}
+    assert retry.data["duplicate"] is True
 
 
-def test_oversized_turns_are_refused_and_counted(make_harness):
+def test_a_long_intake_is_kept_short_for_agents_not_refused(make_harness):
+    # review: the page keeps up to 200 agent turns (talk.ts MAX_TURNS); agents get the
+    # first 60 non-empty turns, each cut to 1000 characters before masking
     h = make_harness()
-    turns = [{"speaker": "agent", "text": "ok"}] * 121
+    turns = [{"speaker": "agent", "text": "y" * 5000}] * 200 + [
+        {"speaker": "customer", "text": "Delaware C-corp, 10M authorized"}]
+    out = h.gw.perform("voice", {"speaker": "customer", "reply_email": "a@b.co",
+                                 "channel": "voice", "turns": turns})
+    assert out.status == "done"
+    stored = h.events("voice.command")[-1].private["turns"]
+    assert len(stored) == 60 and all(len(t["text"]) <= 1000 for t in stored)
+
+
+def test_past_1000_turns_is_too_long_and_counted(make_harness):
+    h = make_harness()
+    turns = [{"speaker": "agent", "text": "ok"}] * 1001
     with TestClient(create_app(h.gw, start_background=False)) as client:
         codes = [send(client, turns=turns).status_code for _ in range(35)]
-    assert codes.count(429) == 5 and set(codes) == {409, 429}  # too_long is not refunded
-    long_turn = [{"speaker": "agent", "text": "x" * 4001}]
-    assert h.gw.perform("voice", {"speaker": "customer", "reply_email": "a@b.co",
-                                  "turns": long_turn}).error["code"] == "too_long"
+    assert codes.count(429) == 5 and set(codes) == {400, 429}  # too_long is not refunded
+
+
+def test_free_refusals_have_their_own_allowance(make_harness):
+    # review: refunds are capped at 30 a minute per IP (= the Send limit), so one IP takes
+    # at most 60 of the 180 global Send slots a minute
+    h = make_harness()
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        codes = [send(client, reply_email="nope").status_code for _ in range(65)]
+    assert codes[:60] == [400] * 60 and 429 in codes[60:]  # 30 free, then 30 counted
 
 
 def test_refunds_give_back_the_per_ip_hit_but_not_the_global_one():
@@ -236,7 +260,7 @@ def test_spend_exactly_at_the_cap_stops_paid_voice(make_harness):
         assert client.post("/api/voice/session").status_code == 503
 
 
-def test_only_openai_voice_is_booked_and_a_failed_booking_never_fails_the_mint(make_harness):
+def test_only_openai_voice_is_booked_and_an_unbookable_mint_is_refused(make_harness):
     from app.gateway.ports import Rejected
 
     local = FakeVoice()
@@ -247,12 +271,73 @@ def test_only_openai_voice_is_booked_and_a_failed_booking_never_fails_the_mint(m
         assert client.post("/api/voice/session").status_code == 200
     assert h.events("cost.booked") == []
 
+    # review: a store that can't record the spend refuses the paid call up front
+    from app.gateway.ports.store import EventWriteError
+
     h2 = make_harness()
-    h2.ports.voice = FakeVoice()
+    paid = h2.ports.voice = FakeVoice()
 
-    def refuse(args):
-        raise Rejected("store says no")
+    def down():
+        raise EventWriteError("disk full")
 
-    h2.gw._handlers["book_spend"] = refuse
+    h2.gw.store.ensure_writable = down
     with TestClient(create_app(h2.gw, start_background=False)) as client:
+        assert client.post("/api/voice/session").status_code == 503
+    assert paid.mints == 0
+
+
+def test_a_failed_paid_call_books_nothing_and_frees_its_hold(make_harness):
+    # review pass 3: a provider outage must not book phantom spend or use up the mints
+    from app.gateway.ports import Unavailable
+
+    class Down(FakeVoice):
+        def create_session(self, instructions):
+            raise Unavailable("openai 503")
+
+        def speak(self, text):
+            raise Unavailable("openai 503")
+
+    h = make_harness(public_cases_per_day=1, spend_cap_usd=Decimal("0.30"))
+    h.ports.voice = Down()
+    brief = h.gw._emit([NewEvent(type="brief.generated", actor="cos", provider="local",
+                                 payload={"text": "All quiet.", "counts": {}})])[0]
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        for _ in range(5):
+            assert client.post("/api/voice/session").status_code == 503
+            assert client.get("/api/brief/audio",
+                              params={"event_id": brief.id}).status_code == 503
+        assert h.events("cost.booked") == []
+        assert h.gw._voice_pending == {"realtime": 0, "tts": 0}
+        h.ports.voice = FakeVoice()  # the provider is back: mints work again today
         assert client.post("/api/voice/session").status_code == 200
+
+
+def test_glued_addresses_are_all_masked():
+    from app.gateway.masking import agent_text, mask_text
+
+    for text in ("jane@x.com+bob@y.org", "a@b.com1x@c.org", "x_bob@y.io%c@d.co"):
+        assert "@" not in agent_text(text), text
+        assert "bob@y" not in mask_text(text, masked_name="Team #1", company=None)
+
+
+def test_a_cut_turn_never_keeps_a_contact_split_at_the_edge(make_harness):
+    # review pass 3: masking shrinks text, so the cut edge can move into the kept 1000
+    h = make_harness()
+    spoken = "jane " + " dot ".join(["x"] * 60) + " at example dot com. "
+    phone = "call 415 555 0199 now"
+    turn = spoken + "y" * (1190 - len(spoken)) + phone + "z" * 100
+    h.gw.perform("voice", {"speaker": "customer", "reply_email": "a@b.co",
+                           "turns": [{"speaker": "agent", "text": turn},
+                                     {"speaker": "customer", "text": "Delaware C-corp"}]})
+    stored = h.events("voice.command")[-1].private["turns"][0]["text"]
+    assert "415" not in stored and "555" not in stored
+
+
+def test_an_oversized_body_is_refused_before_parsing(make_harness):
+    h = make_harness()
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        big = client.post("/api/voice", content=b'{"text": "' + b"x" * 1_000_001 + b'"}',
+                          headers={"Content-Type": "application/json"})
+        not_json = client.post("/api/voice", content=b"nope",
+                               headers={"Content-Type": "application/json"})
+    assert big.status_code == 413 and not_json.status_code == 400
