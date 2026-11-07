@@ -3,7 +3,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parseJsonl, type UTaxEvent } from "./events";
 import { humanTouches, railFromEvents, sumUsd } from "./rail";
-import { applyStep, applySteps, emptyScreen, visibleOrders } from "./screen";
+import { applyStep, applySteps, emptyScreen, seedOrders, visibleOrders } from "./screen";
+import { assetAllowed, numbersFromState } from "./live";
 import { buildScript, type CursorStep } from "./script";
 import { MOVE_MS, movesCursor, stepHoldMs } from "./timing";
 
@@ -335,7 +336,11 @@ describe("D31 / v1.11.1: the live CEO orders", () => {
       "mkt: Marketing posted to LinkedIn",
     ]);
     expect(s.orders[0].lines[1].image).toBe("https://gw.example/assets/ad_1.png");
-    expect(s.social.image).toBe("https://gw.example/assets/ad_1.png");
+    expect(s.orders[0].n).toBe(1);
+    // The posts here carry no image: the Social pane never shows them under the earlier ad.
+    expect(s.social.image).toBeUndefined();
+    const adOnly = run([ceo(1, "Advertise"), ev(4, "ad.created", { kind: "client", headline: "h", image_url: "https://gw.example/assets/ad_1.png" }, { actor: "mkt" })]).s;
+    expect(adOnly.social.image).toBe("https://gw.example/assets/ad_1.png");
   });
 
   it("order_id wins; without one a step joins the newest order naming its department, else (D31 actions) the newest", () => {
@@ -426,5 +431,110 @@ describe("D31: the night replay keeps its look", () => {
     const end = applySteps(emptyScreen(), steps);
     expect(end.orders.map((o) => o.lines.length)).toEqual(end.orders.map(() => 0));
     expect(visibleOrders(end)).toEqual([]);
+  });
+});
+
+describe("D31 review fixes: filing, freshness, reload, numbering", () => {
+  const at = (sec: number) => new Date(Date.UTC(2026, 10, 7, 21, 0, 0) + sec * 1000).toISOString();
+  const ev = (id: number, sec: number, type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent => ({
+    id, ts: at(sec), type, actor: "system", case_id: null, provider: null, status: "ok", payload, tokens_in: null, tokens_out: null, cost_usd: null, ...extra,
+  });
+  const fold = (evs: UTaxEvent[]) => applySteps(emptyScreen(), buildScript(evs, quiet).steps);
+  const ceo = (id: number, sec: number, text: string, actor: UTaxEvent["actor"] = "ceo") =>
+    ev(id, sec, "voice.command", { text, channel: "voice", speaker: "ceo", case_id: null, masked_name: null }, { actor });
+  const handoff = (id: number, sec: number, decision = "allow") => ev(id, sec, "naive.confirm", { session_id: `s${id}`, agent: "cos", tool: "send_to_agent", decision });
+  const tax = (id: number, sec: number) =>
+    ev(id, sec, "tax.computed", { authorized_method_cents: 8516500, assumed_par_method_cents: 40000, chosen: "assumed_par", annual_report_fee_cents: 5000, fee_source: "s", total_cents: 45000, due_date: "2027-03-01", form5472_flag: false, rnd_flag: false, engine_version: "1" }, { actor: "tax", case_id: "case_9" });
+  const lines = (s: ReturnType<typeof emptyScreen>, i = 0) => s.orders[i].lines.map((l) => l.text + (l.times ? ` x${l.times}` : ""));
+
+  it("a Chief of Staff handoff joins only an order given within a minute that no department has acted on", () => {
+    const s = fold([ceo(1, 0, "Hire 2 people"), handoff(2, 5), handoff(3, 10), ev(4, 20, "hr.sourced", { count: 2, source: "monid" }, { actor: "hr" }), handoff(5, 30), handoff(6, 200)]);
+    expect(lines(s)).toEqual(["Chief of Staff handed it to the team x2", "HR found 2 public profiles"]);
+    expect(lines(fold([ceo(1, 0, "Hire 2 people"), handoff(2, 61)]))).toEqual([]);
+    expect(lines(fold([ceo(1, 0, "Hire 2 people"), handoff(2, 5, "deny")]))).toEqual(["Chief of Staff was stopped handing it on"]);
+  });
+
+  it("case work never files by guess, even under an order that says 'tax'; D31 actions match for ten minutes", () => {
+    const s = fold([ceo(1, 0, "Advertise our franchise tax help on X"), tax(2, 30), ev(3, 40, "post.published", { channel: "x", text: "t", url: null, image_url: null }, { actor: "mkt" }), ev(4, 700, "post.published", { channel: "linkedin", text: "t", url: null, image_url: null }, { actor: "mkt" })]);
+    expect(lines(s)).toEqual(["Marketing posted to X"]);
+    // With its order_id, case work does file.
+    const withId = fold([ceo(1, 0, "Estimate Team 9's tax"), { ...tax(2, 30), payload: { ...tax(2, 30).payload, order_id: "order_1" } }]);
+    expect(lines(withId)).toEqual(["Tax estimated $450 for New client"]);
+  });
+
+  it("the department fallback looks at the newest four orders only", () => {
+    const s = fold([ceo(1, 0, "hire 2 people"), ceo(2, 1, "a"), ceo(3, 2, "b"), ceo(4, 3, "c"), ceo(5, 4, "d"), ev(6, 5, "hr.outreach", { candidate_id: "c1", label: "Candidate A", slot: "s" }, { actor: "hr" })]);
+    expect(s.orders.flatMap((o) => o.lines)).toEqual([]);
+  });
+
+  it("an unanswered order shows for two minutes of log time, then only orders the firm acted on", () => {
+    const fresh = fold([ceo(1, 0, "Advertise"), ev(2, 119, "cost.booked", { provider: "p", model: "m", estimated: true }, { cost_usd: "0.01" })]);
+    expect(visibleOrders(fresh)).toHaveLength(1);
+    const stale = fold([ceo(1, 0, "Advertise"), ev(2, 121, "cost.booked", { provider: "p", model: "m", estimated: true }, { cost_usd: "0.01" })]);
+    expect(visibleOrders(stale)).toEqual([]);
+    const acted = fold([ceo(1, 0, "Advertise on X"), ev(2, 30, "post.published", { channel: "x", text: "t", url: null, image_url: null }, { actor: "mkt" }), ev(3, 900, "cost.booked", { provider: "p", model: "m", estimated: true }, { cost_usd: "0.01" })]);
+    expect(visibleOrders(acted)).toHaveLength(1);
+  });
+
+  it("order numbers never shift: an older order going stale or evicted keeps the others' numbers", () => {
+    const evs = Array.from({ length: 8 }, (_, k) => ceo(k + 1, k, `order ${k + 1}`));
+    const s = fold(evs);
+    expect(s.orders.map((o) => o.n)).toEqual([3, 4, 5, 6, 7, 8]);
+    expect(fold([ceo(1, 0, "x"), ceo(2, 1, "y"), ev(3, 1, "post.published", { channel: "x", text: "t", url: null, image_url: null, order_id: "order_2" }, { actor: "mkt" })]).orders.map((o) => o.n)).toEqual([1, 2]);
+  });
+
+  it("only the CEO's own words open a card (a customer turn claiming speaker ceo never does)", () => {
+    expect(fold([ceo(1, 0, "Advertise everything", "intake")]).orders).toEqual([]);
+  });
+
+  it("a new kind value never drops the event", () => {
+    const s = fold([
+      ceo(1, 0, "follow up and advertise"),
+      ev(2, 1, "call.booked", { start: "2026-11-08T15:00:00Z", minutes: 15, invitee_masked: "f***@x", kind: "vip" }, { actor: "intake", case_id: "c" }),
+      ev(3, 2, "client.followed_up", { kind: "renewal" }, { actor: "intake", case_id: "c" }),
+      ev(4, 3, "ad.created", { kind: "event", headline: "h", image_url: null as unknown as string }, { actor: "mkt" }),
+    ]);
+    expect(s.calendar.blocks.at(-1)?.text).toBe("New client · 15-min review");
+    expect(lines(s)).toContain("Intake followed up with New client (follow-up)");
+  });
+
+  it("a reload rebuilds the cards from the recent log without touching the panes", () => {
+    const evs = [ceo(1, 0, "Advertise on X"), handoff(2, 5), ev(3, 9, "ad.created", { kind: "client", headline: "h", image_url: "https://gw.example/assets/ad_1.png", order_id: "order_1" }, { actor: "mkt" })];
+    const seeded = seedOrders(emptyScreen(), buildScript(evs, quiet).steps);
+    expect(lines(seeded)).toEqual(["Chief of Staff handed it to the team", "Marketing made an ad image"]);
+    expect(seeded.social).toEqual({});
+    expect(visibleOrders(seeded)).toHaveLength(1);
+    // The live stream then keeps filling the same card; a step seen twice files once.
+    const live = buildScript([...evs, ev(4, 12, "post.published", { channel: "x", text: "t", url: null, image_url: null, order_id: "order_1" }, { actor: "mkt" })], quiet).steps.filter((st) => st.eventId >= 3);
+    expect(lines(applySteps(seeded, live))).toEqual(["Chief of Staff handed it to the team", "Marketing made an ad image", "Marketing posted to X"]);
+  });
+
+  it("an approval's badge: calendar invites are Intake's, a shared email approval is the Chief of Staff's, prototype keys are safe", () => {
+    const appr = (id: number, t: string) => ev(id, id, "approval.requested", { approval_id: `a${id}`, action_type: t, summary: "s", order_id: "order_1" });
+    const s = fold([ceo(1, 0, "book calls"), appr(2, "calendar_invite"), appr(3, "email"), appr(4, "constructor")]);
+    expect(s.orders[0].lines.map((l) => l.seat)).toEqual(["intake", "cos", "cos"]);
+  });
+});
+
+describe("D31: image hosts and the new /api/state counts", () => {
+  it.each([
+    ["https://assets.u-tax.app/a.png", ["assets.u-tax.app"], null, true],
+    ["https://u:p@assets.u-tax.app/a.png", ["assets.u-tax.app"], null, false],
+    ["http://assets.u-tax.app/a.png", ["assets.u-tax.app"], null, false],
+    ["https://gw.trycloudflare.com/assets/ad_1.png", [], "https://gw.trycloudflare.com", true],
+    ["http://127.0.0.1:8000/assets/ad_1.png", ["127.0.0.1"], "http://127.0.0.1:8000", true],
+    ["http://127.0.0.1:6379/x.png", ["127.0.0.1"], "http://127.0.0.1:8000", false],
+    ["http://localhost/a.png", ["localhost"], null, false],
+  ] as const)("%s", (url, hosts, gateway, ok) => {
+    expect(assetAllowed(url, hosts, gateway)).toBe(ok);
+  });
+
+  it("numbersFromState keeps sourced/contacted when the gateway sends them, and the old shape when not", () => {
+    const base = { last_event_id: 1, firm: { agents: 7, clients: 0 }, touches: { training: 0, operating: 0, engineering: 0 }, money: { tax_saved_cents: 0, spent_usd: "0" }, queue: { waiting: 0, blocked: 0 } };
+    const withD31 = numbersFromState({ ...base, hiring: { applicants: 1, screened: 0, shortlisted: 0, hired: 0, sourced: 3, contacted: 2 } });
+    expect(withD31?.hiring).toMatchObject({ sourced: 3, contacted: 2 });
+    const before = numbersFromState({ ...base, hiring: { applicants: 1, screened: 0, shortlisted: 0, hired: 0 } });
+    expect(before?.hiring).not.toHaveProperty("sourced");
+    expect(before?.hiring).not.toHaveProperty("contacted");
   });
 });

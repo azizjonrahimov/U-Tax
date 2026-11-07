@@ -71,6 +71,8 @@ export interface OrderLine {
 export interface OrderCard {
   /** The order's voice.command event id (what `order_id` points at). */
   id: number;
+  /** "Order N": its place among every order this screen has seen, so numbers never shift. */
+  n: number;
   ts: string;
   text: string;
   lines: OrderLine[];
@@ -79,6 +81,10 @@ export interface OrderCard {
 export interface ScreenState {
   /** D31: CEO orders, oldest first (the newest few). */
   orders: OrderCard[];
+  /** D31: orders seen so far (numbers the cards). */
+  orderSeq: number;
+  /** Time of the newest step applied (order freshness is measured in log time, not event counts). */
+  lastTs: string;
   /** D31: seat → key of its latest step; a changed key re-lights the desk. */
   desks: Record<string, string>;
   /**
@@ -95,7 +101,8 @@ export interface ScreenState {
   /** Order cases first appeared, for the rail. */
   caseOrder: string[];
   caseRows: Record<string, CaseRow>;
-  search: { query: string; results: string[]; more?: string };
+  /** `source`: where the search ran (law: the Naïve Data catalogue; HR: Monid public profiles). */
+  search: { query: string; results: string[]; more?: string; source?: string };
   calendar: { blocks: { key: string; text: string; start?: string; minutes?: number }[] };
   social: { image?: string; caption?: string; channel?: string; posted?: string; dm?: { text: string; recipient?: string; sent: boolean } };
   phone: { dial?: string; transcript?: string; check?: { ok: boolean; text: string } };
@@ -115,6 +122,8 @@ export interface ScreenState {
 
 export const emptyScreen = (): ScreenState => ({
   orders: [],
+  orderSeq: 0,
+  lastTs: "",
   desks: {},
   flagged: [],
   camera: null,
@@ -138,30 +147,91 @@ const MAX_ORDER_LINES = 16;
 /** Without an order_id, a step can join one of the newest few orders only. */
 const OPEN_ORDERS = 4;
 
-/** Words in a CEO order that name a department's work (the fallback when a step has no order_id). */
+/**
+ * Words in a CEO order that name a D31 department's work. The fallback for a D31 action step that
+ * came without an order_id (the gateway stamps one on everything inside an order's tool calls).
+ */
 const SEAT_WORDS: Readonly<Record<string, RegExp>> = Object.freeze({
-  mkt: /\b(advertis\w*|ads?|post\w*|linkedin|x|twitter|market\w*|promot\w*|social|campaign\w*|brand\w*)\b/i,
-  hr: /\b(hir\w*|recruit\w*|candidates?|interview\w*|people|person|jobs?|applicants?|staff|talent)\b/i,
-  intake: /\b(follow\w*|customers?|clients?|remind\w*|check in|teams?)\b/i,
-  tax: /\b(tax\w*|estimat\w*|comput\w*|franchise)\b/i,
-  acct: /\b(memos?|invoic\w*|accounting)\b/i,
-  qa: /\b(qa|check\w*|review\w*|verif\w*)\b/i,
+  mkt: /\b(advertis\w*|ads?|post\w*|linkedin|x|twitter|market\w*|promot\w*|social|campaign\w*)\b/i,
+  hr: /\b(hir\w*|recruit\w*|candidates?|interview\w*|people|person|jobs?|applicants?|talent)\b/i,
+  intake: /\b(follow\w*|customers?|clients?|remind\w*)\b/i,
 });
 
-/** An order with no steps yet stays on screen this many events (then only orders the firm acted on show). */
-const FRESH_EVENTS = 15;
+/** Log-time windows (ms): an unanswered order stays on screen; a handoff or a department match may join it. */
+const FRESH_MS = 2 * 60_000;
+const HANDOFF_MS = 60_000;
+const MATCH_MS = 10 * 60_000;
 
-/** The orders worth a card: the firm acted on them, or they were just given. */
-export const visibleOrders = (s: Pick<ScreenState, "orders" | "lastEventId">) =>
-  s.orders.filter((o) => o.lines.length > 0 || s.lastEventId - o.id <= FRESH_EVENTS);
+/**
+ * How a step may find its order. "id": only by order_id (case work: tax, memo, client calls, approvals).
+ * "dept": order_id, else a recent order naming its department (ad, posts, HR, follow-ups).
+ * "handoff": the Chief of Staff's send_to_agent check (a Naïve check carries no order_id): only an
+ * order given within a minute that no department has acted on yet.
+ */
+export type OrderMatch = "id" | "dept" | "handoff";
 
-/** Which order a step belongs to: its order_id, else the newest open order naming its department, else (loose) the newest. */
-export function orderFor(orders: readonly OrderCard[], seat: string, orderId: number | null, loose: boolean): number {
+const age = (from: string, to: string) => {
+  const a = Date.parse(from);
+  const b = Date.parse(to);
+  return Number.isFinite(a) && Number.isFinite(b) ? b - a : Infinity;
+};
+
+/** The orders worth a card: the firm acted on them, or they were given in the last two minutes of log time. */
+export const visibleOrders = (s: Pick<ScreenState, "orders" | "lastTs">) => s.orders.filter((o) => o.lines.length > 0 || age(o.ts, s.lastTs) <= FRESH_MS);
+
+/** Which order a step belongs to (an index into `orders`, or -1 for none). */
+export function orderFor(orders: readonly OrderCard[], seat: string, orderId: number | null, match: OrderMatch, ts: string): number {
   if (orderId !== null) return orders.findIndex((o) => o.id === orderId);
-  const words = Object.hasOwn(SEAT_WORDS, seat) ? SEAT_WORDS[seat] : null;
-  const first = Math.max(0, orders.length - OPEN_ORDERS);
-  for (let i = orders.length - 1; i >= first; i--) if (words?.test(orders[i].text)) return i;
-  return loose ? orders.length - 1 : -1;
+  if (match === "handoff") {
+    const i = orders.length - 1;
+    const o = orders[i];
+    return o && age(o.ts, ts) <= HANDOFF_MS && o.lines.every((l) => l.seat === "cos") ? i : -1;
+  }
+  if (match !== "dept" || !Object.hasOwn(SEAT_WORDS, seat)) return -1;
+  const words = SEAT_WORDS[seat];
+  for (let i = orders.length - 1; i >= Math.max(0, orders.length - OPEN_ORDERS); i--) {
+    if (age(orders[i].ts, ts) <= MATCH_MS && words.test(orders[i].text)) return i;
+  }
+  return -1;
+}
+
+/**
+ * D31 order bookkeeping for one step, and nothing else: a CEO order opens a card, a step carrying an
+ * order line joins its order. `applyStep` runs it on every step; `seedOrders` runs it alone to
+ * rebuild the cards a reloaded projector missed, without replaying anything on the panes.
+ */
+function applyOrderStep(s: ScreenState, step: CursorStep): void {
+  const meta = step.meta ?? {};
+  // Only the CEO's own words open a card (a customer's speech never reads as an order).
+  if (step.target === "rail.voice" && meta.speaker === "ceo" && step.agent === "ceo" && step.text && !s.orders.some((o) => o.id === step.eventId)) {
+    s.orderSeq += 1;
+    s.orders = [...s.orders, { id: step.eventId, n: s.orderSeq, ts: step.ts, text: step.text, lines: [] }].sort((a, b) => a.id - b.id).slice(-MAX_ORDERS);
+  }
+  const line = str(meta.order_line);
+  if (!line || !s.orders.length) return;
+  const orderId = typeof meta.order_id === "number" ? meta.order_id : null;
+  const match = meta.order_match === "dept" || meta.order_match === "handoff" ? meta.order_match : "id";
+  const i = orderFor(s.orders, str(meta.order_seat) ?? "", orderId, match, step.ts);
+  if (i < 0) return;
+  const o = s.orders[i];
+  if (o.lines.some((l) => l.key === step.key)) return; // already filed (a seed met the live stream)
+  const last = o.lines.at(-1);
+  const image = str(meta.order_image);
+  const lines =
+    last && last.text === line && !image
+      ? [...o.lines.slice(0, -1), { ...last, times: (last.times ?? 1) + 1 }]
+      : [...o.lines, { key: step.key, seat: str(meta.order_seat) ?? "", text: line, ...(image ? { image } : {}) }].slice(-MAX_ORDER_LINES);
+  s.orders = s.orders.map((x, j) => (j === i ? { ...o, lines } : x));
+}
+
+/** Rebuild order cards from steps that already happened (a reload): orders only, no pane changes. */
+export function seedOrders(base: ScreenState, steps: readonly CursorStep[]): ScreenState {
+  const s: ScreenState = { ...base };
+  for (const step of steps) {
+    applyOrderStep(s, step);
+    if (step.ts > s.lastTs) s.lastTs = step.ts;
+  }
+  return s;
 }
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -204,24 +274,8 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
   if (seat && seat !== "ceo" && step.action !== "focus" && step.action !== "switch") s.desks = { ...s.desks, [seat]: step.key };
 
   // D31: a CEO order opens a card; later steps carrying an order line fill it.
-  if (step.target === "rail.voice" && meta.speaker === "ceo" && text) {
-    s.orders = [...s.orders, { id: step.eventId, ts: step.ts, text, lines: [] }].slice(-MAX_ORDERS);
-  }
-  const line = str(meta.order_line);
-  if (line && s.orders.length) {
-    const orderId = typeof meta.order_id === "number" ? meta.order_id : null;
-    const i = orderFor(s.orders, str(meta.order_seat) ?? "", orderId, meta.order_loose === true);
-    if (i >= 0) {
-      const o = s.orders[i];
-      const last = o.lines.at(-1);
-      const image = str(meta.order_image);
-      const lines =
-        last && last.text === line && !image
-          ? [...o.lines.slice(0, -1), { ...last, times: (last.times ?? 1) + 1 }]
-          : [...o.lines, { key: step.key, seat: str(meta.order_seat) ?? "", text: line, ...(image ? { image } : {}) }].slice(-MAX_ORDER_LINES);
-      s.orders = s.orders.map((x, j) => (j === i ? { ...o, lines } : x));
-    }
-  }
+  if (step.ts > s.lastTs) s.lastTs = step.ts;
+  applyOrderStep(s, step);
 
   switch (step.action) {
     case "focus":
@@ -295,7 +349,7 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
   }
 
   if (area === "search") {
-    if (sub === "query") s.search = { query: text, results: [] };
+    if (sub === "query") s.search = { query: text, results: [], ...(str(meta.source) ? { source: str(meta.source) } : {}) };
     else if (sub === "result") s.search = { ...s.search, results: [...s.search.results, text] };
     else if (sub === "more") s.search = { ...s.search, more: text };
     return s;
@@ -317,7 +371,8 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
         s.social = { ...s.social, image: str(meta.image_url) };
         break;
       case "caption":
-        s.social = { image: s.social.image, caption: text, channel: str(meta.channel), dm: s.social.dm };
+        // The post's own picture, or none: a text post never shows under the previous ad's image.
+        s.social = { image: Object.hasOwn(meta, "image_url") ? str(meta.image_url) : s.social.image, caption: text, channel: str(meta.channel), dm: s.social.dm };
         break;
       case "posted":
         s.social = { ...s.social, posted: text };

@@ -7,7 +7,7 @@ import { humanTouches, TRAINABLE_ACTION_TYPES } from "@/theater/rail";
 import { visibleOrders, type Cell, type ScreenState } from "@/theater/screen";
 import type { Pane as PaneKey } from "@/theater/script";
 import { formatCents, formatClock, formatUsd } from "@/theater/format";
-import { assetAllowed, parseAssetHosts } from "@/theater/live";
+import { assetAllowed, originOf, parseAssetHosts } from "@/theater/live";
 import { MicIcon } from "@/components/MicIcon";
 
 /** Text as it should show right now (a step being typed reveals progressively). */
@@ -17,6 +17,13 @@ export const SHOW_BLOCKED = process.env.NEXT_PUBLIC_SHOW_BLOCKED !== "0";
 export const SHOW_QUEUE = process.env.NEXT_PUBLIC_SHOW_QUEUE !== "0";
 /** v1.6.4: images render only from these hosts (NEXT_PUBLIC_ASSET_HOSTS, comma-separated). */
 const ASSET_HOSTS = parseAssetHosts(process.env.NEXT_PUBLIC_ASSET_HOSTS);
+/** D31: the gateway's own origin serves the ad images it renders (no NEXT_PUBLIC_ASSET_HOSTS entry needed). */
+const GATEWAY_ORIGIN = originOf(process.env.NEXT_PUBLIC_API_URL);
+const imageOk = (url: string | undefined) => assetAllowed(url, ASSET_HOSTS, GATEWAY_ORIGIN);
+/** An image that fails to load (a tunnel host gone after a restart) disappears instead of showing a broken icon. */
+const hideBroken = (e: { currentTarget: HTMLImageElement }) => {
+  e.currentTarget.hidden = true;
+};
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
@@ -203,7 +210,7 @@ export const SheetPane = memo(function SheetPane({ screen }: { screen: ScreenSta
 export function SearchPane({ screen, typed }: { screen: ScreenState; typed: Typed }) {
   const s = screen.search;
   return (
-    <Pane k="search" screen={screen} label="Search" name="law" tag="Naïve Data catalogue">
+    <Pane k="search" screen={screen} label="Search" name={s.source ? "people" : "law"} tag={s.source ?? "Naïve Data catalogue"}>
       <div className="q" data-target="search.query">
         {typed("search.query", s.query) || <span className="empty">No searches yet.</span>}
       </div>
@@ -250,7 +257,7 @@ export const CalendarPane = memo(function CalendarPane({ screen }: { screen: Scr
 
 export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Typed }) {
   const s = screen.social;
-  const img = assetAllowed(s.image, ASSET_HOSTS) ? s.image : undefined;
+  const img = imageOk(s.image) ? s.image : undefined;
   return (
     <Pane k="social" screen={screen} label="Social" name="posts & DMs" tag={`via ${s.channel ?? "social"} · rendered from log`}>
       {!s.caption && !s.dm ? (
@@ -262,7 +269,7 @@ export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Type
               <div className="chan">{s.channel}</div>
               {img && (
                 // eslint-disable-next-line @next/next/no-img-element -- agent-supplied https image, rendered as given
-                <img src={img} alt="" data-target="social.image" referrerPolicy="no-referrer" />
+                <img key={img} src={img} alt="" data-target="social.image" referrerPolicy="no-referrer" onError={hideBroken} />
               )}
               <div>{typed("social.caption", s.caption)}</div>
               <span className="btn" data-target="social.post">
@@ -415,7 +422,12 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           {(numbers.hiring.sourced ?? 0) + (numbers.hiring.contacted ?? 0) > 0 && (
             <>
               <br />
-              {plural(numbers.hiring.sourced ?? 0, "lead")} found · {numbers.hiring.contacted ?? 0} emailed with a call invite
+              {[
+                numbers.hiring.sourced ? `${plural(numbers.hiring.sourced, "lead")} found` : "",
+                numbers.hiring.contacted ? `${numbers.hiring.contacted} emailed with a call invite` : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")}
             </>
           )}
           {(numbers.hiring.awaiting ?? 0) > 0 && (
@@ -495,9 +507,7 @@ const ORDERS_SHOWN = 3;
  * time order. The desk row lights a department while its agent works (any step of theirs).
  */
 export const OrdersStrip = memo(function OrdersStrip({ screen }: { screen: ScreenState }) {
-  const all = visibleOrders(screen);
-  const shown = all.slice(-ORDERS_SHOWN);
-  const first = all.length - shown.length;
+  const shown = visibleOrders(screen).slice(-ORDERS_SHOWN);
   return (
     <section className="orders" data-target="orders" aria-label="CEO orders">
       <div className="oh">
@@ -522,7 +532,7 @@ export const OrdersStrip = memo(function OrdersStrip({ screen }: { screen: Scree
         {shown.map((o, i) => (
           <article key={o.id} className={`order${i === shown.length - 1 ? " newest" : ""}`} data-target={`orders.${o.id}`}>
             <header>
-              <span className="num">Order {first + i + 1}</span>
+              <span className="num">Order {o.n}</span>
               <time className="mono">{formatClock(o.ts)}</time>
             </header>
             <p className="said">&ldquo;{o.text}&rdquo;</p>
@@ -540,9 +550,9 @@ export const OrdersStrip = memo(function OrdersStrip({ screen }: { screen: Scree
                       {l.text}
                       {(l.times ?? 1) > 1 && <span className="times"> ×{l.times}</span>}
                     </span>
-                    {l.image && assetAllowed(l.image, ASSET_HOSTS) && (
+                    {l.image && imageOk(l.image) && (
                       // eslint-disable-next-line @next/next/no-img-element -- the gateway's own ad PNG, host-gated
-                      <img src={l.image} alt="The ad image" referrerPolicy="no-referrer" />
+                      <img src={l.image} alt="The ad image" referrerPolicy="no-referrer" onError={hideBroken} />
                     )}
                   </li>
                 ))}

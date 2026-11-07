@@ -204,13 +204,28 @@ export function parseAssetHosts(raw: string | undefined): string[] {
     .filter(Boolean);
 }
 
-export function assetAllowed(url: string | undefined, hosts: readonly string[]): boolean {
+/** An origin ("https://gw.example:8443"), or null for anything that isn't an http(s) URL. */
+export function originOf(raw: string | undefined): string | null {
+  try {
+    const u = new URL(raw ?? "");
+    return u.protocol === "https:" || u.protocol === "http:" ? u.origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the projector may load this image: https on a listed host, or anything on the gateway's
+ * own origin (D31: it serves the ads it renders; the theater already streams from it). A local
+ * rehearsal gateway on http works through the origin rule; no other http host or port does.
+ */
+export function assetAllowed(url: string | undefined, hosts: readonly string[], gateway: string | null = null): boolean {
   if (!url) return false;
   try {
     const u = new URL(url);
-    // https, or a gateway on this machine during a rehearsal (loopback http); either way the host must be listed.
-    const local = u.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
-    return (u.protocol === "https:" || local) && !u.username && !u.password && hosts.includes(u.hostname.toLowerCase());
+    if (u.username || u.password) return false;
+    if (gateway !== null && u.origin === gateway) return true;
+    return u.protocol === "https:" && hosts.includes(u.hostname.toLowerCase());
   } catch {
     return false;
   }

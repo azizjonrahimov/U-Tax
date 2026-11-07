@@ -216,8 +216,9 @@ const candidateLabel = (v: string) => (/^Candidate [A-Z]{1,2}$/.test(v) ? v : "a
 const CHANNEL_NAME: Readonly<Record<string, string>> = Object.freeze({ x: "X", twitter: "X", linkedin: "LinkedIn", instagram: "Instagram", facebook: "Facebook" });
 const channelName = (c: string) => (Object.hasOwn(CHANNEL_NAME, c.toLowerCase()) ? CHANNEL_NAME[c.toLowerCase()] : clip(c, 24));
 
-/** An approval's department, by its action type (the order fallback matches on it). */
-const APPROVAL_SEAT: Readonly<Record<string, string>> = Object.freeze({ social_post: "mkt", voice_screen: "hr", calendar_invite: "hr", email: "intake" });
+/** An approval's badge, by action type (email is shared by several departments: the Chief of Staff's badge). */
+const APPROVAL_SEAT: Readonly<Record<string, string>> = Object.freeze({ social_post: "mkt", voice_screen: "hr", calendar_invite: "intake" });
+const approvalSeat = (t: string) => (Object.hasOwn(APPROVAL_SEAT, t) ? APPROVAL_SEAT[t] : "cos");
 
 const FOLLOW_UP_WORDS: Readonly<Record<string, string>> = Object.freeze({
   memo_check: "memo check",
@@ -328,8 +329,9 @@ const LOCAL_URL = /^local:\/\/[A-Za-z0-9_\-/.]+$/;
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
- * URLs from agents are untrusted: only https: (no credentials) and the stand-in
- * local:// asset scheme reach the renderer. A rejected URL is reported in meta.
+ * URLs from agents are untrusted: only https: (no credentials), loopback http (a gateway on this
+ * machine; the renderer then shows it only from the gateway's own origin) and the stand-in local://
+ * asset scheme reach the renderer. A rejected URL is reported in meta.
  */
 function safeUrl(v: string | null): { url: string | null; rejected: boolean } {
   if (v === null) return { url: null, rejected: false };
@@ -460,15 +462,14 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
   /**
    * D31: this event is a step of a CEO order. The line rides on the event's last step (no extra
    * hold time); the screen files it under its order: `order_id` first, else by department.
-   * `loose`: may fall back to the newest order when no order names its department. Only the Chief of
-   * Staff's handoff is loose (a Naïve check carries no order_id); everything else needs an order_id or a
-   * department word, so the night's own work never files under an order.
+   * `match` (screen.ts OrderMatch): "id" files only by order_id (case work), "dept" may also match a
+   * recent order naming its department (D31 actions), "handoff" is the Chief of Staff's first step.
    */
-  const orderLine = (text: string, seat: string, loose: boolean, extra: Meta = {}) => {
+  const orderLine = (text: string, seat: string, match: "id" | "dept" | "handoff", extra: Meta = {}) => {
     const last = out.at(-1);
     if (!last) return;
     const order = orderRef(p);
-    last.meta = { ...last.meta, ...extra, order_line: text, order_seat: seat, order_loose: loose, ...(order !== null ? { order_id: order } : {}) };
+    last.meta = { ...last.meta, ...extra, order_line: text, order_seat: seat, order_match: match, ...(order !== null ? { order_id: order } : {}) };
   };
 
   // The cursor shown for this event; a customer's own words get no agent cursor.
@@ -539,7 +540,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       push({ target: "mail.memo", agent, action: "type", text: body });
       push({ target: "mail.send", agent, action: "click" });
       push({ target: "mail.sent", agent: null, action: "appear", text: `✓ Sent · ${secs} s after last fact`, meta: { message_id: str(p, "message_id"), memo_ref: strOrNull(p, "memo_ref") } });
-      orderLine(`${seatName(ev.actor)} sent the memo to ${caseName()}`, ev.actor, false);
+      orderLine(`${seatName(ev.actor)} sent the memo to ${caseName()}`, ev.actor, "id");
       break;
     }
     case "law.searched": {
@@ -574,7 +575,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       push({ target: "sheet.cell.total", agent: null, action: "mark", text: "win" });
       if (f5472) push({ target: "sheet.flag.form5472", agent, action: "appear", text: "Form 5472 may be required" });
       if (rnd) push({ target: "sheet.flag.rnd", agent, action: "appear", text: "May qualify for R&D payroll credit" });
-      orderLine(`${seatName(ev.actor)} estimated ${total} for ${caseName()}`, ev.actor, false);
+      orderLine(`${seatName(ev.actor)} estimated ${total} for ${caseName()}`, ev.actor, "id");
       break;
     }
     case "qa.passed":
@@ -597,38 +598,40 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       const start = str(p, "start");
       const minutes = int(p, "minutes");
       const invitee = str(p, "invitee_masked");
-      const kind = has(p, "kind") ? oneOf(p, "kind", ["client", "candidate"] as const) : "client";
+      // An unknown kind reads as a client call (a new value must not drop the booking).
+      const kind = p.kind === "candidate" ? "candidate" : "client";
       if (kind === "candidate") {
         const who = candidateLabel(invitee);
         push({ target: "calendar.block", agent, action: "drag", text: `${who} · ${minutes}-min call`, meta: { start, minutes, kind } });
-        orderLine(`${seatName(ev.actor)} booked a ${minutes}-min call with ${who}`, ev.actor, false);
+        orderLine(`${seatName(ev.actor)} booked a ${minutes}-min call with ${who}`, ev.actor, "dept");
       } else {
         push({ target: "calendar.block", agent, action: "drag", text: `${caseName()} · ${minutes}-min review`, meta: { start, minutes, invitee } });
-        orderLine(`${seatName(ev.actor)} booked a ${minutes}-min review with ${caseName()}`, ev.actor, false);
+        orderLine(`${seatName(ev.actor)} booked a ${minutes}-min review with ${caseName()}`, ev.actor, "id");
       }
       break;
     }
     case "ad.created": {
-      const kind = oneOf(p, "kind", ["client", "hiring"] as const);
+      str(p, "kind"); // client | hiring; another value still shows as an ad
+      const hiring = p.kind === "hiring";
       const headline = clip(str(p, "headline"), 80);
       const image = safeUrl(str(p, "image_url"));
       if (image.url) push({ target: "social.image", agent, action: "drag", meta: { image_url: image.url } });
-      push({ target: "social.caption", agent, action: "type", text: headline, meta: { channel: kind === "hiring" ? "hiring ad" : "ad", image_rejected: image.rejected } });
-      orderLine(`${seatName(ev.actor)} made ${kind === "hiring" ? "a hiring ad image" : "an ad image"}`, ev.actor, false, image.url ? { order_image: image.url } : {});
+      push({ target: "social.caption", agent, action: "type", text: headline, meta: { channel: hiring ? "hiring ad" : "ad", image_url: image.url, image_rejected: image.rejected } });
+      orderLine(`${seatName(ev.actor)} made ${hiring ? "a hiring ad image" : "an ad image"}`, ev.actor, "dept", image.url ? { order_image: image.url } : {});
       break;
     }
     case "hr.sourced": {
       const count = nonNeg(p, "count");
       str(p, "source");
       // Counts only: no lead's label or profile reaches the projector (v1.11.1).
-      push({ target: "search.query", agent, action: "type", text: "Public profiles for the open gig" });
+      push({ target: "search.query", agent, action: "type", text: "Public profiles for the open gig", meta: { source: "Monid public profiles" } });
       push({
         target: "search.result.0",
         agent: null,
         action: "appear",
         text: count ? `${count} public profile${count === 1 ? "" : "s"} found · names stay off screen` : "No public profiles found",
       });
-      orderLine(count ? `${seatName(ev.actor)} found ${count} public profile${count === 1 ? "" : "s"}` : `${seatName(ev.actor)} searched public profiles: none found`, ev.actor, false);
+      orderLine(count ? `${seatName(ev.actor)} found ${count} public profile${count === 1 ? "" : "s"}` : `${seatName(ev.actor)} searched public profiles: none found`, ev.actor, "dept");
       break;
     }
     case "hr.outreach": {
@@ -636,16 +639,16 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       const who = candidateLabel(str(p, "label"));
       str(p, "slot");
       push({ target: "rail.hiring", agent, action: "count", text: "contacted", meta: { stage: "contacted" } });
-      orderLine(`${seatName(ev.actor)} emailed ${who} with a call invite`, ev.actor, false);
+      orderLine(`${seatName(ev.actor)} emailed ${who} with a call invite`, ev.actor, "dept");
       break;
     }
     case "client.followed_up": {
-      const kind = oneOf(p, "kind", ["memo_check", "missing_facts", "call_reminder"] as const);
-      const what = FOLLOW_UP_WORDS[kind];
+      const kind = str(p, "kind"); // memo_check | missing_facts | call_reminder; another value is a plain follow-up
+      const what = Object.hasOwn(FOLLOW_UP_WORDS, kind) ? FOLLOW_UP_WORDS[kind] : "follow-up";
       push({ target: "mail.compose", agent, action: "appear", text: `Follow-up to ${caseName()} · ${what}` });
       push({ target: "mail.send", agent, action: "click" });
       push({ target: "mail.sent", agent: null, action: "appear", text: "✓ Follow-up sent" });
-      orderLine(`${seatName(ev.actor)} followed up with ${caseName()} (${what})`, ev.actor, false);
+      orderLine(`${seatName(ev.actor)} followed up with ${caseName()} (${what})`, ev.actor, "dept");
       break;
     }
     case "post.published": {
@@ -654,15 +657,15 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       const url = safeUrl(strOrNull(p, "url"));
       const image = safeUrl(strOrNull(p, "image_url"));
       if (image.url) push({ target: "social.image", agent, action: "drag", meta: { image_url: image.url } });
-      push({ target: "social.caption", agent, action: "type", text, meta: { channel, image_rejected: image.rejected } });
+      push({ target: "social.caption", agent, action: "type", text, meta: { channel, image_url: image.url, image_rejected: image.rejected } });
       push({ target: "social.post", agent, action: "click" });
       push({ target: "social.posted", agent: null, action: "appear", text: `Posted to ${channel}`, meta: { url: url.url, url_rejected: url.rejected } });
-      orderLine(`${seatName(ev.actor)} posted to ${channelName(channel)}`, ev.actor, false);
+      orderLine(`${seatName(ev.actor)} posted to ${channelName(channel)}`, ev.actor, "dept");
       break;
     }
     case "dm.drafted": {
       push({ target: "social.dm", agent, action: "type", text: str(p, "text"), meta: { recipient: str(p, "recipient_label") } });
-      orderLine(`${seatName(ev.actor)} drafted a DM for your OK`, ev.actor, false);
+      orderLine(`${seatName(ev.actor)} drafted a DM for your OK`, ev.actor, "dept");
       break;
     }
     case "dm.sent_by_human": {
@@ -769,7 +772,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       Object.assign(nextTypes, approvalTypes, { [approvalId]: actionType });
       approvalTypes = nextTypes;
       push({ target: "rail.touches", agent: null, action: "appear", text: `${words(actionType)} approval`, meta: { approval_id: approvalId, action_type: actionType } });
-      orderLine(`Waiting for your OK: ${words(actionType)}`, APPROVAL_SEAT[actionType] ?? "cos", false);
+      orderLine(`Waiting for your OK: ${words(actionType)}`, approvalSeat(actionType), "id");
       break;
     }
     case "touch.training":
@@ -820,7 +823,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
         text: `${tool} · ${formatUsd(cost)}`,
         meta: { provider: str(p, "provider"), cost_usd: cost },
       });
-      orderLine(`${seatName(ev.actor)} bought ${toolLabel(tool)} · ${formatUsd(cost)}`, ev.actor, false);
+      orderLine(`${seatName(ev.actor)} bought ${toolLabel(tool)} · ${formatUsd(cost)}`, ev.actor, "id");
       break;
     }
     case "ceo.proposed":
@@ -843,7 +846,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
         meta: { decision, tool, agent: seat },
       });
       // D31: the Chief of Staff handing an order to a department is the order's first step.
-      if (seat === "cos" && tool === "send_to_agent") orderLine(decision === "allow" ? "Chief of Staff handed it to the team" : "Chief of Staff was stopped handing it on", "cos", true);
+      if (seat === "cos" && tool === "send_to_agent") orderLine(decision === "allow" ? "Chief of Staff handed it to the team" : "Chief of Staff was stopped handing it on", "cos", "handoff");
       break;
     }
     case "brief.generated": {

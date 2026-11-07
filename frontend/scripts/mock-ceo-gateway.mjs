@@ -381,7 +381,7 @@ const server = createServer(async (req, res) => {
     const e = emit("naive.confirm", { session_id: `ses_${events.length}`, agent: String(body.agent || "cos"), tool: String(body.tool || "board_write"), decision: body.decision === "deny" ? "deny" : "allow", read_people: false });
     return out(200, { id: e.id });
   }
-  if (req.method === "POST" && p === "/api/dev/order") return out(200, { id: order(String(body.text || "Advertise our firm on LinkedIn and X"), "typed") });
+  if (req.method === "POST" && p === "/api/dev/order") return out(200, { id: order(String(body?.text || "Advertise our firm on LinkedIn and X").slice(0, 200), "typed") });
   if (req.method === "POST" && p === "/api/dev/block") {
     const c = cases.find((x) => x.case_id === body.case_id);
     if (c) c.status = "BLOCKED";

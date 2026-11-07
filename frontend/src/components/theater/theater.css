@@ -14,7 +14,7 @@
   --s: 1; /* stage-mode type scale for the panes (set on main in stage mode; chrome keeps 1) */
   --rail: calc(300px * var(--k));
   position: relative; height: 100vh; width: 100%;
-  display: grid; grid-template-rows: calc(52px * var(--k)) minmax(0, 1fr) calc(64px * var(--k)); gap: calc(10px * var(--k)); padding: calc(12px * var(--k)) 16px;
+  display: grid; grid-template-rows: calc(52px * var(--k)) minmax(0, 0fr) minmax(0, 1fr) calc(64px * var(--k)); /* header, orders band (D31), panes, footer */ gap: calc(10px * var(--k)); padding: calc(12px * var(--k)) 16px;
   background: var(--bg); color: var(--text); overflow: hidden;
   font-family: var(--font-inter), Inter, system-ui, sans-serif;
 }
@@ -215,11 +215,21 @@
 }
 
 /* D31: CEO orders. A band between the header and the panes, only once the CEO has given an order.
-   Each card is one order; its lines are the firm's steps for it, newest at the bottom. */
-.theater.has-orders { grid-template-rows: calc(52px * var(--k)) minmax(0, .62fr) minmax(0, 1fr) calc(64px * var(--k)); transition: grid-template-rows calc(.6s * var(--t)) ease; }
+   Each card is one order; its lines are the firm's steps for it, newest at the bottom.
+   The grid always has four rows (the band's is 0fr without orders), so the band slides open and
+   closed instead of jumping every pane in one frame. */
+.theater { transition: grid-template-rows calc(.6s * var(--t)) ease; }
+.theater > header { grid-row: 1; }
+.theater > .orders { grid-row: 2; }
+.theater > main, .theater > .pane-fallback { grid-row: 3; }
+.theater > footer { grid-row: 4; }
+/* Without orders the empty band row would add one extra gap: take it back so the night layout is unchanged. */
+.theater:not(.has-orders) > main { margin-top: calc(-10px * var(--k)); }
+.theater.has-orders { grid-template-rows: calc(52px * var(--k)) minmax(0, .62fr) minmax(0, 1fr) calc(64px * var(--k)); }
 .theater.stage.has-orders { grid-template-rows: calc(52px * var(--k)) minmax(0, .85fr) minmax(0, 1fr) calc(64px * var(--k)); }
-/* The camera on a client's mail or sheet (the $85,165 → $450 moment): the orders band makes room. */
-.theater.has-orders:has(main[data-focus="mail"], main[data-focus="sheet"]) { grid-template-rows: calc(52px * var(--k)) minmax(0, .4fr) minmax(0, 1fr) calc(64px * var(--k)); }
+/* The camera on any pane (an ad being posted, a call booked, the $85,165 → $450 sheet): the band makes room. */
+.theater.has-orders:has(> main[data-focus]) { grid-template-rows: calc(52px * var(--k)) minmax(0, .4fr) minmax(0, 1fr) calc(64px * var(--k)); }
+.theater.stage.has-orders:has(> main[data-focus]) { grid-template-rows: calc(52px * var(--k)) minmax(0, .5fr) minmax(0, 1fr) calc(64px * var(--k)); }
 .theater.stage .orders { --s: 1.4; }
 .theater .orders { display: flex; flex-direction: column; gap: calc(8px * var(--k)); min-height: 0; }
 .theater .oh { display: flex; align-items: center; gap: 12px; min-width: 0; }
@@ -247,6 +257,8 @@
 /* The newest line is the first child (column-reverse): its auto margin packs a short list at the top,
    and a long one overflows off the top, so the oldest steps go first. */
 .theater .order li:first-child { margin-bottom: auto; }
+/* Older lines that overflow fade out at the top edge instead of being sliced through a word. */
+.theater .order ol { padding-top: .7em; -webkit-mask-image: linear-gradient(to bottom, transparent, #000 .7em); mask-image: linear-gradient(to bottom, transparent, #000 .7em); }
 .theater .order li { display: flex; align-items: center; gap: 8px; font-size: calc(13px * var(--k) * var(--s)); line-height: 1.3; animation: th-line-in calc(.4s * var(--t)) ease-out; }
 .theater .order li .lt { min-width: 0; overflow-wrap: anywhere; }
 .theater .order li .times { color: var(--dim); }
@@ -255,10 +267,10 @@
 @keyframes th-line-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .theater .order li { animation: none; }
-  .theater.has-orders { transition: none; }
+  .theater { transition: none; }
 }
 @media (max-width: 900px) {
-  .theater.has-orders, .theater.stage.has-orders { grid-template-rows: auto minmax(0, .8fr) minmax(0, 1fr) auto; }
+  .theater.has-orders, .theater.stage.has-orders, .theater.has-orders:has(> main[data-focus]), .theater.stage.has-orders:has(> main[data-focus]) { grid-template-rows: auto minmax(0, .8fr) minmax(0, 1fr) auto; }
   .theater .cards { grid-template-columns: minmax(0, 1fr); }
   .theater .order:not(.newest) { display: none; }
   .theater .desks { display: none; }
