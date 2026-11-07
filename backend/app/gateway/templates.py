@@ -140,6 +140,25 @@ SPECS: dict[str, Spec] = {
         "Hi there,\n\nThank you for applying. Our CEO has decided to go with another reviewer "
         "this time. A person made this decision, not the AI that ran the first screen.\n\n"
         + SIGN_OFF)),
+    # v1.11 (D31): agents-lane files in naive/templates; these built-ins stand in
+    "hr-outreach": Spec(("slot_time", "minutes"), lines=(AI_SCREEN_LINE,), builtin=(
+        "Hi there,\n\nU-Tax would like to offer you a paid 1-hour gig: reviewing Delaware "
+        "franchise tax memos our AI agents write, before they go to founders.\n\n"
+        + AI_SCREEN_LINE + "\n\nWe've sent a calendar invite for a {{minutes}}-minute intro "
+        "call at {{slot_time}}. If it doesn't suit you, reply with a time that does, or just "
+        "say no thanks.\n\n" + SIGN_OFF)),
+    "follow-up-memo_check": Spec(("greeting_name", "masked_name"), builtin=(
+        "Hi {{greeting_name}},\n\nJust checking that our franchise tax memo reached you, and "
+        "whether you have any questions about it. Reply here any time.\n\n" + SIGN_OFF)),
+    "follow-up-missing_facts": Spec(("greeting_name", "masked_name", "missing_list"),
+                                    required=("missing_list",), builtin=(
+        "Hi {{greeting_name}},\n\nA quick nudge: to finish your Delaware franchise tax check "
+        "we still need {{missing_list}}. Reply here and we'll take it from there.\n\n"
+        + SIGN_OFF)),
+    "follow-up-call_reminder": Spec(("greeting_name", "masked_name", "call_time"),
+                                    required=("call_time",), builtin=(
+        "Hi {{greeting_name}},\n\nA reminder of your 15-minute franchise tax review call at "
+        "{{call_time}}. The invite is in your calendar.\n\n" + SIGN_OFF)),
     "ceo-update-email": Spec(("headline", "lead", "summary", "action_line", "console_url"),
                              required=("summary",), builtin=(
         "U-Tax needs you: {{headline}}\n\n{{lead}}\n\n{{summary}}\n\n{{action_line}}\n\n"

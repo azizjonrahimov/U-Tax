@@ -388,7 +388,7 @@ def test_ceo_order_is_an_operating_touch_and_wakes_cos(h):
     assert h.events("voice.command")[0].payload == {"text": "open the firm", "channel": "typed",
                                                     "speaker": "ceo", "case_id": None}
     assert h.events("touch.operating")[0].payload["note"] == 'order: "open the firm"'
-    assert wakes == ["CEO: open the firm"]
+    assert wakes == ["CEO order_1: open the firm"]  # v1.11.1: the order id rides it
 
 
 def test_customer_voice_opens_a_priority_case(h):
@@ -450,7 +450,7 @@ def test_hr_flow_and_human_hire(h):
         assert h.do("hr_record", stage=stage, candidate_id="cand_1").error["code"] == "bad_input"
     h.ok("candidate_decision", candidate_id="cand_1", decision="hire")
     assert h.gw.state.hiring == {"applicants": 1, "screened": 0, "shortlisted": 1, "hired": 1,
-                                 "declined": 0}  # v1.7.1
+                                 "declined": 0, "sourced": 0, "contacted": 0}  # v1.11
     assert h.events("hr.hired")[0].actor == "ceo"
 
 
