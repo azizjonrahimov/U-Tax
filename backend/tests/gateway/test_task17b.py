@@ -129,3 +129,24 @@ def test_an_intents_file_that_is_not_an_object_never_stops_the_boot(make_harness
     (h.gw.settings.data_dir / "toolbuy-intents.json").write_text("[1, 2]", encoding="utf-8")
     h.restart()  # used to crash: list has no .items()
     assert h.gw.state.last_event_id >= 0
+
+
+def test_the_owner_resolves_a_newer_episode_over_http(make_harness):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    h = make_harness(admin_token="a" * 32)
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    resolve(h, charged=False)
+    buy(h.gw)  # episode 1
+    auth = {"Authorization": "Bearer " + "a" * 32}
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        def post(**body):
+            return client.post("/api/dev/resolve-purchase", headers=auth,
+                               json={"key": "k1", "charged": False, **body})
+
+        assert post().status_code == 409  # the replay: refused
+        r = post(episode=1)
+        assert r.status_code == 200 and r.json()["episode"] == 1

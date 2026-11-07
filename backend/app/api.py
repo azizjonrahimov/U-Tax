@@ -445,7 +445,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         A purchase resolves once, never while in flight; a cost over its ceiling (max_usd)
         needs over_ceiling: true, never over monid.MAX_PLAUSIBLE_USD."""
         require_admin(authorization)
-        picked = _pick(body, "key", "charged", "cost_usd", "over_ceiling")
+        picked = _pick(body, "key", "charged", "cost_usd", "over_ceiling", "episode")
         if not isinstance(picked.get("charged"), bool):  # "not charged" frees the key: say so
             raise APIError(400, "bad_input", "charged: true or false is required")
         return act("resolve_purchase", picked)

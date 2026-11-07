@@ -120,6 +120,9 @@ Unverified:
    "charged": false}` (not charged) or `{"key": "...", "charged": true, "cost_usd": "0.0400"}`
    (charged). A cost above the tool's `max_usd` also needs `"over_ceiling": true`; nothing
    over $1000 is accepted. A purchase still in flight can't be resolved; wait for it.
+   If a key went unsure again after an earlier "not charged" answer, the reply says
+   `resend with episode: N`: check that newer attempt in Monid's runs, then resend with
+   `"episode": N`. A replayed old answer never settles it.
    The purchase intents live in `UTAX_DATA_DIR` (the Render disk at /var/data/utax): never
    point it at a disk that is wiped on deploy, or a deploy mid-purchase forgets a charge.
 7. **Don't run two Render instances on one database.** Deploy stop-then-start.
@@ -211,15 +214,11 @@ Also accepted (tasks 13 to 18c):
     step 3).
   - `_supersede` is O(N).
 - **Task 15:** old events keep their mid-word summaries on replay.
-- **Task 17b (`buy_tool` money), open; `ADAPTER_TOOLBUY` stays `local` until it merges:**
-  - A replayed resolve can settle a newer, unchecked episode.
-  - A charged resolution whose commit ack is lost is not re-projected into the spend.
-  - A stale adapter hold after a lost not-charged ack gives a phantom "unsure".
-  - A charge under $0.0001 is refused.
-  - The held-by-process refusal fires even when the purchase is already logged.
-  - Every `_KeyedJson` write is fsynced.
-  - An intents file that isn't a JSON object crashes the boot.
-  - A dead prefetched `episode` field.
+- **Task 17b (`buy_tool` money):** 7 of its 8 items are fixed (episode binding on resolve,
+  a lost-ack charge caught up into the spend, no phantom hold, sub-$0.0001 charges booked as
+  $0.0001, the log checked first, a damaged intents file, the dead field). Left open: every
+  `_KeyedJson` write is fsynced. That's kept on purpose, because the AgentMail sent index
+  needs it to never send twice after a restart; only the toolbuy intents strictly need it.
 - **Task 18 to 18c (the CEO voice console):**
   - A typed "yes" on `/api/ceo/command` confirms the newest proposal firm-wide, so two
     consoles can confirm each other's.
