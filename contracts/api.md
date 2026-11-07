@@ -305,7 +305,14 @@ the tool names, kinds and args are fixed here:
     cancels open proposals.
   - v1.8.5 (18c): the readback of a voice `approve` for a `social_post` reads the **full post
     text** (≤ 255 chars), not the summary. `heard` and order text move to the event's private
-    part; the public `ceo.*` payload carries `heard_len` only.
+    part; the public `ceo.*` payload carries `heard_len` only. v1.8.6 (as built): a post readback is the text, the
+    appended link and the channel ("the <channel> post, word for word: …"), so it can run
+    past 255 chars. It lives in the private part, and the public `ceo.proposed` keeps the
+    summary. An order's public readback is `"An order for the Chief of Staff. Say confirm."`
+    with args `{text_len}`. A confirmed order is still public as `voice.command` (that's
+    the show). A post approval from before v1.8.5 (no full text) answers `409
+    console_only` by voice. Keep `PUBLIC_TALK_URL` fixed once set: a post's approval key
+    digests the text before the link.
   - **Proposals:**
     - `ceo.proposed` carries `case_id`.
     - The order text and `heard` are masked like a CEO order.
@@ -515,6 +522,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.8.6 (2026-11-07, backend 18c as built): post readback text+link+channel (private); `409 console_only`; order public readback literal.
 
 - v1.8.5 (2026-11-07, backend 18b/18c): `channel` on /api/ceo/tool; confirm fails closed on non a-z or any `?`; full-text social readback; `heard` private.
 

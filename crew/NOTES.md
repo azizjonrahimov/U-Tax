@@ -119,3 +119,4 @@ after the fact; a correction is a new line. The digest is derived from here.
   - heard and order text move to private, and the public ceo.* payload keeps heard_len (18c).
   - Housekeeping items: skipped.
   Contract v1.8.5.
+- 2026-11-07 12:52 local: OWNER started the tunnel: https://identify-racks-peter-brown.trycloudflare.com. Checked from outside: health 200; each of the 7 seats lists exactly its §6 tools; a cross-seat token gets 401. READY lane/backend b9a5e2b7e316 task 18c (backend/ only; secret scan clean; merged tree 1096 passed). MERGED as contract v1.8.6. DECISIONS (auto): accept the public confirmed order (it's the show); keep the post key as it is and set PUBLIC_TALK_URL once and never change it; accept the image_url not being read back.
