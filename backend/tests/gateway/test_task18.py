@@ -906,6 +906,10 @@ def test_a_voice_post_approve_reads_back_the_whole_post(h):
     readback = tool(h, "approve", approval="latest").data["readback"]
     assert POST in readback and h.gw.settings.public_talk_url in readback  # word for word
     assert POST not in tool(h, "deny", approval="latest").data["readback"]  # deny: the summary
+    # an unapproved post stays off the public log and the model's activity feed
+    proposed = h.events("ceo.proposed")[0]
+    assert POST not in proposed.payload["readback"] and POST in proposed.private["readback"]
+    assert POST not in json.dumps(tool(h, "recent_activity").data)
 
 
 def test_a_post_that_says_go_ahead_is_approved_by_click_only(h):
@@ -939,5 +943,32 @@ def test_an_order_is_rebuilt_from_its_private_part_after_a_restart(make_harness)
     h.restart()
     assert confirm(h, proposal["proposal_id"]).status == "done"
     assert "issued shares" in h.events("voice.command")[-1].payload["text"]
+    assert h.events("ceo.confirmed")[-1].private == {"heard": "confirm"}
     assert h.events("ceo.confirmed")[-1].payload == {
         "proposal_id": proposal["proposal_id"], "via": "voice", "heard_len": len("confirm")}
+
+
+def test_a_post_requested_before_full_readbacks_is_decided_in_the_console(h):
+    h.do("post_social", channel="x", text=POST)
+    [approval] = h.gw.state.approvals.values()
+    approval.detail = None  # requested before 18c: only the clipped summary is known
+    r = tool(h, "approve", approval="latest")
+    assert r.status == "refused" and r.error["code"] == "console_only"
+    assert tool(h, "deny", approval="latest").status == "done"  # a deny needs no full text
+
+
+def test_old_log_rows_never_show_the_ceos_words_to_the_theater(h):
+    from dataclasses import replace
+
+    proposal = tool(h, "order", text="Ask Team 3 for the issued shares").data
+    confirm(h, proposal["proposal_id"], heard="nope")
+    proposed, cancelled = h.events("ceo.proposed")[0], h.events("ceo.cancelled")[-1]
+    old_proposed = replace(proposed, payload={**proposed.payload, "args": {
+        "text": "Ask Team 3 for the issued shares"}, "readback": proposal["readback"]})
+    old_cancelled = replace(cancelled, payload={
+        "proposal_id": proposal["proposal_id"], "via": "voice", "heard": "nope",
+        "reason": "spoken"})
+    blob = json.dumps([h.gw.public_event(old_proposed), h.gw.public_event(old_cancelled)])
+    assert "issued shares" not in blob and "nope" not in blob
+    assert h.gw.public_event(old_cancelled, admin=True)["payload"]["heard"] == "nope"
+    assert h.events("ceo.cancelled")[-1].private == {"heard": "nope"}

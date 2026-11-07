@@ -493,6 +493,8 @@ class Gateway:
         injection, every event of that case, earlier ones too, has its subject and body
         replaced. The admin token still sees the originals."""
         out = event.public()
+        if not admin:
+            out = self._without_ceo_words(event, out)
         if admin or not self.flagged_injection(event.case_id):
             return out
         payload = dict(out["payload"])
@@ -504,6 +506,23 @@ class Gateway:
             payload["text"] = self.HIDDEN
         if isinstance(payload.get("quotes"), dict):
             payload["quotes"] = {k: self.HIDDEN for k in payload["quotes"]}
+        return {**out, "payload": payload}
+
+    ORDER_READBACK_PUBLIC = "An order for the Chief of Staff. Say confirm."
+
+    def _without_ceo_words(self, event: Event, out: dict[str, Any]) -> dict[str, Any]:
+        """v1.8.5: the CEO's spoken words and order text are private. Rows written before
+        that kept them in the payload; theater readers get the same shape as new rows."""
+        payload = out["payload"]
+        if event.type in ("ceo.confirmed", "ceo.cancelled") and "heard" in payload:
+            payload = {k: v for k, v in payload.items() if k != "heard"}
+            payload["heard_len"] = len(out["payload"]["heard"] or "")
+        elif (event.type == "ceo.proposed" and payload.get("tool") == "order"
+              and "text" in (payload.get("args") or {})):
+            payload = {**payload, "args": {"text_len": len(payload["args"]["text"] or "")},
+                       "readback": self.ORDER_READBACK_PUBLIC}
+        else:
+            return out
         return {**out, "payload": payload}
 
     def public_case_cap(self) -> int:
@@ -2920,8 +2939,12 @@ class Gateway:
         public_args, public_readback, private = pinned, readback, None
         if tool == "order":  # v1.8.5: the CEO's words stay private; the theater sees a length
             public_args = {"text_len": len(pinned["text"])}
-            public_readback = "An order for the Chief of Staff. Say confirm."
+            public_readback = self.ORDER_READBACK_PUBLIC
             private = {"args": pinned, "readback": readback}
+        elif approval is not None and approval.detail and approval.detail in readback:
+            # a post read back word for word: unapproved agent text stays off the public log
+            public_readback = readback.replace(approval.detail, approval.summary)
+            private = {"readback": readback}
         events.append(NewEvent(type="ceo.proposed", actor="ceo", case_id=case_id, payload={
             "proposal_id": proposal_id, "tool": tool, "args": public_args,
             "readback": public_readback, "expires_at": expires_at, "source": source},

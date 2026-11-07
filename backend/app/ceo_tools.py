@@ -278,6 +278,10 @@ def pin_decision(verb: str) -> Callable[[Any, dict], tuple[dict, str]]:
                                                  f"{DECIDED.get(approval.decision, approval.decision)}")
         if gw.flagged_injection(approval.case_id):
             raise ToolRefused("flagged", FLAGGED_DECISION)
+        if verb == "Approve" and approval.action_type == "social_post" and not approval.detail:
+            # requested before posts were read back word for word: never approve by summary
+            raise ToolRefused("console_only", "that post can't be read back in full: "
+                                              "decide it in the console")
         label = trust_label(approval.action_type)
         trust = gw.state.trust.get(approval.action_type)
         others = _waiting_ids(gw, approval.action_type, exclude=approval.approval_id)
