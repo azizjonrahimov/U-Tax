@@ -137,3 +137,9 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-07 14:26 local: READY lane/backend-20 cdf07f6 task 20 (backend/ only; secret scan clean; merged tree 1149 passed). MERGED. The owner step: the webhook repoint, now runnable from the main checkout.
 - 2026-11-07 14:29 local: OWNER: "allow handoffs". D29 widened, contract v1.10.3: the resolver also allows send_to_agent, wait_for_agents and list_agents, for the CoS only. Backend: a small fix before continuing task 21.
 - 2026-11-07 14:33 local: READY lane/frontend 6892168c3321 (the naive.confirm rail + D30 voice; export 413 passed + build) MERGED. READY lane/backend-handoffs 808177e9ab02 (CoS coordinator tools; secret scan clean) MERGED. The live gateway was restarted with both.
+- 2026-11-07 14:45 local: The first live case (case_1 via a real AgentMail email) found 3 bugs:
+  (1) NO Naïve waker exists (only the local driver calls on_wake). Backend task 22.
+  (2) The resolver never re-answers a re-confirm, because Naïve reuses the tool_call_id; the session is stuck awaiting_approval. Backend fix, URGENT.
+  (3) The CoS on glm-5.3-flash wrote board cards without a title/body and with a bogus blocked_by. Agents: move to anthropic/claude-haiku-5.5 and fix the CoS prompt.
+  READY lane/backend-21 cf6d3b96d0f7 (ElevenLabs TTS; merged tree 1211 passed) MERGED; live ADAPTER_VOICE=elevenlabs.
+  OWNER's live-demo spec → DECISION D31 / contract v1.11: make_ad, source_candidates, hr_outreach (consenting addresses only, no cold email to scraped strangers), follow_up; HR_CANDIDATES; models on claude-haiku-5.5.
