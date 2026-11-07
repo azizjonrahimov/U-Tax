@@ -471,3 +471,46 @@ def test_a_server_that_ignores_the_agent_filter_answers_nothing_extra(h):
 
     asyncio.run(go())
     assert fake.confirms == [] and not h.events("naive.confirm")
+
+
+# ---------------------------------------------------------------- 19b
+
+
+def test_a_reask_with_the_same_tool_call_id_is_answered_again(h):
+    # live: a CoS session idled awaiting_approval twice with the same tc_ id; the second
+    # ask was skipped (its confirm replayed the first under the same Idempotency-Key)
+    fake = FakeNaive(h.gw, {"ses_1": waiting("chief-of-staff", tool_call("board_write", "tc_76"))})
+    keys = []
+    real = fake.__call__
+
+    def recording(request):
+        if request.method == "POST":
+            keys.append(request.headers.get("Idempotency-Key"))
+        return real(request)
+
+    async def go():
+        client = NaiveClient("nk_test", transport=httpx.MockTransport(recording))
+        confirmer = NaiveConfirmer(h.gw, client)
+        try:
+            await confirmer.boot()
+            await confirmer.poll_once()
+            fake.sessions["ses_1"].update(waiting("chief-of-staff",
+                                                  tool_call("board_write", "tc_76")))
+            confirmer._quiet.clear()
+            await confirmer.poll_once()  # the same id, asked again
+        finally:
+            await client.aclose()
+
+    asyncio.run(go())
+    assert [c["tool_call_id"] for c in fake.confirms] == ["tc_76", "tc_76"]
+    assert len(set(keys)) == 2  # never the first answer replayed
+    assert fake.sessions["ses_1"]["status"] == "running"
+    assert len(h.events("naive.confirm")) == 2  # each ask is its own event
+
+
+def test_an_ask_with_a_seq_uses_it_for_both_keys(h):
+    action = dict(tool_call("board_read", "tc_9"), seq=41)
+    fake = FakeNaive(h.gw, {"ses_1": waiting("qa", action)})
+    run(h.gw, fake, polls=1)
+    [event] = h.events("naive.confirm")
+    assert event.idempotency_key.endswith(":tc_9:41")
