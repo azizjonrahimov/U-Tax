@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import re
 import logging
 import threading
 import time
@@ -395,6 +396,18 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def ceo_command(body: dict = Body(...), authorization: str | None = Header(None)):
         require_admin(authorization)
         return _console("ceo_command", _pick(body, "text"))
+
+    @router.get("/assets/{name}")
+    def asset(name: str):
+        """v1.11 make_ad: the firm's ad PNGs, public (X and LinkedIn fetch them). Only
+        ad_<n>.png from the gateway's own assets folder: no other file can be named."""
+        if not re.fullmatch(r"ad_[0-9]{1,6}\.png", name):
+            raise APIError(404, "not_found", "no such asset")
+        path = gw().settings.data_dir / "assets" / name
+        if not path.is_file():
+            raise APIError(404, "not_found", "no such asset")
+        return Response(content=path.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
 
     @router.get("/api/brief/audio")
     def brief_audio(request: Request, event_id: int = Query(..., ge=1),

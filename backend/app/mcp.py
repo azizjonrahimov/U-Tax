@@ -130,7 +130,36 @@ TOOLS: dict[str, dict[str, Any]] = {
                                       "key": {"type": "string",
                                               "description": "your id for this purchase"}},
                                      ["tool", "input", "key"])},
+    # v1.11 (D31): the live CEO orders
+    "make_ad": {"description": "Render the firm's ad image (a PNG on the gateway's host); "
+                               "pass its image_url to post_social.",
+                "inputSchema": _obj({"kind": {"type": "string", "enum": ["client", "hiring"]},
+                                     "headline": {"type": "string", "maxLength": 80}},
+                                    ["kind", "headline"])},
+    "source_candidates": {"description": "Public leads for the reviewer gig (Monid search): "
+                                         "headline and public URL only, never an address.",
+                          "inputSchema": _obj({"count": {"type": "integer", "minimum": 1,
+                                                         "maximum": 5}}, ["count"])},
+    "list_candidates": {"description": "Every candidate, masked: id, label, stage, "
+                                       "has_address, offered_slots.",
+                        "inputSchema": _obj({})},
+    "hr_outreach": {"description": "Email a candidate the firm holds a consented address for "
+                                   "(the gig + a call invite at one of their offered_slots).",
+                    "inputSchema": _obj({"candidate_id": {"type": "string"},
+                                         "slot": {"type": "string",
+                                                  "description": "ISO 8601 UTC"}},
+                                        ["candidate_id", "slot"])},
+    "follow_up": {"description": "A templated follow-up in the client's thread (1 a day).",
+                  "inputSchema": _obj({**_CASE, "kind": {
+                      "type": "string", "enum": ["memo_check", "missing_facts",
+                                                 "call_reminder"]}}, ["case_id", "kind"])},
 }
+
+# v1.11.1: every tool takes the CEO order it serves (from the card); the gateway checks it
+for _spec in TOOLS.values():
+    _spec["inputSchema"]["properties"]["order_id"] = {
+        "type": "string", "pattern": "^order_[0-9]+$",
+        "description": "optional: the order_<id> from the card, when it serves a CEO order"}
 assert set(TOOLS) == set(TOOL_ACTORS), "every §6 tool needs a schema"
 
 

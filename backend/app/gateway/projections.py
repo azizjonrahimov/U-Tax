@@ -163,10 +163,12 @@ class State:
     public_cases_by_day: dict[str, int] = field(default_factory=dict)  # task 13: UTC date -> n
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
     tts_talk_chars_by_day: dict[str, int] = field(default_factory=dict)  # v1.10 §5c budget
+    ads_created: int = 0  # v1.11: make_ad numbers its PNGs
+    candidate_call_starts: set[str] = field(default_factory=set)  # v1.11: held like case calls
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
                                                            "shortlisted": 0, "hired": 0,
-                                                           "declined": 0})
+                                                           "declined": 0, "sourced": 0, "contacted": 0})
     cap_log: dict[str, list[str]] = field(default_factory=lambda: {t: [] for t in TRUST_TYPES})
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
     last_login_brief: dict | None = None
@@ -404,9 +406,26 @@ class State:
                 case.memo_result = dict(case.result)
 
     def _on_call_booked(self, e: Event) -> None:
+        if e.payload.get("kind") == "candidate":  # v1.11.1: no case; the slot is held
+            if e.status == "ok":
+                self.candidate_call_starts.add(e.payload["start"])
+            return
         case = self._case(e)
         if case is not None and e.status == "ok":
             case.call = dict(e.payload)
+
+    def _on_ad_created(self, e: Event) -> None:
+        self.ads_created += 1
+
+    def _on_hr_sourced(self, e: Event) -> None:
+        self.hiring["sourced"] = self.hiring.get("sourced", 0) + int(e.payload["count"])
+
+    def _on_hr_outreach(self, e: Event) -> None:
+        self.hiring["contacted"] = self.hiring.get("contacted", 0) + 1
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is not None:
+            cand["contacted"] = e.payload["slot"]
+        self.candidate_call_starts.add(e.payload["slot"])
 
     def _on_phone_checked(self, e: Event) -> None:
         case = self._case(e)
@@ -521,6 +540,8 @@ class State:
         if private.get("sender_key"):  # applicant mail: gateway-only contact details
             cand["sender_key"] = private["sender_key"]
             cand["reply_to"] = private.get("reply_to")
+        if private.get("listed"):  # v1.11: from the CEO's HR_CANDIDATES (no questionnaire)
+            cand["listed"] = True
         if stage == "applicant" and private.get("text"):
             if cand.get("texts"):  # every mail after the first is an answer
                 cand["answers"] = cand.get("answers", 0) + 1

@@ -71,6 +71,8 @@ class Settings:
     hubspot_token: str = ""  # HUBSPOT_PIPELINE / HUBSPOT_STAGE_MAP are read by the adapter
     monid_api_key: str = ""  # MONID_TOOLS / MONID_DAILY_CAP_USD are read by the adapter
     public_asset_hosts: frozenset[str] = frozenset()  # v1.6.4: post image_url hosts
+    public_url: str = ""  # v1.11: the gateway's own https base (make_ad serves /assets/ there)
+    hr_candidates: str = ""  # v1.11: the CEO's own consenting list, "Name <email>, ..."
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"
     naive_confirm: bool = True  # v1.9 §6b-bis: answer Naïve's confirms (UTAX_NAIVE_CONFIRM=off)
@@ -152,4 +154,6 @@ class Settings:
             naive_social_identity=_env("NAIVE_SOCIAL_IDENTITY"),
             public_asset_hosts=frozenset(h.strip().lower() for h in
                                          _env("PUBLIC_ASSET_HOSTS").split(",") if h.strip()),
+            public_url=_env("UTAX_PUBLIC_URL").rstrip("/"),
+            hr_candidates=_env("HR_CANDIDATES"),
         )
