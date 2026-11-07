@@ -225,3 +225,104 @@ def test_every_tool_offers_order_id_and_the_new_tools_have_schemas():
 
     assert set(TOOLS) == set(TOOL_ACTORS)
     assert all("order_id" in spec["inputSchema"]["properties"] for spec in TOOLS.values())
+
+
+# ---------------------------------------------------------------- review 1
+
+
+def test_a_failed_outreach_retry_keeps_its_slot_and_mails_once(h, monkeypatch):
+    from app.gateway.ports import Unavailable
+
+    auto_email(h)
+    first, second = h.gw.offered_slots(None)[:2]
+    real = h.gw.ports.calendar.book
+
+    def down(*a, **k):
+        raise Unavailable("calendar down")
+
+    monkeypatch.setattr(h.gw.ports.calendar, "book", down)
+    r = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": first}, actor="hr")
+    assert r.status == "error" and h.outbox() == []  # the invite failed first: no mail
+    assert first not in h.gw.offered_slots(None)  # held while it's under way
+    other = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": second},
+                         actor="hr")
+    assert other.error["code"] == "slot_bound" and other.data["slot"] == first
+    monkeypatch.setattr(h.gw.ports.calendar, "book", real)
+    again = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": first}, actor="hr")
+    assert again.status == "done" and len(h.outbox()) == 1  # one mail, for that slot
+
+
+def test_an_approval_for_one_slot_never_sends_another(h):
+    first, second = h.gw.offered_slots(None)[:2]
+    asked = h.gw.perform("hr_outreach", {"candidate_id": "cand_2", "slot": first}, actor="hr")
+    assert asked.status == "needs_approval"
+    h.ok("approve", approval_id=asked.approval_id, decision="allow")
+    h.ok("set_trust", action_type="email", state="ASK")  # the approve flipped it to AUTO
+    other = h.gw.perform("hr_outreach", {"candidate_id": "cand_2", "slot": second},
+                         actor="hr")
+    assert other.status == "needs_approval" and h.outbox() == []
+
+
+def test_a_repeat_ad_is_served_on_todays_host(h, make_harness):
+    url = h.gw.perform("make_ad", {"kind": "client", "headline": "Pay less Delaware tax"},
+                       actor="mkt").data["image_url"]
+    (h.gw.settings.data_dir / "assets" / "ad_1.png").unlink()  # say the disk was wiped
+    from dataclasses import replace
+
+    h.settings = replace(h.settings, public_url="https://new-tunnel.trycloudflare.com")
+    gw = h.restart()
+    again = gw.perform("make_ad", {"kind": "client", "headline": "Pay less Delaware tax"},
+                       actor="mkt").data
+    assert url.startswith(PUBLIC)
+    assert again["image_url"] == "https://new-tunnel.trycloudflare.com/assets/ad_1.png"
+    assert (gw.settings.data_dir / "assets" / "ad_1.png").is_file()
+
+
+# ---------------------------------------------------------------- review 2
+
+
+def test_a_case_worked_for_a_ceo_order_still_passes_qa(h):
+    # the order id groups steps on the theater; it is never part of the tax result QA checks
+    from .conftest import HAPPY_QUOTES
+
+    h.ok("voice", text="process the new case", speaker="ceo", channel="typed")
+    oid = f"order_{h.events('voice.command')[-1].id}"
+    case_id = h.new_case()
+    for name, args, actor in (
+            ("extract_facts", {"quotes": HAPPY_QUOTES, "incorporated_delaware": True,
+                               "foreign_owner_25": False}, "intake"),
+            ("compute_tax", {}, "tax")):
+        r = h.gw.perform(name, {"case_id": case_id, "order_id": oid, **args}, actor=actor)
+        assert r.status == "done", (name, r.error)
+    assert h.events("tax.computed")[-1].payload["order_id"] == oid
+    assert "order_id" not in h.gw.state.cases[case_id].result
+    qa = h.gw.perform("qa_check", {"case_id": case_id, "order_id": oid}, actor="qa")
+    assert qa.status == "done" and qa.data["passed"], qa.data
+
+
+def test_an_order_id_is_normalized_and_a_bad_lookup_is_ignored(h, monkeypatch):
+    h.ok("voice", text="advertise", speaker="ceo", channel="typed")
+    eid = h.events("voice.command")[-1].id
+    assert h.gw._valid_order(f"order_0{eid}") == f"order_{eid}"
+
+    def broken(*a, **k):
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(h.gw.store, "since", broken)
+    assert h.gw._valid_order(f"order_{eid}") is None
+
+
+def test_the_own_host_is_an_image_host_only_for_ad_pngs(h):
+    assert h.gw._asset_url_ok(f"{PUBLIC}/assets/ad_3.png")
+    for bad in (f"{PUBLIC}/api/state?token=x", f"{PUBLIC}/assets/ad_3.png?x=1",
+                f"{PUBLIC}/hooks/agentmail", "http://gw.u-tax.test/assets/ad_3.png"):
+        assert not h.gw._asset_url_ok(bad), bad
+
+
+def test_a_follow_up_approval_names_its_kind(h):
+    case_id = h.to_sent()
+    h.ok("set_trust", action_type="email", state="ASK")  # the memo approval made it AUTO
+    asked = h.gw.perform("follow_up", {"case_id": case_id, "kind": "memo_check"},
+                         actor="intake")
+    assert asked.status == "needs_approval"
+    assert "memo check" in h.gw.state.approvals[asked.approval_id].summary

@@ -6,7 +6,7 @@ the whole log) and after every append. So a restart rebuilds exactly the same st
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
@@ -233,6 +233,9 @@ class State:
     # ---------------------------------------------------------------- apply
 
     def apply(self, e: Event) -> None:
+        if "order_id" in e.payload:  # v1.11.1: a copied payload (a tax result QA re-checks,
+            # a call, a proposal) must stay exactly the action's own data
+            e = replace(e, payload={k: v for k, v in e.payload.items() if k != "order_id"})
         self.last_event_id = max(self.last_event_id, e.id)
         if e.cost_usd is not None and e.type == "cost.booked":
             if e.idempotency_key:  # 17b: a booking whose commit ack was lost is caught up once

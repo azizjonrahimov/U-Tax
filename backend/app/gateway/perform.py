@@ -400,6 +400,8 @@ class Gateway:
         from app.gateway.adapters.local import _KeyedJson
 
         self._buy_intents = _KeyedJson(settings.data_dir / "toolbuy-intents.json")
+        # v1.11: an outreach's slot, written before its email: a retry can't pick another
+        self._outreach_intents = _KeyedJson(settings.data_dir / "outreach-intents.json")
         self._restore_toolbuy()
         self._record_leftovers()
         self._expire_proposals()
@@ -1584,6 +1586,10 @@ class Gateway:
         until those slots pass; never earlier than 30 min from now."""
         booked = {c.call["start"] for c in self.state.cases.values() if c.call}
         booked |= self.state.candidate_call_starts  # v1.11: one calendar for both
+        try:  # an outreach under way holds its slot before its event is written
+            booked |= {v for v in self._outreach_intents.load().values() if isinstance(v, str)}
+        except (OSError, ValueError, AttributeError):
+            log.exception("outreach intents unreadable; their slots are not held")
         # e2e finding: a time another case is waiting on the CEO for (or was approved for,
         # not yet booked) is held, so two cases are never offered and approved the same slot
         for approval in self.state.approvals.values():
@@ -2822,8 +2828,10 @@ class Gateway:
             return False
         own = (urlsplit(self.settings.public_url).hostname or "").lower() \
             if self.settings.public_url else ""
+        ours = bool(own) and host == own and not parts.query \
+            and re.fullmatch(r"/assets/ad_[0-9]{1,6}\.png", parts.path or "") is not None
         return parts.scheme == "https" and not parts.username and not parts.password \
-            and (host in self.settings.public_asset_hosts or (bool(own) and host == own))
+            and (host in self.settings.public_asset_hosts or ours)
 
     # ------------------------------------------------------------ v1.11 (D31) CEO orders
 
@@ -2832,11 +2840,15 @@ class Gateway:
         if not isinstance(raw, str) or not re.fullmatch(r"order_[0-9]{1,12}", raw):
             return None
         event_id = int(raw.split("_", 1)[1])
-        found = next(iter(self.store.since(event_id - 1, limit=1)), None)
+        try:  # an order id is a hint: a store hiccup ignores it, never fails the tool
+            found = next(iter(self.store.since(event_id - 1, limit=1)), None)
+        except Exception:  # noqa: BLE001 - see above
+            log.exception("order id %s not checked", raw)
+            return None
         if (found is None or found.id != event_id or found.type != "voice.command"
                 or found.payload.get("speaker") != "ceo"):
             return None
-        return raw
+        return f"order_{event_id}"  # "order_07" groups with order_7
 
     def _seed_hr_candidates(self) -> None:
         """HR_CANDIDATES (the CEO's own list) become candidates once, with their address
@@ -2896,7 +2908,13 @@ class Gateway:
         key = f"ad:{_digest([kind, headline])}"
         done = self._done_from(key)
         if done is not None:
-            return {"image_url": done.payload["image_url"], "duplicate": True}
+            # the same ad on today's host (a quick tunnel's host changes on restart)
+            name = done.payload["image_url"].rsplit("/", 1)[-1]
+            path = self.settings.data_dir / "assets" / name
+            if not path.is_file():
+                ad_image.render(kind, headline, path)
+            return {"image_url": f"{self.settings.public_url}/assets/{name}",
+                    "duplicate": True}
         number = self.state.ads_created + 1
         name = f"ad_{number}.png"
         ad_image.render(kind, headline, self.settings.data_dir / "assets" / name)
@@ -2919,10 +2937,10 @@ class Gateway:
         tools = getattr(self.ports.toolbuy, "tools", {}) or {}
         if self.ports.toolbuy.provider == "local" or self.SOURCE_TOOL not in tools:
             return {"off": True}
-        with self._lock:
-            number = sum(1 for e in self.store.since(0) if e.type == "hr.sourced") + 1
+        # its own namespace (never an mkt buy_tool key); a new key each minute, so a
+        # refused or unsure one never blocks every later search
         sub = {"tool": self.SOURCE_TOOL, "input": {"query": self.SOURCE_ROLE},
-               "key": f"source_{number}"}
+               "key": f"hr_source_{iso_ts(self._now())[:16].replace(':', '')}"}
         fetched = self._buy_fetch(sub)
         if sub.get("_buy_reserved"):
             args["_buy_reserved"] = sub["_buy_reserved"]
@@ -2991,21 +3009,28 @@ class Gateway:
             start = iso_ts(parse_ts(slot))
         except ValueError as err:
             raise Refused("bad_input", "slot must be ISO 8601 with a timezone") from err
+        bound = self._outreach_intents.get(candidate_id)
+        if bound and bound != start:  # an earlier try may have mailed that time already
+            raise Refused("slot_bound", f"{candidate_id}'s outreach is for {bound}; retry with "
+                                        "that slot", {"slot": bound})
         offered = self.offered_slots(None)
-        if start not in offered:
+        if start not in offered and start != bound:
             raise Refused("slot_not_offered", "slot must be one of get_candidate's "
                                               "offered_slots", {"offered_slots": offered})
         label = cand["name_masked"]
-        self._gate("email", key, _cap(f"{self._first('email')}outreach email + call invite: "
-                                      f"{label} at {start}"), None)
+        # the approval names the time (like book_call): an OK for X never sends Y
+        self._gate("email", f"{key}:{start}", _cap(
+            f"{self._first('email')}outreach email + call invite: {label} at {start}"), None)
+        self._outreach_intents.put(candidate_id, start)  # before anything leaves
         body = self.templates.render("hr-outreach", {"slot_time": _when(start),
                                                      "minutes": str(SLOT_MINUTES)})
-        self._with_retry("outreach email", lambda: self.ports.mail.send(
-            OutMail(to=cand["reply_to"], subject="U-Tax: a paid 1-hour review gig", body=body,
-                    inbox="hiring"), key))
+        # the invite first: the email says it was sent
         self._with_retry("candidate call", lambda: self.ports.calendar.book(
             Slot(start=start, minutes=SLOT_MINUTES), cand["reply_to"],
             "U-Tax: intro call for the memo review gig", f"{key}:call"))
+        self._with_retry("outreach email", lambda: self.ports.mail.send(
+            OutMail(to=cand["reply_to"], subject="U-Tax: a paid 1-hour review gig", body=body,
+                    inbox="hiring"), key))
         self._emit([
             NewEvent(type="hr.outreach", actor="hr", provider=self.ports.mail.provider,
                      payload={"candidate_id": candidate_id, "label": label, "slot": start},
@@ -3043,8 +3068,9 @@ class Gateway:
         values = ask_values(case.masked_name, case.missing, [],
                             greeting_name=self._greeting(case))
         values["call_time"] = _when(case.call["start"]) if case.call else ""
-        self._gate("email", key, _cap(f"{self._first('email')}follow-up ({kind.replace('_', ' ')})"
-                                      f": {case.masked_name}"), case.case_id)
+        self._gate("email", f"{key}:{kind}", _cap(
+            f"{self._first('email')}follow-up ({kind.replace('_', ' ')}): {case.masked_name}"),
+            case.case_id, public=case.priority)
         body = self.templates.render(f"follow-up-{kind}", values)
         thread = case.message_ids[-1] if case.message_ids else None
         self._with_retry("follow-up email", lambda: self.ports.mail.send(
