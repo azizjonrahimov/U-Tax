@@ -144,3 +144,4 @@ after the fact; a correction is a new line. The digest is derived from here.
   READY lane/backend-21 cf6d3b96d0f7 (ElevenLabs TTS; merged tree 1211 passed) MERGED; live ADAPTER_VOICE=elevenlabs.
   OWNER's live-demo spec → DECISION D31 / contract v1.11: make_ad, source_candidates, hr_outreach (consenting addresses only, no cold email to scraped strangers), follow_up; HR_CANDIDATES; models on claude-haiku-5.5.
 - 2026-11-07 14:48 local: READY lane/backend-22 d743a23caa50 (the Naïve waker; secret scan clean). MERGED. Its open items are accepted for the demo (request-thread wakes, parallel sessions).
+- 2026-11-07 14:49 local: READY lane/backend-19b 3f001bf2dfab (the re-ask fix; root cause: the same Idempotency-Key replayed the first answer). MERGED.
