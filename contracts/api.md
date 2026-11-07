@@ -155,7 +155,11 @@ For Replay mode and catch-up. Ordered by `id`.
 
 - `POST /api/approve` `{approval_id, decision: "allow"|"deny", note}` → `200 {"ok": true}`.
   A new approval request for the same case and kind **supersedes** older pending ones (they answer
-  `409 superseded`), so the CEO can never approve a figure they didn't see.
+  `409 superseded` `{approval_id, superseded_by}`, newest pending id or null), so the CEO can never
+  approve a figure they didn't see. A case reopen (CEO unblock, client mail on an open case, new
+  `facts.extracted`) also supersedes that case's pending approvals; a reply with no changed facts
+  doesn't. No event is written for a supersede tonight: on `409 superseded` the console drops the
+  entry and refetches `/api/state`. (Post-hackathon: an `approval.superseded` event.)
   Writes `touch.training` (first approval of an action type) or `touch.operating`, plus
   `trust.changed` when the type flips. Idempotent by `approval_id`.
 - `POST /api/voice` `{text, channel: "voice"|"typed", speaker: "customer"|"ceo", reply_email}` →
@@ -383,6 +387,8 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.8 (2026-11-07, backend task 14): supersede triggers and `superseded_by`; console refetches on 409.
 
 - v1.7.7 (2026-11-07, frontend /ceo review): superseded approvals; `/api/trust` ASK and RESUME;
   allowed-while-paused approvals carried out on resume; event mode refuses empty admin/theater tokens.
