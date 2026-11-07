@@ -823,3 +823,34 @@ def test_a_resume_whose_target_moved_is_superseded(h):
     assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
     assert h.gw.state.trust["social_post"] == "PAUSED"
 
+
+
+# ---------------------------------------------------------------- task 18b
+
+
+def test_the_stop_button_logs_a_click(make_harness):
+    h = make_harness(admin_token=ADMIN, theater_token=THEATER)
+    with http(h) as client:
+        def stop(**extra):
+            return client.post("/api/ceo/tool", headers=AUTH, json={
+                "name": "pause", "args": {"action_type": "social_post"}, **extra})
+
+        assert stop(channel="sideways").status_code == 400
+        assert stop(channel="click").status_code == 200
+    assert touches(h)[-1].payload["channel"] == "click"
+    assert tool(h, "pause", action_type="email").status == "done"  # the default: voice
+    assert touches(h)[-1].payload["channel"] == "voice"
+
+
+@pytest.mark.parametrize("heard", ["I can't confirm that", "I cannot confirm that yet",
+                                   "please confirm the figure first"])
+def test_a_confirm_word_inside_a_sentence_is_not_a_confirm(make_harness, heard):
+    # the frontend's red team: the whole utterance must be the phrase, not contain it
+    assert not ceo_tools.heard_confirms(heard, "approve", "Approve x. Say confirm.")
+    h = make_harness(admin_token=ADMIN, theater_token=THEATER)
+    pending_memo(h)
+    proposal = tool(h, "approve", approval="latest").data
+    with http(h) as client:
+        r = voice_confirm(client, proposal["proposal_id"], heard)
+    assert r.status_code == 400 and r.json()["error"]["code"] == "not_a_confirm"
+    assert all(a.decision is None for a in h.gw.state.approvals.values())
