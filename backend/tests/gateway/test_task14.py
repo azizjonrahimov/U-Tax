@@ -114,6 +114,32 @@ def test_a_back_and_forth_mails_the_ceo_once_per_request(make_harness):
     assert len(h.events("ceo.notified")) == notices  # no third "Approve?" mail
 
 
+def test_a_re_ask_after_the_newer_one_was_decided_mails_the_ceo(make_harness):
+    # review 2: the throttle hid a request nobody was told about
+    h = make_harness(ceo_email="ceo@u-tax.dev")
+    case_id, first, second = two_slot_requests(h)
+    h.ok("approve", approval_id=second, decision="deny")
+    notices = len(h.events("ceo.notified"))
+    slot_a = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    assert h.do("book_call", case_id=case_id, start=slot_a).status == "needs_approval"
+    assert len(h.events("ceo.notified")) == notices + 1
+
+
+def test_a_scheduling_reply_with_digits_keeps_the_call_invite(h):
+    # review 2: "3pm on the 12th?" re-reads the case but changes no fact
+    case_id = h.to_sent()
+    slot = h.ok("get_case", case_id=case_id)["offered_slots"][0]
+    pending = h.do("book_call", case_id=case_id, start=slot)
+    h.ok("inject_email", **{"from": "founder@team7.dev", "subject": "re",
+                            "body": "Great, can we talk at 3pm on the 12th?"})
+    assert h.gw.state.cases[case_id].status == "INTAKE_PENDING"
+    back = h.ok("extract_facts", case_id=case_id, quotes=HAPPY_QUOTES,
+                incorporated_delaware=True, foreign_owner_25=False)
+    assert back["unchanged"] is True and h.gw.state.cases[case_id].status == "SENT"
+    h.ok("approve", approval_id=pending.approval_id, decision="allow")
+    assert h.ok("book_call", case_id=case_id, start=slot)["start"] == slot
+
+
 def test_a_other_cases_and_types_are_not_superseded(h):
     a = h.to_qa_passed()
     b = h.to_qa_passed(h.new_case(sender="b@team2.dev"))
@@ -248,6 +274,10 @@ def test_b_resume_to_ask_wakes_the_cases_the_pause_held(h):
     h.ok("set_trust", action_type="email", state="PAUSED")
     wakes.clear()
     h.ok("set_trust", action_type="email", state="ASK")
+    assert f"New case {case_id}" in wakes
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    wakes.clear()
+    h.ok("ceo_stop", action_type="email")  # review 2: a stop out of PAUSED resumes too
     assert f"New case {case_id}" in wakes
 
 

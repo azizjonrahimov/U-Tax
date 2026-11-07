@@ -291,6 +291,7 @@ class State:
         case.assumed = e.payload["assumed"]
         case.facts_version += 1
         case.facts_ts = e.ts
+        self._supersede(case.case_id, "reopened")  # task 14: new figures, ask again
         case.missing, case.problems = [], []
         case.unrealistic = list((e.private or {}).get("unrealistic", []))
 
@@ -321,9 +322,12 @@ class State:
             case.status = e.payload["to"]
             if case.status != "BLOCKED":
                 case.blocked_reason = None
-            if case.status == "INTAKE_PENDING" and e.payload["from"] != "NEW":
-                # task 14: back to intake (new numbers, a reopen): what the CEO was asked
-                # may name a figure that is no longer true; the woken crew asks again
+            if case.status == "INTAKE_PENDING" and e.payload["from"] != "NEW" \
+                    and reason != "client_reply":
+                # task 14: a reopen (by the CEO, or mail on an open case): what the CEO was
+                # asked may name a figure that is no longer true; the woken crew asks again.
+                # A reply with digits on a SENT case ("3pm on the 12th?") isn't one: it
+                # only goes stale if it changes the facts (_on_facts_extracted).
                 self._supersede(case.case_id, "reopened")
 
     def _on_case_blocked(self, e: Event) -> None:

@@ -774,8 +774,10 @@ class Gateway:
                 raise NeedsApproval(approval_id, approval.summary)
             # "superseded": the type went AUTO and back to ASK, or (task 14) a newer request
             # or a reopen replaced it: ask again
-        replaced = approval_id is not None and \
-            (self.state.approvals[approval_id].superseded_by or "").startswith("apr_")
+        old = self.state.approvals.get(approval_id or "")
+        # the request that replaced it is still waiting on the CEO: no second mail
+        replaced = old is not None and (old.superseded_by or "").startswith("apr_") \
+            and self._newest(old) is not None
         approval_id = f"apr_{len(self.state.approvals) + 1}"
         self._emit([NewEvent(type="approval.requested", actor="system", case_id=case_id,
                              payload={"approval_id": approval_id, "action_type": action_type,
@@ -1283,6 +1285,8 @@ class Gateway:
             try:
                 if self._run_gateway_owned(a.action_key) is not None:
                     continue
+            except EventWriteError:
+                raise  # fail closed: the store is down (the tick retries the mail)
             except Exception:  # noqa: BLE001 - one bad send never strands the rest
                 log.exception("carrying out %s failed; the tick retries it", a.approval_id)
                 continue
@@ -1315,7 +1319,15 @@ class Gateway:
         released = self._released(action_type, current)
         self._emit(events)
         self._carry_out(released)  # task 14: a stop out of PAUSED is a resume to ASK
+        if current == "PAUSED":
+            self._wake_held()
         return {"trust": self.state.trust[action_type]}
+
+    def _wake_held(self) -> None:
+        """Resumed: wake whatever the pause held up."""
+        for case in self.state.cases.values():
+            if case.status in ("QA_PASSED", "SENT", "INTAKE_PENDING") and not case.priority:
+                self._wake(f"New case {case.case_id}")
 
     UNBLOCK_TARGETS = {"BLOCKED": ("INTAKE_PENDING", "READY", "NOT_ELIGIBLE"),
                        "SENT": ("INTAKE_PENDING",), "CALL_BOOKED": ("INTAKE_PENDING",)}
@@ -2589,10 +2601,8 @@ class Gateway:
                                       "reason": reason})])
         self._wake_superseded(waiting)
         self._carry_out(released)
-        if to == "AUTO" or current == "PAUSED":  # resumed: wake whatever the pause held up
-            for case in self.state.cases.values():
-                if case.status in ("QA_PASSED", "SENT", "INTAKE_PENDING") and not case.priority:
-                    self._wake(f"New case {case.case_id}")
+        if to == "AUTO" or current == "PAUSED":
+            self._wake_held()
         return {"action_type": action_type, "trust": to}
 
     def _book_spend(self, args: dict) -> dict:
