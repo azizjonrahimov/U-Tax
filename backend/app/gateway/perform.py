@@ -210,6 +210,17 @@ def tidy_lines(text: str) -> str:
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
+def _fit_labels(labels: list[str], room: int) -> str:
+    """Task 15: as many whole labels as fit in `room`, then "+N more" (the CEO sees what is
+    missing instead of a cut list). The first label always shows; `clip` trims it if needed."""
+    for shown in range(len(labels), 0, -1):
+        more = len(labels) - shown
+        text = ", ".join(labels[:shown]) + (f" +{more} more" if more else "")
+        if len(text) <= room or shown == 1:
+            return text
+    return ""
+
+
 def _cap(text: str) -> str:
     """Uppercase the first letter only ("first memo..." -> "First memo...")."""
     return text[:1].upper() + text[1:]
@@ -732,6 +743,7 @@ class Gateway:
 
     PUBLIC_CAP_PER_HOUR = 10
     SUMMARY_MAX = 160  # approval summaries (the /ceo list, the CEO's mail)
+    NOTE_MAX = 160  # touch notes ("approved: <summary>", the CEO's unblock note)
 
     def _gate(self, action_type: str, action_key: str, summary: str, case_id: str | None,
               *, public: bool = False) -> None:
@@ -780,7 +792,7 @@ class Gateway:
         replaced = old is not None and (old.superseded_by or "").startswith("apr_") \
             and self._newest(old) is not None
         approval_id = f"apr_{len(self.state.approvals) + 1}"
-        summary = clip(summary, self.SUMMARY_MAX)  # task 15: at a word boundary, never "a foreign o"
+        summary = clip(summary, self.SUMMARY_MAX)  # task 15: whole words, never "a foreign o"
         self._emit([NewEvent(type="approval.requested", actor="system", case_id=case_id,
                              payload={"approval_id": approval_id, "action_type": action_type,
                                       "summary": summary},
@@ -1220,7 +1232,7 @@ class Gateway:
         target = approval.case_id or "firm"
         if decision == "deny":
             self._emit([NewEvent(type="touch.operating", actor="ceo", case_id=approval.case_id,
-                                 payload={"note": clip(f"denied: {approval.summary}", 160),
+                                 payload={"note": clip(f"denied: {approval.summary}", self.NOTE_MAX),
                                           "approval_id": approval_id},
                                  idempotency_key=key, private=private)])
             self._wake(f"Approval {approval_id} denied for {target}")
@@ -1230,7 +1242,7 @@ class Gateway:
             # the CEO's pause (or a cap) holds until POST /api/trust: record the OK now,
             # carry it out on resume (task 14)
             events.append(NewEvent(type="touch.operating", actor="ceo", case_id=approval.case_id,
-                                   payload={"note": clip(f"approved while paused: {approval.summary}", 160),
+                                   payload={"note": clip(f"approved while paused: {approval.summary}", self.NOTE_MAX),
                                             "approval_id": approval_id},
                                    idempotency_key=key, private={**private, "while_paused": True}))
         elif current != "AUTO":
@@ -1246,7 +1258,7 @@ class Gateway:
                                             "to": "AUTO", "reason": reason}))
         else:
             events.append(NewEvent(type="touch.operating", actor="ceo", case_id=approval.case_id,
-                                   payload={"note": clip(f"approved: {approval.summary}", 160),
+                                   payload={"note": clip(f"approved: {approval.summary}", self.NOTE_MAX),
                                             "approval_id": approval_id},
                                    idempotency_key=key, private=private))
         waiting = self._pending_of(action_type, exclude=approval_id)
@@ -1346,7 +1358,7 @@ class Gateway:
             raise Refused("no_facts", "READY needs extracted facts; use INTAKE_PENDING")
         note = _str(args, "note", required=False, max_len=200) or f"{case.status} → {to}"
         self._emit([NewEvent(type="touch.operating", actor="ceo", case_id=case.case_id,
-                             payload={"note": clip(f"{case.masked_name}: {note}", 160),
+                             payload={"note": clip(f"{case.masked_name}: {note}", self.NOTE_MAX),
                                       "approval_id": None}),
                     self._status(case, to)])
         self._wake(f"{'FAST PATH' if case.priority else 'New case'} {case.case_id}")
@@ -1676,9 +1688,10 @@ class Gateway:
             raise Refused("no_reply_address", f"{case.case_id} has no reply address")
         # a STALLED case gets one nudge (it counts as an ask), then max_asks closes it
         key = f"ask:{case.case_id}:t{len(case.texts)}" + (f":nudge{case.asks}" if stalled else "")
-        labels = ", ".join(FACT_LABELS.get(m, m) for m in missing)
-        self._gate("email", key, _cap(f"{self._first('email')}re-ask email: {case.masked_name}, "
-                                      f"needs {labels}"), case.case_id, public=case.priority)
+        summary = _cap(f"{self._first('email')}re-ask email: {case.masked_name}, needs ")
+        self._gate("email", key, summary + _fit_labels(
+            [FACT_LABELS.get(m, m) for m in missing], self.SUMMARY_MAX - len(summary)),
+            case.case_id, public=case.priority)
         body = self.templates.render("ask-client",
                                      ask_values(case.masked_name, missing, case.problems))
         outgoing = self.templates.render("ask-client", ask_values(
