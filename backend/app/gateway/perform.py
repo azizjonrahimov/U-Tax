@@ -1321,7 +1321,7 @@ class Gateway:
     def _period(self, since_id: int) -> dict[str, Any]:
         events = list(self.store.since(since_id))
         spend = sum((Decimal(e.cost_usd) for e in events
-                     if e.cost_usd and e.type != "tool.bought"), Decimal(0))  # once, via cost.booked
+                     if e.cost_usd and e.type == "cost.booked"), Decimal(0))  # contract §4
         return {
             "clients_new": sum(1 for e in events if e.type == "case.status"
                                and e.payload["from"] == "NEW"),

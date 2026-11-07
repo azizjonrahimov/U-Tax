@@ -27,7 +27,7 @@ class Settings:
     templates_dir: Path = REPO_ROOT / "naive" / "templates"  # contract §6d
     voice_prompt_path: Path = REPO_ROOT / "naive" / "prompts" / "voice-intake.md"
     ceo_console_url: str = "http://localhost:3200/ceo"
-    public_mode: str = ""  # "event": the finale crowd shares one venue IP (60/min)
+    public_mode: str = ""  # "event": the finale crowd shares one venue IP (Send 90/min, mint 60/min)
     store: str = "jsonl"
     events_path: Path | None = None
     database_url: str = ""

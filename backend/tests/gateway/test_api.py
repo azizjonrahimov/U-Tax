@@ -132,8 +132,8 @@ def test_customer_voice_is_public_but_rate_limited(api):
             "speaker": "customer", "reply_email": "judge@yc.com"}
     first = client.post("/api/voice", json=body)
     assert first.status_code == 200 and first.json()["case_id"] == "case_1"
-    codes = [client.post("/api/voice", json=body).status_code for _ in range(25)]
-    assert 429 in codes
+    codes = [client.post("/api/voice", json=body).status_code for _ in range(35)]
+    assert 429 in codes  # task 12: Send's own bucket is 30/min per IP
     assert client.post("/api/voice", json={"text": "go", "speaker": "ceo"}).status_code == 401
 
 
