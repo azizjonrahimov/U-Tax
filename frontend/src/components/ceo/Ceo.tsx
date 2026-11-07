@@ -27,6 +27,7 @@ import {
   outdatedApprovals,
   parseBrief,
   readableSummary,
+  supersededBy,
   readLastSeen,
   STAGE_LABEL,
   TOKEN_KEY,
@@ -148,6 +149,10 @@ export function Ceo() {
   /** The last action's error: stays until the next action (a refresh never hides it). */
   const [actionError, setActionError] = useState<string | null>(null);
   const [briefError, setBriefError] = useState<string | null>(null);
+  /** Approvals the gateway answered 409 superseded for (no event marks them; ids reset with the log). */
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  /** The newer approval to decide after a 409 superseded. */
+  const [highlight, setHighlight] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
@@ -188,6 +193,8 @@ export function Ceo() {
       setError(null);
       setActionError(null);
       setBriefError(null);
+      setDismissed(new Set());
+      setHighlight(null);
       setNotice(null);
       setUpdatedAt(null);
       setBusy(null);
@@ -249,6 +256,8 @@ export function Ceo() {
           setView(null);
           setConfirm(null);
           setNotice("The gateway's log restarted, so the console reloaded it. Check the lists before acting.");
+          setDismissed(new Set()); // approval ids start over with the new log
+          setHighlight(null);
         };
         if (st !== null && logWasReset(st.lastEventId, logRef.current.lastId)) restart();
         const getJson = (url: string) => authJson<unknown>(tok, url);
@@ -341,6 +350,11 @@ export function Ceo() {
 
   useEffect(() => () => stopAudio(), [stopAudio]);
 
+  // After a 409 superseded, bring the newer approval into view.
+  useEffect(() => {
+    if (highlight) document.getElementById(`row-${highlight}`)?.scrollIntoView({ block: "center" });
+  }, [highlight]);
+
   const signIn = async () => {
     const t = draftToken.trim();
     if (!t || signingIn) return;
@@ -370,6 +384,7 @@ export function Ceo() {
     setBusy(key);
     setConfirm(null);
     setActionError(null);
+    setHighlight(null);
     try {
       await authJson(token, `${API}${path}`, { method: "POST", body: JSON.stringify(body) });
       if (mine !== session.current) return;
@@ -380,8 +395,19 @@ export function Ceo() {
       }
     } catch (e) {
       if (mine === session.current) {
+        const id = (body as { approval_id?: unknown }).approval_id;
         if (e instanceof ApiError && e.status === 401) signOut(errorOf(e));
-        else setActionError(errorOf(e));
+        else if (e instanceof ApiError && e.code === "superseded" && typeof id === "string") {
+          // v1.7.8: drop the stale entry and point at the newer one (the gateway writes no event for it).
+          const by = supersededBy(e.message);
+          setDismissed((d) => new Set(d).add(id));
+          setHighlight(by);
+          setActionError(
+            by
+              ? "That approval was out of date. Decide the newer one, highlighted below."
+              : "That approval was out of date: the case changed, and the crew will ask again if it still applies.",
+          );
+        } else setActionError(errorOf(e));
       }
     } finally {
       if (mine === session.current) {
@@ -442,7 +468,7 @@ export function Ceo() {
 
   const loading = view === null;
   const blocked = view?.cases.filter((c) => c.status === "BLOCKED") ?? [];
-  const pending = [...log.pending.values()];
+  const pending = [...log.pending.values()].filter((a) => !dismissed.has(a.approvalId));
   const outdated = outdatedApprovals(pending);
   const candidates = view?.candidates ?? [];
   const toDecide = candidates.filter((c) => canDecide(c.stage)).length;
@@ -552,7 +578,11 @@ export function Ceo() {
                 const what = readableSummary(a.summary || a.approvalId);
                 const caseName = a.caseId ? names.get(a.caseId) : undefined;
                 return (
-                  <li key={a.approvalId} className={old ? "outdated" : undefined}>
+                  <li
+                    key={a.approvalId}
+                    id={`row-${a.approvalId}`}
+                    className={[old && "outdated", highlight === a.approvalId && "highlight"].filter(Boolean).join(" ") || undefined}
+                  >
                     <div className="line">
                       <div className="what" id={`w-${key}`}>
                         <small>
@@ -696,7 +726,7 @@ export function Ceo() {
 
         <section aria-labelledby="tr-h">
           <h2 id="tr-h">Standing orders</h2>
-          <p className="hint">A kind that asks you first runs on its own after you approve one. Pause stops one that runs on its own.</p>
+          <p className="hint">A kind that asks you first runs on its own after you approve one. Pause stops a kind; Resume puts it back as it was.</p>
           {loading ? (
             <p className="empty">Loading…</p>
           ) : (
@@ -704,7 +734,6 @@ export function Ceo() {
               {ACTION_TYPES.map((t) => {
                 const key = `tr:${t}`;
                 const state = view.trust[t] ?? "ASK";
-                const waiting = pending.filter((a) => a.actionType === t && !outdated.has(a.approvalId)).length;
                 return (
                   <li key={t}>
                     <div className="line">
@@ -715,7 +744,7 @@ export function Ceo() {
                         {ACTION_LABEL[t]}
                       </div>
                       <div className="btns">
-                        {state === "AUTO" && (
+                        {state !== "PAUSED" && (
                           <button
                             className="secondary"
                             aria-describedby={`w-${key}`}
@@ -733,9 +762,9 @@ export function Ceo() {
                             onClick={() =>
                               ask({
                                 key,
-                                prompt: `Resume ${ACTION_LABEL[t].toLowerCase()}? It runs on its own again${waiting ? `, and the ${waiting} waiting go out now` : ""}.`,
+                                prompt: `Resume ${ACTION_LABEL[t].toLowerCase()}? It goes back to how it was before the pause, and anything you approved while it was paused goes out now.`,
                                 label: "Resume",
-                                run: () => void act(key, "/trust", { action_type: t, state: "AUTO" }, `${ACTION_LABEL[t]} resumed`),
+                                run: () => void act(key, "/trust", { action_type: t, state: "RESUME" }, `${ACTION_LABEL[t]} resumed`),
                               })
                             }
                           >
