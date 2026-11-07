@@ -74,7 +74,9 @@
 .ceo .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 /* Voice mode (v1.8): a sticky bar so STOP EVERYTHING is always one press away. */
-.ceo .voice { position: sticky; top: 0; z-index: 5; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; margin: -8px -16px 0; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+.ceo .voice-dock { position: sticky; top: 0; z-index: 5; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; margin: -8px -16px 0; background: color-mix(in srgb, var(--bg) 94%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); }
+/* The transcript and the typed box scroll with the page, so the dock stays a bar, not half the screen. */
+.ceo .voice { display: flex; flex-direction: column; gap: 12px; margin-top: -16px; }
 .ceo .vbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .ceo .stop { background: var(--red); color: var(--ink); border: 2px solid var(--red); font-size: 17px; font-weight: 900; letter-spacing: .04em; min-height: 52px; padding: 8px 20px; }
 .ceo .stop:hover { background: #ff7466; }
@@ -113,7 +115,7 @@
   .ceo .updated { display: none; }
   .ceo .btns { justify-content: flex-start; }
   .ceo .row { flex-direction: column; align-items: stretch; }
-  .ceo .voice { margin: -8px -16px 0; padding: 12px 16px; }
+  .ceo .voice-dock { margin: -8px -16px 0; padding: 12px 16px; }
   .ceo .stop { flex: 1 1 100%; }
   .ceo .vbar .ghost { margin-left: 0; }
 }

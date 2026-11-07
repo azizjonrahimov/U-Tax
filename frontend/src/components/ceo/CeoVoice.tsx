@@ -781,7 +781,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const left = card ? secondsLeft(card.expiresAt, now) : 0;
 
   return (
-    <section className="voice" aria-label="Voice control">
+    <>
+      {/* Docked at the top while the console scrolls: the controls, STOP's result and the open card only. */}
+      <div className="voice-dock" role="region" aria-label="Voice control">
       <div className="vbar">
         <button className="stop" onClick={() => void stopEverything()} aria-keyshortcuts="Escape">
           STOP EVERYTHING <kbd>Esc</kbd>
@@ -843,11 +845,6 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           )}
         </p>
       )}
-      {notice && (
-        <p className="notice" role="status">
-          {notice}
-        </p>
-      )}
 
       {card && (
         <div className={`proposal${card.expired ? " expired" : ""}`} role="group" aria-labelledby="pr-read" aria-describedby="pr-how">
@@ -860,7 +857,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
             </p>
           ) : (
             <p className="how" id="pr-how">
-              Say “confirm” or “cancel”, or click. <span className="mono" aria-hidden="true">{left}s</span>
+              Say or type “confirm” or “cancel”, or click. <span className="mono" aria-hidden="true">{left}s</span>
               <span className="sr-only">{left > 10 ? "" : `${left} seconds left`}</span>
             </p>
           )}
@@ -883,6 +880,14 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       {outcome && (
         <p className={outcome.ok ? "ok" : "error"} role="status">
           {outcome.text}
+        </p>
+      )}
+      </div>
+
+      <section className="voice" aria-label="Voice transcript and typed commands">
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
         </p>
       )}
 
@@ -921,5 +926,6 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         </button>
       </form>
     </section>
+    </>
   );
 }
