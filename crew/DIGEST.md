@@ -1,19 +1,19 @@
-# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 01:05 local · END OF FRIDAY BUILD
+# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 08:05 local · SATURDAY PREP
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (before you leave in the morning): GitHub remote, needed for the Vercel/Render deploys. In your own terminal:
-  `cd "D:\Claude Projects\Naive YC Hackathon"` then `gh repo create azizjonrahimov/u-tax --private --source . --remote origin --push`
-- B (at the event, after Naïve access): I'll walk you through, in chat: Naïve login + `naive up` (crew/reports/agents.md), the public URL + tokens + PUBLIC_MODE=event (crew/reports/backend.md), then sponsor keys one at a time, AgentMail first, with a test run after each.
-- C (optional): old frontend test servers. In your own PowerShell: `Stop-Process -Id 21180,16628,22596,22464,9664,16056` (others on 3200/3300 clear when the frontend tab closes).
+- A (at the event, after Naïve access): I'll walk you through, in chat: Naïve login + `naive up` (crew/reports/agents.md), the public URL (tokens are already in backend/.env), then sponsor keys one at a time, AgentMail first, with a test run after each.
+- B (when you pick the host): Render: New > Blueprint > azizjonrahimov/U-Tax (render.yaml), and paste the values Render asks for from backend/.env. Vercel: import the repo with Root Directory `frontend`.
+- C (optional): old frontend test servers. In your own PowerShell: `Stop-Process -Id 21180,16628,22596,22464,9664,16056`.
 
 ## New
 
-- all · 0m · main 5d5519a green: backend 879 passed, frontend 273 passed
-- frontend · 5m · MERGED final polish (projector contrast, stage scale, clock seed) + lane report
-- backend · 15m · MERGED task 15 (word-boundary summaries, 409 superseded body)
-- frontend · 30m · MERGED /ceo + RESUME/superseded handling: every product page done
+- captain · 0m · local boot with backend/.env: health 200; /mcp/cos with its own token lists 3 tools; another seat's token and no token both get 401; no token in the log
+- captain · 5m · backend/.env made (7 seat tokens, ADMIN, THEATER, PUBLIC_MODE=event; gitignored, never printed); backend/.venv installed in main
+- agents · 0m · MERGED buy_tool for mkt; CI + render.yaml pushed with it
+- agents · 10m · WOKEN: add buy_tool to mkt (contract v1.7.3 Saturday note), needs no Naïve access
+- captain · 15m · GitHub repo created: private azizjonrahimov/U-Tax; history secret scan clean; main pushed
 
 ## In progress
 
@@ -21,4 +21,4 @@ Captain (naive-yc-hackathon-99)
 |---|---|---|---|
 | frontend | `frontend/` | done; resting until the event | 0m |
 | backend | `backend/`, `fixtures/`, `db/` | done; resting; wakes for the sponsor key swap | 15m |
-| agents | `naive/` | done; resting; wakes for `naive up` (task 3) | 6h |
+| agents | `naive/` | done (buy_tool merged); resting until `naive up` (task 3) | 0m |
