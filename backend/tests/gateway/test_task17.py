@@ -821,3 +821,178 @@ def test_a_leftover_recorded_later_counts_on_its_own_day(make_harness):
     h.ports.toolbuy = again
     h.restart()
     assert "buy:c1" not in again._unsure
+
+
+# ---------------------------------------------------------------- fresh review, pass 1
+
+
+def test_a_local_intent_never_holds_monid_after_a_switch(make_harness):
+    # a local leftover went into Monid's unsure holds at boot: the key stuck, then a
+    # phantom unsure the CEO had to resolve
+    h = make_harness()
+    crash_left_intent(h, provider="local")
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    gw = h.restart()
+    assert "buy:c1" not in fresh._unsure and not unsure_events(h, "c1")
+    assert buy(gw, key="c1").status == "done" and len(fresh.calls) == 1
+
+
+def test_a_leftover_is_booked_under_the_provider_that_may_have_charged(make_harness):
+    from app.gateway.adapters.local import LocalToolBuy
+
+    h = make_harness()
+    crash_left_intent(h, key="c1")  # Monid's, recorded on a local boot
+    h.ports.toolbuy = LocalToolBuy()
+    gw = h.restart()
+    crash_left_intent(h, key="c2")  # Monid's, met by a retry under the local toolbuy
+    buy(gw, key="c2")
+    assert [e.provider for e in h.events("tool.bought")] == ["monid", "monid"]
+    gw.perform("resolve_purchase", {"key": "c1", "cost_usd": "0.0400"})
+    assert gw.state.spent_by_provider == {"monid": Decimal("0.0400")}
+
+
+def test_a_resolution_whose_commit_ack_was_lost_still_reaches_the_adapter(h):
+    # the log took it, the reply was lost: the retry is refused (once only), and the
+    # adapter's hold used to stay (key blocked, ceiling held against the cap)
+    for key, cost in (("k1", "0.0400"), ("k2", None)):
+        port = monid(lost)
+        h.gw.ports.toolbuy = port
+        buy(h.gw, key=key)
+        assert f"buy:{key}" in port._unsure
+        real = h.gw._emit
+
+        def committed_then_lost(events, real=real):
+            out = real(events)
+            raise EventWriteError("commit reply lost")
+
+        h.gw._emit = committed_then_lost
+        assert h.gw.perform("resolve_purchase", {"key": key, "cost_usd": cost}).status == "error"
+        h.gw._emit = real
+        assert f"buy:{key}" in port._unsure
+        again = h.gw.perform("resolve_purchase", {"key": key, "cost_usd": cost})
+        assert again.error["code"] == "wrong_status" and f"buy:{key}" not in port._unsure
+
+
+def test_a_cost_that_rounds_to_nothing_is_not_charged(h):
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    r = h.gw.perform("resolve_purchase", {"key": "k1", "charged": True, "cost_usd": "0.00004"})
+    assert r.status == "refused" and r.error["code"] == "bad_input"
+
+
+def test_a_charge_whose_events_failed_is_resolved_by_the_ceo_after_a_restart(make_harness):
+    # in this process the agent's retry books it (test above); after a restart nothing
+    # holds it: the boot records it unsure, and the CEO books Monid's cost once
+    h = make_harness()
+    h.gw.ports.toolbuy = monid()
+    failing_once(h)
+    assert buy(h.gw).status == "error"  # charged, not logged; the intent stays
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    gw = h.restart()
+    assert len(unsure_events(h, "k1")) == 1
+    gw.perform("resolve_purchase", {"key": "k1", "cost_usd": "0.0013"})
+    assert len([e for e in h.events("cost.booked") if e.provider == "monid"]) == 1
+    assert buy(gw).data["duplicate"] is True and fresh.calls == []
+
+
+def test_a_retry_the_day_after_a_crash_keeps_the_intents_day(make_harness, monkeypatch):
+    from app.gateway.perform import Gateway
+
+    h = make_harness()
+    crash_left_intent(h, days_ago=1)
+    real = Gateway._emit
+
+    def down(self, events):
+        if any(e.type == "tool.bought" for e in events):
+            raise EventWriteError("store hiccup at boot")
+        return real(self, events)
+
+    monkeypatch.setattr(Gateway, "_emit", down)
+    h.ports.toolbuy = monid()
+    gw = h.restart()  # the boot could not record it
+    monkeypatch.setattr(Gateway, "_emit", real)
+    buy(gw, key="c1")  # the retry records it
+    [record] = unsure_events(h, "c1")
+    assert record.private["intent_ts"][:10] != h.clock.now.date().isoformat()
+    again = monid()
+    h.ports.toolbuy = again
+    h.restart()
+    assert "buy:c1" not in again._unsure
+
+
+def test_a_record_without_a_ceiling_resolves_up_to_the_plausible_bound(h):
+    from types import SimpleNamespace
+
+    for private in ({}, {"ceiling": None}, {"ceiling": "junk"}):  # older records, no max_usd
+        assert h.gw._resolve_ceiling(SimpleNamespace(private=private)) == Decimal(1000)
+    assert h.gw._resolve_ceiling(SimpleNamespace(private={"ceiling": "0.05"})) == Decimal("0.05")
+
+
+def test_the_ceiling_is_exact(make_harness):
+    for cost, ok in (("0.0501", False), ("0.0500", True)):
+        h = make_harness()
+        h.gw.ports.toolbuy = monid(lost)
+        buy(h.gw)
+        r = h.gw.perform("resolve_purchase", {"key": "k1", "cost_usd": cost})
+        assert (r.status == "done") is ok, (cost, r.error)
+
+
+def test_every_key_state_refusal_keeps_the_intent(make_harness):
+    from app.gateway.ports import Purchase
+
+    fp = "fp-of-another-input"
+    for state in ("_bought", "_unsure", "_inflight"):
+        h = make_harness()
+        port = monid()
+        held = {"_bought": (fp, Purchase(result=None, cost_usd="0.0013", bought=True)),
+                "_unsure": (fp, Decimal("0.05")), "_inflight": Decimal("0.05")}[state]
+        getattr(port, state)["buy:k1"] = held  # the adapter holds it; the gateway's log doesn't
+        h.gw.ports.toolbuy = port
+        assert buy(h.gw).status == "refused", state
+        assert h.gw._buy_intents.get("buy:k1") is not None, state
+
+
+def test_a_nul_in_a_key_is_dropped_too(h):
+    h.gw.ports.toolbuy = raw_monid('[{"a\\u0000b": 1}]')
+    r = buy(h.gw)
+    assert r.status == "done" and r.data["result"] is None
+
+
+def test_a_restored_hold_keeps_its_ceiling(make_harness):
+    h = make_harness()
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    h.restart()
+    assert fresh._unsure["buy:k1"][1] == Decimal("0.05")
+
+
+def test_a_store_error_after_reserving_releases_the_key(h, monkeypatch):
+    port = monid()
+    h.gw.ports.toolbuy = port
+
+    def down(key, value):
+        raise EventWriteError("disk gone")
+
+    monkeypatch.setattr(h.gw._buy_intents, "put", down)
+    r = buy(h.gw)
+    assert r.status == "error" and r.error["code"] == "store_unavailable" and port.calls == []
+    assert not h.gw._buy_inflight
+
+
+def test_a_purchase_this_process_holds_is_left_to_the_agents_retry(h):
+    # recording it as unsure lost Monid's exact cost and the paid result
+    port = monid()
+    h.gw.ports.toolbuy = port
+    failing_once(h)
+    assert buy(h.gw).status == "error"  # charged; its events failed; the adapter remembers
+    r = h.gw.perform("resolve_purchase", {"key": "k1", "charged": True, "cost_usd": "0.0400"})
+    assert r.status == "refused" and r.error["code"] == "wrong_status" and "retry" in r.error["message"]
+    assert not unsure_events(h, "k1")
+    again = buy(h.gw)
+    assert again.status == "done" and again.data["result"] == {"results": [{"title": "Team #7"}]}
+    assert h.gw.state.spent_by_provider["monid"] == Decimal("0.0013")
+

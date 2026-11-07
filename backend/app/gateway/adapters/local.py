@@ -12,6 +12,7 @@ import email.utils
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 from datetime import datetime, timedelta, timezone
@@ -51,6 +52,20 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _fsync_dir(path: Path) -> None:
+    """Make a rename durable (POSIX); Windows can't open a directory, and needs none."""
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 class _KeyedJson:
     """A small JSON file mapping idempotency keys to results (survives restarts)."""
 
@@ -77,8 +92,12 @@ class _KeyedJson:
                 data[key] = value
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
+            with open(tmp, "w", encoding="utf-8") as fh:  # durable before anything is paid
+                fh.write(json.dumps(data, indent=1, sort_keys=True))
+                fh.flush()
+                os.fsync(fh.fileno())
             tmp.replace(self.path)
+            _fsync_dir(self.path.parent)
 
 
 # ------------------------------------------------------------------ mail

@@ -1840,7 +1840,7 @@ class Gateway:
                 "message": f"purchase {key} may already be charged (an earlier call did not "
                            "finish); the CEO resolves it (resolve_purchase) before it can run again",
                 "fingerprint": left_fp, "port_key": port_key, "ceiling": left.get("ceiling"),
-                "intent_ts": left.get("ts"),
+                "intent_ts": left.get("ts"), "provider": left.get("provider"),
                 "episode": episode}
 
     def _buy_fetch(self, args: dict) -> dict:
@@ -1914,8 +1914,9 @@ class Gateway:
             if fetched.get("unsure"):  # it may be charged: remembered across restarts
                 # the episode open now (under the lock), never one closed while Monid answered
                 episode = self._buy_episode(fetched["port_key"])[0]
-                self._emit([NewEvent(type="tool.bought", actor="mkt", provider=provider,
-                                     status="failed", payload={"tool": tool, "provider": provider},
+                charged_by = fetched.get("provider") or provider  # a leftover's own provider
+                self._emit([NewEvent(type="tool.bought", actor="mkt", provider=charged_by,
+                                     status="failed", payload={"tool": tool, "provider": charged_by},
                                      idempotency_key=f"tool:unsure:{fetched['port_key']}"
                                                      f"{_episode(episode)}",
                                      private={**private, "unsure": True,
@@ -1987,12 +1988,20 @@ class Gateway:
         episode, unsure, resolved = self._buy_episode(port_key)
         left = self._buy_intents.get(port_key) if unsure is None and resolved is None else None
         if isinstance(left, dict):  # unsettled, not on the log yet: record it first
+            recall = getattr(self.ports.toolbuy, "remembered", None)
+            held = recall(port_key) if callable(recall) else None
+            if held is not None and held[0] == left.get("fingerprint"):
+                raise Refused("wrong_status", f"purchase {key} is held by this process (Monid "
+                                              "answered; its record failed): the agent's retry "
+                                              "of the same key books it exactly")
             self._record_leftover(port_key, left)
             episode, unsure, resolved = self._buy_episode(port_key)
         if resolved is not None:  # once only: a second answer used to book its cost too
+            self._resolve_port(port_key, resolved.cost_usd)  # a lost commit ack: catch up
             raise Refused("wrong_status", f"purchase {key} is already resolved as charged")
         if unsure is None:
             if episode:
+                self._resolve_port(port_key, None)  # no leftover is open: only a stale hold
                 raise Refused("wrong_status", f"purchase {key} is already resolved as not charged")
             hint = " (use the agent's key, without the buy: prefix)" \
                 if key.startswith("buy:") else ""
@@ -2018,6 +2027,9 @@ class Gateway:
         if cost and cost > MAX_PLAUSIBLE_USD:
             raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over "
                                        f"${MAX_PLAUSIBLE_USD}; no data call costs that")
+        if cost and usd_string(cost) == usd_string(Decimal(0)):  # booked at 4 places
+            raise Refused("bad_input", f"cost_usd {raw} rounds to $0.0000; charged: false if "
+                                       "Monid's run shows no charge")
         if cost and cost > ceiling and not over:  # max_usd is ours: Monid can charge more
             raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over this purchase's "
                                        f"ceiling ${usd_string(ceiling)}; check the run in Monid, "
@@ -2042,10 +2054,15 @@ class Gateway:
         # below fails, the unresolved unsure record still blocks the key
         self._buy_intents.put(port_key, None)
         self._emit(events)
+        self._resolve_port(port_key, usd_string(cost) if cost else None)
+        return {"key": key, "charged": bool(cost)}
+
+    def _resolve_port(self, port_key: str, cost_usd: str | None) -> None:
+        """The adapter's half of a resolution (its unsure hold and daily spend). Idempotent:
+        a key it no longer holds is a no-op, so a retry after a lost commit ack catches up."""
         resolve = getattr(self.ports.toolbuy, "resolve", None)
         if callable(resolve):
-            resolve(port_key, usd_string(cost) if cost else None)
-        return {"key": key, "charged": bool(cost)}
+            resolve(port_key, cost_usd)
 
     def _record_leftovers(self) -> None:
         """At boot: an intent a crash left (no record on the log) becomes an unsure record
@@ -2074,7 +2091,7 @@ class Gateway:
         settled = self._done_from(f"tool:{port_key}") is not None or (
             resolved is not None and resolved.status == "ok")
         if not settled and unsure is None:
-            provider = self.ports.toolbuy.provider
+            provider = left.get("provider") or self.ports.toolbuy.provider  # who may have charged
             with self._lock:
                 self._emit([NewEvent(
                     type="tool.bought", actor="system", provider=provider, status="failed",
@@ -2136,10 +2153,12 @@ class Gateway:
                         if e.ts[:10] == today and e.cost_usd:
                             port._spent_today()
                             port._book(Decimal(e.cost_usd))
-                    elif private.get("unsure") and key not in done and                             str(private.get("intent_ts") or e.ts)[:10] == today:  # its own day
+                    elif (private.get("unsure") and key not in done
+                          and str(private.get("intent_ts") or e.ts)[:10] == today):  # its day
                         port._unsure[key] = (fp, Decimal(private.get("ceiling") or "0"))
                 for key, intent in (self._buy_intents.load() or {}).items():
-                    if not intent or key in done or key in port._unsure:
+                    if not isinstance(intent, dict) or key in done or key in port._unsure \
+                            or intent.get("provider") == "local":  # log-only: never charged
                         continue
                     if str(intent.get("ts", ""))[:10] == today:  # crashed mid-purchase
                         port._unsure[key] = (intent["fingerprint"],
