@@ -1,4 +1,4 @@
-# API contract (v1.9): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.10): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -328,6 +328,26 @@ the tool names, kinds and args are fixed here:
 - Open proposals are gateway state rebuilt from `ceo.proposed|confirmed|cancelled` events.
   After a restart, an expired one is cancelled with `reason: "expired"`.
 
+## 5c. Speech output (v1.10, design D30)
+
+- `ADAPTER_VOICE=elevenlabs` takes `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` (default
+  `EXAVITQu4vr4xnSDxMaL`) and `ELEVENLABS_MODEL` (default `eleven_flash_v2_5`).
+  `ADAPTER_VOICE=openai` still works if a key ever shows up.
+- `POST /api/tts` `{text, purpose: "ceo"|"talk", request_id?}` → `audio/mpeg`.
+  - `purpose: "ceo"` needs the admin token, with text ≤ 1500 chars.
+  - `purpose: "talk"` is public: text ≤ 600 chars, the per-IP limits of `/talk` with
+    `PUBLIC_MODE` doubling, and its own daily character budget (`TTS_PUBLIC_CHARS_PER_DAY`,
+    default 200000).
+  - Text is spoken as given. The gateway never adds to it, and masks contacts and ids
+    first, like the theater.
+  - Each call books an estimated `cost.booked`, provider `elevenlabs`.
+  - Without a key: `503 voice_unavailable`, and the page falls back to `speechSynthesis`.
+- `GET /api/brief/audio` uses the same adapter.
+- `/api/voice/session` is unchanged: with no Realtime provider it answers 503, and the
+  pages use browser `SpeechRecognition` for listening (§8 fallback, now the main path).
+  The confirm grammar and the echo guard (v1.8.1/v1.8.4) apply to that path too: the mic is
+  off while TTS audio plays, plus an 800 ms tail.
+
 ## 6. MCP tools for Naïve agents
 
 Served at **`POST /mcp/<actor>`** (one MCP endpoint per agent seat: `/mcp/cos`, `/mcp/intake`,
@@ -545,6 +565,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.10 (2026-11-07, design D30): §5c speech output on ElevenLabs (`POST /api/tts`, `ADAPTER_VOICE=elevenlabs`); browser STT is the main listening path.
 
 - v1.9.1 (2026-11-07, backend 17b): resolve-purchase `episode`; Monid hold lifted.
 
