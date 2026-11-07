@@ -5,7 +5,8 @@ every write tool, even at "allow". The gateway answers those asks itself, for th
 agents only:
 
 - allow (one call, `scope: "call"`) `board_read`, `board_write`, and `utax.<tool>` when
-  `<tool>` is in that agent's own §6 column. The gateway already enforces trust, caps,
+  `<tool>` is in that agent's own §6 column; for the Chief of Staff only, also the
+  coordinator tools (v1.10.3: send_to_agent, wait_for_agents, list_agents). The gateway already enforces trust, caps,
   masking and the CEO's approvals on every one of them;
 - deny anything else (web fetch, bash, Naïve's own sends, social, wallet), with a CEO notice;
 - never answer a `kind: "question"` (ask_operator, `stop_reason: awaiting_answer`): the CEO
@@ -33,6 +34,9 @@ AGENT_NAMES: dict[str, str] = {
     "accounting": "acct", "marketing": "mkt", "hr": "hr",
 }
 BOARD_TOOLS = ("board_read", "board_write")
+# v1.10.3 (owner: "allow handoffs"): Naive's coordinator tools hand work to our own agents
+# (naive/src/policy.ts COORDINATOR); the Chief of Staff only
+COORDINATOR_TOOLS = ("send_to_agent", "wait_for_agents", "list_agents")
 MCP_PREFIX = "utax."  # naive/src/crew.ts MCP_SERVER
 WAITING = ("awaiting_approval", "awaiting_answer")  # a tool confirm, an ask_operator question
 POLL_SECONDS = 5.0
@@ -48,6 +52,8 @@ def naive_decision(actor: str | None, name: str) -> str:
         return "deny"
     if name in BOARD_TOOLS:
         return "allow"
+    if name in COORDINATOR_TOOLS:
+        return "allow" if actor == "cos" else "deny"
     if name.startswith(MCP_PREFIX) and actor in TOOL_ACTORS.get(name[len(MCP_PREFIX):], ()):
         return "allow"
     return "deny"
