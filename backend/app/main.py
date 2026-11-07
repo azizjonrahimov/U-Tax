@@ -75,13 +75,24 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
                     await asyncio.to_thread(tick, gw)
 
             task = asyncio.create_task(loop())
+        confirmer = confirmer_task = None
+        if start_background and gw.settings.naive_api_key and gw.settings.naive_confirm:
+            # v1.9 §6b-bis (D29): the gateway answers Naïve's data-leak confirms
+            from app.naive import NaiveClient
+            from app.naive_confirm import NaiveConfirmer
+
+            confirmer = NaiveClient(gw.settings.naive_api_key, gw.settings.naive_api_base)
+            confirmer_task = asyncio.create_task(NaiveConfirmer(gw, confirmer).run())
         try:
             yield
         finally:
-            if task:
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+            for running in (task, confirmer_task):
+                if running:
+                    running.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await running
+            if confirmer:
+                await confirmer.aclose()
             if crew:
                 crew.stop()
 
