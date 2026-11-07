@@ -1753,6 +1753,11 @@ class Gateway:
             return "input must be an object"
         if not isinstance(key, str) or not self._BUY_KEY.fullmatch(key):
             return "key must be 1-120 of A-Z a-z 0-9 _ . : -"
+        from app.gateway.adapters import _http
+
+        if _http.too_nested(data):  # before json.dumps and before any intent is written
+            return (f"input must nest at most {_http.MAX_DEPTH} levels "
+                    f"and hold at most {_http.MAX_VALUES} values")
         try:
             text = json.dumps(data, sort_keys=True, allow_nan=False, ensure_ascii=False)
         except (TypeError, ValueError, RecursionError):

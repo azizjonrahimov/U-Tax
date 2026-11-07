@@ -108,12 +108,19 @@ def cost_usd(run: dict) -> str | None:
 
 
 def _has_email(value: object) -> bool:
-    if isinstance(value, str):
-        return bool(EMAIL.search(value))
-    if isinstance(value, dict):
-        return any(_has_email(k) or _has_email(v) for k, v in value.items())
-    if isinstance(value, (list, tuple, set, frozenset)):
-        return any(_has_email(v) for v in value)
+    """Any string (key or value) anywhere in `value` that holds an email. Iterative: a deep
+    input must be refused, never crash the walk (CI run 42389174209, RecursionError)."""
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, str):
+            if EMAIL.search(node):
+                return True
+        elif isinstance(node, dict):
+            stack.extend(node.keys())
+            stack.extend(node.values())
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            stack.extend(node)
     return False
 
 
@@ -227,6 +234,9 @@ class MonidToolBuy:
             raise Rejected("monid: input must be an object")
         if spec["fields"] is not None and not set(input) <= spec["fields"]:
             raise Rejected(f"monid: '{tool}' takes only {sorted(spec['fields'])}")
+        if _http.too_nested(input):  # before json.dumps, whose depth limit is the OS's
+            raise Rejected(f"monid: input must nest at most {_http.MAX_DEPTH} levels "
+                           f"and hold at most {_http.MAX_VALUES} values")
         try:
             canonical = json.dumps(input, sort_keys=True, allow_nan=False)
         except (TypeError, ValueError, RecursionError) as exc:

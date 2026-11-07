@@ -204,3 +204,19 @@ def test_buy_tool_is_on_mcp_for_mkt_only():
 
     assert TOOL_ACTORS["buy_tool"] == ("mkt",) and "buy_tool" in TOOLS
     assert TOOLS["buy_tool"]["inputSchema"]["required"] == ["tool", "input", "key"]
+
+
+@pytest.mark.parametrize("depth", [100, 990])
+def test_a_deep_buy_input_is_refused_before_an_intent(h, depth):
+    # task 16: 990 levels of [[...]] fit in BUY_INPUT_MAX; the recursive email walk then
+    # raised RecursionError after the intent was written (it read as "may be charged")
+    port = monid()
+    h.gw.ports.toolbuy = port
+    data: object = "x"
+    for _ in range(depth):
+        data = [data]
+    r = h.gw.perform("buy_tool", {"tool": "enrichment", "input": {"q": data}, "key": "deep"},
+                     actor="mkt")
+    assert r.status in ("refused", "error") and "nest at most 32" in r.error["message"]
+    assert port.calls == [] and h.gw._buy_intents.get("buy:deep") is None
+    assert "tool.bought" not in h.types()
