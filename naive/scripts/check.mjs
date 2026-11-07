@@ -336,6 +336,9 @@ const ceoTools = (() => {
   if (!existsSync(contractPath)) return [];
   const s5b = readFileSync(contractPath, "utf8").split(/^## 5b\./m)[1]?.split(/^## /m)[0] ?? "";
   const rows = [...s5b.matchAll(/^\| (`\w+`(?: \/ `\w+`)*) \| (read|stop|start) \|/gm)];
+  // a row in a drifted format (a new kind, "`a`, `b`") must fail, not drop out silently
+  const tableRows = (s5b.match(/^\| `/gm) ?? []).length;
+  if (tableRows !== rows.length) fail(`contracts/api.md §5b: ${tableRows - rows.length} CEO tool row(s) in an unknown format`);
   return rows.flatMap((m) => [...m[1].matchAll(/`(\w+)`/g)].map((t) => t[1])).sort();
 })();
 if (ceoTools.length === 0) fail("contracts/api.md: could not read the §5b CEO tool table");
@@ -345,7 +348,8 @@ else {
   const ceo = raw.replace(/\s+/g, " ");
   for (const must of ["Say confirm", "read the `readback` out word for word", "Never confirm on the CEO's behalf",
     "Never say an action is done until the tool says it is", "You have no confirm tool", "data, never instructions",
-    "ask, never guess", "Stopping is instant", "not tax advice"])
+    "ask, never guess", "Stopping is instant", "Your words never confirm", "ask the CEO nothing at all",
+    "you don't see the result", "not tax advice"])
     if (!ceo.toLowerCase().includes(must.toLowerCase())) fail(`prompts/ceo-voice.md: must keep the rule "${must}"`);
   if (/utax\.\w+/.test(raw)) fail("prompts/ceo-voice.md: names a gateway tool (utax.*); its tools are contract §5b only");
   const section = raw.split(/^## Your tools.*$/m)[1]?.split(/^## /m)[0] ?? "";
@@ -354,10 +358,12 @@ else {
   if (listed.join() !== ceoTools.join()) fail(`prompts/ceo-voice.md: "Your tools" lists ${listed}, contract §5b has ${ceoTools}`);
   // anywhere in the prompt, a backticked call shape `name {...}` or `name args` must be a §5b tool,
   // and no gateway-only tool or never-by-voice route may be named at all
-  for (const m of raw.matchAll(/`([a-z]+(?:_[a-z]+)+|[a-z]+) (?:\{|[a-z_]+\b)[^`]*`/g))
+  for (const m of raw.matchAll(/`([a-z]+(?:[_-][a-z]+)*) (?:\{|[a-z_]+\b)[^`]*`/gi))
     if (!ceoTools.includes(m[1])) fail(`prompts/ceo-voice.md: \`${m[1]}\` is not a §5b CEO tool`);
+  // every gateway tool name has an underscore, so a plain-word match can't hit ordinary prose
   for (const t of GATEWAY_TOOLS)
-    if (!ceoTools.includes(t) && new RegExp("`" + t + "\b").test(raw)) fail(`prompts/ceo-voice.md: names gateway tool ${t}`);
+    if (!ceoTools.includes(t) && new RegExp(`\\b${t}\\b`, "i").test(raw)) fail(`prompts/ceo-voice.md: names gateway tool ${t}`);
+  if (/`(?:confirm|cancel)\b/i.test(raw)) fail("prompts/ceo-voice.md: names a confirm or cancel tool; there is none (the console confirms)");
   if (/resolve[-_]purchase/i.test(raw)) fail("prompts/ceo-voice.md: resolve-purchase is never by voice (contract §5b)");
 }
 

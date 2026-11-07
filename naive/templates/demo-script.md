@@ -21,14 +21,7 @@ what it did."
 touches. I approve the first email, post and invite; after that, each kind runs on AUTO."
 **Do:** point at the bottom bar, then at the touches log and the AUTO flips.
 
-## Card 3 · 0:25–0:40 · A human decision, one click
-**Screen:** `/ceo`, the hiring shortlist (the CEO was emailed when HR shortlisted).
-**Say:** "HR ran a disclosed AI screen for a paid one-hour gig, a CPA to review our memos. The AI
-never hires and never declines. I do."
-**Do:** click Hire on the shortlisted candidate. Switch to the theater: the CEO's white cursor
-appears and the touch counter ticks up by one.
-
-## Card 3b · 0:40–1:00 · The CEO runs the firm by voice
+## Card 3a · 0:25–0:45 · The CEO runs the firm by voice
 **Screen:** `/ceo` voice mode on the laptop (mic on), the theater on the projector.
 **Say (to the console, in this order):**
 1. "Stop posting." The theater's trust panel flips `social_post` to PAUSED at once (stopping
@@ -38,8 +31,16 @@ appears and the touch counter ticks up by one.
 3. "Confirm." The memo cursor moves and the touch counter ticks up, with a mic icon on the touch.
 **Say after:** "Stopping is instant. Anything that starts work, the firm reads back and waits for
 my own voice."
-**If it fails:** click STOP EVERYTHING, then Approve on Team #7's card in `/ceo`. Same touches,
-clicked instead of spoken.
+**If it fails:** in `/ceo`, pause social posts only (not STOP EVERYTHING: that would also pause
+email and invites, and the judge's memo in card 4 couldn't send), then Approve on Team #7's card.
+The same two touches, clicked instead of spoken.
+
+## Card 3b · 0:45–1:00 · A human decision, one click
+**Screen:** `/ceo`, the hiring shortlist (the CEO was emailed when HR shortlisted).
+**Say:** "HR ran a disclosed AI screen for a paid one-hour gig, a CPA to review our memos. The AI
+never hires and never declines. I do."
+**Do:** click Hire on the shortlisted candidate. Switch to the theater: the CEO's white cursor
+appears and the touch counter ticks up by one.
 
 ## Card 4 · 1:00–2:35 · Finale: a judge talks to the firm
 **Screen:** `/talk` on the judge's phone or laptop, the theater on the projector.
@@ -69,12 +70,14 @@ Educational estimates, not tax advice."
 - [ ] Sound check the brief audio, then **don't open `/ceo` again** until Card 1 (the login brief
       covers "since you were last here"; reset the stored last visit if you did)
 - [ ] Theater in stage mode, live, last event less than 2 minutes old
-- [ ] A shortlisted candidate waiting in `/ceo` (or skip card 3 and say why)
-- [ ] Card 3b: `/ceo` voice mode tested on the stage mic (say "what's waiting for me?"), social
-      posts on AUTO or ASK (not already PAUSED), and Team #7's memo waiting for approval (email on
-      ASK). Skip 3b if voice mode is down and do card 3b's click fallback instead
-- [ ] After card 3b, email trust back on AUTO before card 4 (one click in `/ceo`) if the approval
-      didn't flip it
+- [ ] A shortlisted candidate waiting in `/ceo` (or skip card 3b and say why)
+- [ ] Card 3a: `/ceo` voice mode tested on the stage mic (say "what's waiting for me?"),
+      hands-free **off**, the laptop's speaker low and away from the mic (the firm's own voice
+      must not reach it), social posts on AUTO or ASK (not already PAUSED), and Team #7's memo the
+      **only** approval waiting (email on ASK). If voice mode is down, do card 3a's click fallback
+- [ ] Between cards 3a and 3b, check the trust panel: email must read AUTO (the approval earns
+      it), or card 3b's hire mail and card 4's memo wait. If it still says ASK, click AUTO for email
 - [ ] `/talk` open on a second device; mic permission granted; a test run done at 10 AM
 - [ ] Email trust AUTO by card 4 (else the judge's memo waits for a click: approve it live as the next touch)
 - [ ] Backup: the 9 AM recording queued; `THEATER_MODE=replay` ready
+- [ ] After the demo: resume social posts in `/ceo` (card 3a paused them)
