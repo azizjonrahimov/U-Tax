@@ -511,18 +511,31 @@ else if (existsSync(voicePath)) {
       [(p) => { p["memo.on_its_way"] = "a".repeat(601); }, "601 characters"],
       [(p) => { p.at_capacity = "We're full."; }, "plain text"],
     ];
+    // The self-tests run on a synthetic registry and script, never the real files, so they test the
+    // rule alone: a real page or prompt that drifts fails only with its own message above.
+    const SELF_SCRIPT = { questions: ["Hi, I'm U-Tax's AI. First?", "Second?"], scriptCount: 2 };
+    const SELF_PHRASES = {
+      "question.1": "Hi, I'm U-Tax's AI. First?",
+      "question.2": "Second?",
+      "estimate.authorized": "It's {total_cents}. An educational estimate, not tax advice.",
+      "estimate.assumed_par": "It's {total_cents}. An educational estimate, not tax advice.",
+      "memo.on_its_way": "On its way.",
+      at_capacity: `Please email ${CLIENTS_INBOX}.`,
+    };
+    const baseline = talkPhraseProblems(SELF_PHRASES, SELF_SCRIPT);
+    if (baseline.length) fail(`talk-phrases rule self-test: the synthetic registry must pass (${baseline.join("; ")})`);
     for (const [mutate, why] of TALK_SELF_TEST) {
-      const copy = structuredClone(phrases);
+      const copy = structuredClone(SELF_PHRASES);
       mutate(copy);
-      if (!talkPhraseProblems(copy, script).some((p) => p.includes(why))) fail(`talk-phrases rule self-test: expected "${why}"`);
+      if (!talkPhraseProblems(copy, SELF_SCRIPT).some((p) => p.includes(why))) fail(`talk-phrases rule self-test: expected "${why}"`);
     }
-    // These two build their own script, so they test the rule whatever the real page and prompt hold.
     const noAi = "Is your company a Delaware corporation?";
-    if (!talkPhraseProblems({ "question.1": noAi }, { questions: [noAi], scriptCount: 1 }).some((p) => p.includes("talking to an AI")))
+    if (!talkPhraseProblems({ ...SELF_PHRASES, "question.1": noAi }, { ...SELF_SCRIPT, questions: [noAi, "Second?"] })
+      .some((p) => p.includes("talking to an AI")))
       fail('talk-phrases rule self-test: expected "talking to an AI"');
-    if (!talkPhraseProblems({ "question.1": "Hi, I'm an AI." }, { questions: ["Hi, I'm an AI."], scriptCount: 2 })
-      .some((p) => p.includes("they are one script")))
-      fail('talk-phrases rule self-test: expected "they are one script"');
+    for (const scriptCount of [1, 3]) // the page has fewer, or more, questions than voice-intake.md
+      if (!talkPhraseProblems(SELF_PHRASES, { ...SELF_SCRIPT, scriptCount }).some((p) => p.includes("they are one script")))
+        fail(`talk-phrases rule self-test: expected "they are one script" (voice-intake count ${scriptCount})`);
     if (talkPlaceholders("A literal {{brace}} and {total_cents}.").names?.join() !== "total_cents")
       fail("talk-phrases rule self-test: {{ }} must read as a literal brace");
   }
