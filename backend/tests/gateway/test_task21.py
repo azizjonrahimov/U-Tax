@@ -116,6 +116,23 @@ def test_a_call_names_a_line_and_exactly_its_numbers(key, args):
         talk_phrases.render(PHRASES, key, args)
 
 
+def test_cents_are_spoken_as_dollars():
+    phrases = {"estimate.authorized": "Your franchise tax is about {total_cents}."}
+    assert talk_phrases.render(phrases, "estimate.authorized", {"total_cents": 8516500}) == (
+        "Your franchise tax is about $85,165.")
+    assert talk_phrases.render(phrases, "estimate.authorized", {"total_cents": "45050"}) == (
+        "Your franchise tax is about $450.50.")
+
+
+def test_a_spoken_estimate_survives_the_masking(h, phrases_file):
+    phrases_file.write_text(json.dumps({"estimate.assumed_par":
+                                        "With assumed par it's {total_cents}."}),
+                            encoding="utf-8")
+    with client(h) as c:
+        assert talk(c, "estimate.assumed_par", {"total_cents": 45000}).status_code == 200
+    assert h.fake.calls[-1]["text"] == "With assumed par it's $450."
+
+
 def test_a_line_renders_with_its_numbers():
     assert talk_phrases.render(PHRASES, "readback_shares", {"authorized": 10000000,
                                                             "issued": "8000000"}) == (

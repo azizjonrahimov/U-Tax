@@ -12,6 +12,7 @@
 It is loaded strictly: anything else and the whole file is refused (the route then answers
 503 voice_unavailable and the page uses the browser's voice). A call names a key and gives
 exactly that line's args, each a number of at most 12 digits; anything else is bad_input.
+An arg named `*_cents` is spoken as dollars: 8516500 -> "$85,165", 8516550 -> "$85,165.50".
 """
 
 from __future__ import annotations
@@ -84,5 +85,10 @@ def render(phrases: dict[str, str], key: object, args: object) -> str:
         text = str(value)
         if not NUMBER.fullmatch(text):
             raise PhraseError(f"{name} must be a whole number of at most 12 digits")
-        values[name] = text
+        values[name] = dollars(int(text)) if name.endswith("_cents") else text
     return line.format(**values)
+
+
+def dollars(cents: int) -> str:
+    whole, part = divmod(cents, 100)
+    return f"${whole:,}" if part == 0 else f"${whole:,}.{part:02d}"
