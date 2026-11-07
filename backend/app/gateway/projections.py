@@ -14,6 +14,7 @@ from app.gateway.events import Event
 from app.gateway.pricing import usd_string
 
 TRUST_TYPES = ("email", "social_post", "calendar_invite", "voice_screen")
+CEO_MINT = "ceo/"  # model prefix of the CEO console's voice mints (api.py, settle_voice)
 OPEN_STATUSES = ("NEW", "INTAKE_PENDING", "READY", "COMPUTED", "QA_PASSED", "QA_FAILED",
                  "STALLED", "BLOCKED")
 DONE_STATUSES = ("SENT", "CALL_BOOKED", "NOT_ELIGIBLE")
@@ -235,8 +236,8 @@ class State:
             self.spent_by_provider[provider] = (self.spent_by_provider.get(provider, Decimal(0))
                                                 + Decimal(e.cost_usd))
             model = str(e.payload.get("model", ""))
-            # Gateway.settle_voice; the CEO's own mints (realtime:ceo/...) have their own cap
-            if model.startswith("realtime:") and not model.startswith("realtime:ceo/"):
+            # Gateway.settle_voice; the CEO's own mints have their own cap (v1.8)
+            if model.startswith("realtime:") and not model.startswith(f"realtime:{CEO_MINT}"):
                 day = e.ts[:10]
                 self.voice_mints_by_day[day] = self.voice_mints_by_day.get(day, 0) + 1
         for action_type, types in CAP_EVENTS.items():

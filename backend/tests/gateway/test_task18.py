@@ -112,11 +112,18 @@ def test_the_grammar(text, expected):
 @pytest.mark.parametrize("heard,confirms,cancels", [
     ("confirm", True, False), ("Yes.", True, False), ("go ahead", True, False),
     ("ok do it", True, False), ("sure thing", False, False), ("confirmed?", False, False),
-    ("no wait", False, True), ("yes, no, cancel", True, True),
+    ("no wait", False, True), ("yes, no, cancel", False, True),
     ("Approve the memo for Team #1: $450. Say confirm.", False, False),  # the echo (v1.8.1)
-    ("don't do it", True, True), ("I don\u2019t approve it", False, True),
-    ("never go ahead", True, True), ("shall I go ahead?", False, False),
+    ("don't do it", False, True), ("I don\u2019t approve it", False, True),
+    ("never go ahead", False, True), ("shall I go ahead?", False, False),
     ("do you want me to do it", False, False), ("approve it", False, False),
+    ("yes, deny it", False, False), ("go ahead and deny it", False, False),
+    ("can you confirm which one that is", False, False), ("I'll confirm later", False, False),
+    ("Say, confirm.", False, False), ("not yet, go ahead", False, True),
+    ("nope, do it", False, True), ("hold on, yes", False, True),
+    ("would you like me to go ahead", False, False), ("should I confirm", False, False),
+    ("never mind", False, True), ("nevermind", False, True), ("yes please", True, False),
+    ("Okay, yes, confirm.", True, False),
 ])
 def test_the_confirm_words(heard, confirms, cancels):
     assert ceo_tools.heard_confirms(heard) is confirms
@@ -164,7 +171,7 @@ def test_a_start_tool_proposes_and_carries_out_nothing(h):
     assert r.data["readback"].endswith("Say confirm.") and "Team #1" in r.data["readback"]
     assert h.gw.state.approvals[approval_id].decision is None  # nothing carried out
     [proposed] = h.events("ceo.proposed")
-    assert proposed.payload["args"] == {"approval_id": approval_id}
+    assert proposed.payload["args"] == {"approval_id": approval_id, "trust": "ASK", "others": 0}
     assert proposed.payload["source"] == "realtime"
 
 
@@ -218,13 +225,12 @@ def test_a_superseded_approval_answers_409_with_the_section_5_body(make_harness)
 
 def test_a_proposal_is_pinned_to_its_approval(h):
     _, first = pending_memo(h)
-    proposal = tool(h, "approve", approval="latest").data
+    proposal = tool(h, "deny", approval="latest").data
     _, newer = pending_memo(h, team=8)  # a newer approval arrives before the confirm
     h.gw.perform("ceo_confirm", {"proposal_id": proposal["proposal_id"], "decision": "confirm",
                                  "via": "click", "heard": "", "approval_id": newer})
-    assert h.gw.state.approvals[first].decision == "allow"
-    decided = [t.payload["approval_id"] for t in touches(h) if t.payload["approval_id"]]
-    assert first in decided and newer not in decided  # (the AUTO flip supersedes it: task 14)
+    assert h.gw.state.approvals[first].decision == "deny"
+    assert h.gw.state.approvals[newer].decision is None
 
 
 def test_a_spoken_confirm_must_be_a_confirm(make_harness):
@@ -591,4 +597,143 @@ def test_a_superseded_approval_cancels_its_proposal(h):
     assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
     assert h.events("ceo.cancelled")[-1].payload["reason"] == "superseded"
     assert not h.events("ceo.confirmed")
+
+
+# ---------------------------------------------------------------- review 2
+
+
+def test_the_ceos_words_are_masked_on_the_public_log(make_harness):
+    h = make_harness(admin_token=ADMIN, theater_token=THEATER)
+    proposal = tool(h, "order", text="email jane.doe@example.com, EIN 12-3456789, re Team 3").data
+    with http(h) as client:
+        voice_confirm(client, proposal["proposal_id"], "no, call jane.doe@example.com first")
+        feed = client.get("/api/events", params={"token": THEATER}).json()["data"]
+    blob = json.dumps([e for e in feed if e["type"].startswith("ceo.")])
+    for leak in ("jane.doe@example.com", "12-3456789"):
+        assert leak not in blob, leak
+        assert leak not in proposal["readback"]
+
+
+def test_an_opposite_verb_or_a_question_is_not_a_confirm(make_harness):
+    h = make_harness(admin_token=ADMIN, theater_token=THEATER)
+    pending_memo(h)
+    proposal = tool(h, "approve", approval="latest").data
+    with http(h) as client:
+        for heard in ("yes, deny it", "can you confirm which one that is", "Say, confirm."):
+            r = voice_confirm(client, proposal["proposal_id"], heard)
+            assert r.status_code == 400 and r.json()["error"]["code"] == "not_a_confirm", heard
+    assert all(a.decision is None for a in h.gw.state.approvals.values())
+
+
+def test_an_approve_readback_names_every_waiting_one_it_runs(h):
+    pending_memo(h)
+    pending_memo(h, team=8)
+    readback = tool(h, "approve", approval="latest").data["readback"]
+    assert "turns emails automatic and runs the 1 other waiting emails" in readback
+
+
+def test_a_resume_names_its_target_and_every_side_effect(h):
+    h.ok("set_trust", action_type="social_post", state="AUTO")
+    h.ok("set_trust", action_type="social_post", state="PAUSED")
+    back = tool(h, "set_trust", action_type="social_post", state="RESUME").data["readback"]
+    assert "back to automatic" in back
+    _, approval_id = pending_memo(h)  # email ASK: an approval waits
+    h.ok("set_trust", action_type="email", state="PAUSED")
+    h.ok("approve", approval_id=approval_id, decision="allow")  # held by the pause
+    held = tool(h, "set_trust", action_type="email", state="RESUME").data["readback"]
+    assert "back to ask first" in held and "carries out 1 approval held by the pause" in held
+
+
+def test_a_decision_whose_situation_changed_is_superseded(h):
+    pending_memo(h)
+    proposal = tool(h, "approve", approval="latest").data
+    pending_memo(h, team=8)  # another waiting email: the AUTO flip would now run it too
+    r = confirm(h, proposal["proposal_id"])
+    assert r.status == "refused" and r.error["code"] == "superseded"
+    assert all(a.decision is None for a in h.gw.state.approvals.values())
+
+
+def test_an_approval_decided_by_click_before_the_confirm_is_superseded(h):
+    _, approval_id = pending_memo(h)
+    proposal = tool(h, "deny", approval="latest").data
+    h.ok("approve", approval_id=approval_id, decision="allow")
+    r = confirm(h, proposal["proposal_id"])
+    assert r.status == "refused" and r.error["code"] == "superseded"
+    assert h.gw.state.approvals[approval_id].decision == "allow"
+
+
+def test_a_pause_cancels_every_open_proposal(h):
+    pending_memo(h)
+    proposal = tool(h, "set_trust", action_type="email", state="AUTO").data
+    tool(h, "pause", action_type="email")
+    assert h.events("ceo.cancelled")[-1].payload["reason"] == "superseded"
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+    assert h.gw.state.trust["email"] == "PAUSED"
+
+
+def test_a_trust_change_whose_counts_moved_is_superseded(h):
+    pending_memo(h)
+    proposal = tool(h, "set_trust", action_type="email", state="AUTO").data
+    assert "runs the 1 waiting emails" in proposal["readback"]
+    pending_memo(h, team=8)
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+    assert h.gw.state.trust["email"] == "ASK"
+
+
+def test_a_candidate_whose_stage_moved_is_superseded(h):
+    h.ok("inject_email", **{"from": "ann.lee@example.com", "subject": "gig", "inbox": "hiring",
+                            "body": "EA with 6 years."})
+    proposal = tool(h, "decide_candidate", candidate="Candidate A", decision="hire").data
+    h.gw.state.candidates["cand_1"]["stage"] = "shortlisted"  # the screen moved it on
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+
+
+def test_a_flagged_cases_approval_is_decided_in_the_console(h):
+    case_id, _ = pending_memo(h)
+    proposal = tool(h, "approve", approval="latest").data
+    h.ok("flag_case", case_id=case_id, kind="possible_injection")
+    assert confirm(h, proposal["proposal_id"]).error["code"] == "superseded"
+    r = tool(h, "approve", approval="latest")
+    assert r.status == "refused" and r.error["code"] == "flagged"
+    miss = tool(h, "approve", approval="Team 9")
+    assert ceo_tools.FLAGGED in miss.error["message"]  # the waiting list is masked too
+    activity = json.dumps(tool(h, "recent_activity").data)
+    assert "First memo email" not in activity  # the proposal's readback, masked
+
+
+def test_command_reads_work_while_the_log_is_down_and_a_typed_stop_is_typed(h, monkeypatch):
+    from app.gateway.ports.store import EventWriteError
+
+    real = h.gw.store.ensure_writable
+
+    def down():
+        raise EventWriteError("disk full")
+
+    monkeypatch.setattr(h.gw.store, "ensure_writable", down)
+    assert h.gw.perform("ceo_command", {"text": "brief"}).status == "done"
+    monkeypatch.setattr(h.gw.store, "ensure_writable", real)
+    assert h.gw.perform("ceo_command", {"text": "pause posting"}).status == "done"
+    assert touches(h)[-1].payload["channel"] == "typed"
+
+
+def test_any_failed_ceo_mint_is_refunded(make_harness, tmp_path):
+    prompt = tmp_path / "ceo-voice.md"
+    prompt.write_text("You are the CEO's console.", encoding="utf-8")
+    h = make_harness(admin_token=ADMIN, theater_token=THEATER, ceo_voice_prompt_path=prompt)
+    voice = h.ports.voice = CeoVoice()
+    real = voice.create_session
+
+    def broken(instructions, tools=None):
+        raise RuntimeError("adapter bug")
+
+    voice.create_session = broken
+    with TestClient(create_app(h.gw, start_background=False),
+                    raise_server_exceptions=False) as client:
+        def mint():
+            return client.post("/api/voice/session", headers=AUTH, json={"mode": "ceo"})
+
+        assert all(mint().status_code == 500 for _ in range(11))
+        voice.create_session = real
+        assert all(mint().status_code == 200 for _ in range(10))
+        assert mint().status_code == 429
 

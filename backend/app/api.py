@@ -44,7 +44,7 @@ _REFUSED_STATUS = {
     "qa_gate": 409, "at_capacity": 429, "too_long": 400,
     # v1.8 §5b: the CEO console
     "unknown_tool": 400, "bad_args": 400, "not_a_confirm": 400, "nothing_pending": 409,
-    "used": 409, "expired": 409,
+    "used": 409, "expired": 409, "flagged": 409,
 }
 _ERROR_STATUS = {"store_unavailable": 503, "internal_error": 500}
 # refusal data the contract puts in the HTTP error object (the rest stays agent-only)
@@ -323,7 +323,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             stamp = ceo_mint_limiter.check("ceo")
             try:
                 return _mint(gw().settings.ceo_voice_prompt_path, ceo=True)
-            except APIError:  # no session came back: it doesn't use the CEO's 10 an hour
+            except Exception:  # no session came back: it doesn't use the CEO's 10 an hour
                 ceo_mint_limiter.refund("ceo", stamp)
                 raise
         _talk_limit(mint_limiter, MINT_LIMITS)
@@ -363,7 +363,9 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         finally:
             if paid:
                 model = session.model if session else ""
-                gw().settle_voice("realtime", f"ceo/{model}" if ceo else model,
+                from app.gateway.projections import CEO_MINT
+
+                gw().settle_voice("realtime", f"{CEO_MINT}{model}" if ceo else model,
                                   ok=session is not None)
         return {"client_secret": session.client_secret, "model": session.model,
                 "expires_at": session.expires_at, "realtime_url": session.realtime_url}

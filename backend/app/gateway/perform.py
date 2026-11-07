@@ -2846,11 +2846,16 @@ class Gateway:
     @staticmethod
     def _is_read(name: str, args: dict) -> bool:
         """A CEO read tool writes nothing: it works while the log can't be written."""
-        if name != "ceo_tool" or not isinstance(args.get("name"), str):
-            return False
-        from app.ceo_tools import REGISTRY
+        from app.ceo_tools import REGISTRY, parse
 
-        tool = REGISTRY.get(args["name"])
+        if name == "ceo_command" and isinstance(args.get("text"), str):
+            parsed = parse(args["text"][:600])
+            tool_name = parsed[1][0] if parsed and parsed[0] == "tool" else None
+        elif name == "ceo_tool" and isinstance(args.get("name"), str):
+            tool_name = args["name"]
+        else:
+            return False
+        tool = REGISTRY.get(tool_name or "")
         return tool is not None and tool.kind == "read"
 
     # app/ceo_tools.py calls these internals (the same code as the §5 routes): _brief_text,
@@ -2872,7 +2877,7 @@ class Gateway:
             if tool.kind == "read":
                 return {"kind": "read", "data": tool.read(self, tool_args)}
             if tool.kind == "stop":
-                with self._channel("voice"):
+                with self._channel("voice" if source == "realtime" else "typed"):
                     return {"kind": "done", "summary": tool.carry(self, tool_args)}
             pinned, readback = tool.pin(self, tool_args)
         except ceo_tools.ToolRefused as err:
@@ -2900,7 +2905,11 @@ class Gateway:
         expires_at = iso_ts(self._now() + PROPOSAL_TTL)
         events = [self._proposal_cancel(p, "expired" if self._expired(p) else "superseded",
                                         "click", "") for p in self._open_proposals()]
-        events.append(NewEvent(type="ceo.proposed", actor="ceo", payload={
+        case_id = pinned.get("case_id")
+        approval = self.state.approvals.get(pinned.get("approval_id") or "")
+        if approval is not None:
+            case_id = approval.case_id
+        events.append(NewEvent(type="ceo.proposed", actor="ceo", case_id=case_id, payload={
             "proposal_id": proposal_id, "tool": tool, "args": pinned, "readback": readback,
             "expires_at": expires_at, "source": source}))
         self._emit(events)
@@ -2916,7 +2925,7 @@ class Gateway:
         decision = _one_of(args, "decision", ("confirm", "cancel"))
         via = _one_of(args, "via", ("voice", "click"))
         spoken_words = _str(args, "heard", required=False, max_len=2000) or ""
-        heard = clip(spoken_words, ceo_tools.HEARD_MAX)  # the log's copy
+        heard = clip(ceo_tools.mask_words(spoken_words), ceo_tools.HEARD_MAX)  # the log's copy
         proposal = self.state.proposals.get(proposal_id)
         if proposal is None:
             raise Refused("not_found", f"no proposal {proposal_id}")
@@ -3023,12 +3032,15 @@ class Gateway:
         waiting = self._pending_of(action_type) if to == "AUTO" else []
         released = self._released(action_type, current)
         reason = "CEO resume" if requested == "RESUME" else "CEO order"
+        stopped = [self._proposal_cancel(p, "superseded", "click", "")
+                   for p in self._open_proposals()] if to == "PAUSED" else []
         self._emit([NewEvent(type="touch.operating", actor="ceo",
                              payload={"note": f"{action_type} \u2192 {to}",
                                       "approval_id": None}),
                     NewEvent(type="trust.changed", actor="system",
                              payload={"action_type": action_type, "from": current, "to": to,
-                                      "reason": reason})])
+                                      "reason": reason}),
+                    *stopped])
         self._wake_superseded(waiting)
         self._carry_out(released)
         if to == "AUTO" or current == "PAUSED":
