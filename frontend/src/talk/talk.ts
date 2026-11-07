@@ -328,10 +328,15 @@ export function progressLine(p: CaseProgress): string {
 
 // ------------------------------------------------------------------ errors
 
-/** A gateway error → a calm sentence for the caller (no codes, no stack). */
-export function friendlyError(status: number, code: string): string {
-  if (status === 429 || code === "rate_limited") return "Lots of people are talking to U-Tax right now. Please try again in a minute.";
+/**
+ * A gateway error → a calm sentence for the caller (no codes, no stack). `at_capacity` (v1.7.6)
+ * is the gateway's own sentence: it names the inbox to email instead, and a retry won't help.
+ */
+export function friendlyError(status: number, code: string, message = ""): string {
+  if (code === "at_capacity") return message.trim() || "U-Tax is fully booked for today. Please email the firm instead.";
+  if (code === "rate_limited" || status === 429) return "Lots of people are talking to U-Tax right now. Please try again in a minute.";
   if (code === "too_long") return "That's a lot of detail. Please keep it to the five questions.";
+  if (code === "too_large" || status === 413) return "That's too much to send at once. Please keep it to the five questions.";
   if (code === "bad_input") return "Please check the email address and try again.";
   if (status === 0 || code === "network_error") return "Can't reach U-Tax right now. Check the connection and try again.";
   return "Something went wrong on our side. Please try again.";

@@ -203,6 +203,7 @@ export function ceoError(status: number, code: string, message: string): string 
   if (status === 401 || code === "unauthorized") return "The admin token was rejected. Sign in again.";
   if (code === "timeout") return "The gateway is taking too long. Check the list before trying again.";
   if (status === 0 || code === "network_error") return "Can't reach the gateway. Check it's running and try again.";
+  if (code === "superseded") return "That approval is outdated: a newer version replaced it. The list is refreshing.";
   if (code === "wrong_status") return "That case already moved on; the list is refreshing.";
   if (code === "no_facts") return "Retry needs the client's facts first. Use Re-ask instead.";
   if (code === "not_found") return "That item is gone; the list is refreshing.";

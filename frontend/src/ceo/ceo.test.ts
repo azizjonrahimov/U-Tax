@@ -129,6 +129,7 @@ describe("actions", () => {
     [400, "no_facts", "", /Use Re-ask/],
     [400, "bad_input", "decision must be hire or decline", /decision must be/],
     [404, "not_found", "no approval apr_9", /That item is gone/],
+    [409, "superseded", "apr_3 was superseded", /outdated/],
     [429, "", "", /Too many requests/],
     [429, "rate_limited", "", /Too many requests/],
     [0, "timeout", "", /taking too long/],
