@@ -143,3 +143,4 @@ after the fact; a correction is a new line. The digest is derived from here.
   (3) The CoS on glm-5.3-flash wrote board cards without a title/body and with a bogus blocked_by. Agents: move to anthropic/claude-haiku-5.5 and fix the CoS prompt.
   READY lane/backend-21 cf6d3b96d0f7 (ElevenLabs TTS; merged tree 1211 passed) MERGED; live ADAPTER_VOICE=elevenlabs.
   OWNER's live-demo spec → DECISION D31 / contract v1.11: make_ad, source_candidates, hr_outreach (consenting addresses only, no cold email to scraped strangers), follow_up; HR_CANDIDATES; models on claude-haiku-5.5.
+- 2026-11-07 14:48 local: READY lane/backend-22 d743a23caa50 (the Naïve waker; secret scan clean). MERGED. Its open items are accepted for the demo (request-thread wakes, parallel sessions).
