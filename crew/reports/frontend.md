@@ -97,6 +97,60 @@ Unverified:
   - A real mic and recognizer in Chrome (the owner checks this at the venue).
   - The real `/api/tts` (backend task 21) and the phrase registry (agents lane). My keys are a proposal until the registry lands.
 
+## Deploying the frontend on Vercel (the owner's account; the lane doesn't deploy)
+
+**Before you start:** the gateway runs behind your tunnel, and you know its `https://…` host.
+- Every `NEXT_PUBLIC_*` value is baked into the build. If the tunnel host changes, for example when a cloudflared quick tunnel restarts, the site must be redeployed with the new host.
+- Use a named tunnel or another fixed host if you can.
+
+1. In Vercel, choose **Add New → Project** and import the GitHub repo.
+2. Set **Root Directory** to `frontend`. Leave the framework preset on Next.js and keep the default build command (`next build`) and output.
+3. Under **Environment Variables**, set these for Production (and Preview, if you use it):
+
+| Name | Value | Notes |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | `https://<tunnel-host>` | No trailing slash, and no `/api` (the pages add it). |
+| `NEXT_PUBLIC_THEATER_TOKEN` | the gateway's `THEATER_TOKEN` | Public by design: read-only, and it ends up in the page. It must be the same value as the gateway's, and never empty (event mode refuses an empty token). |
+| `NEXT_PUBLIC_ASSET_HOSTS` | the gateway's `PUBLIC_ASSET_HOSTS` | Comma-separated hosts. Without this, social images don't show on the theater. |
+| `NEXT_PUBLIC_SHOW_BLOCKED` / `NEXT_PUBLIC_SHOW_QUEUE` | leave unset (both default to on) | Set either to `0` to hide that card. |
+
+   **Never** put `ADMIN_TOKEN`, `OPENAI_API_KEY`, `ELEVENLABS_API_KEY` or any other secret in Vercel. The CEO types the admin token at `/ceo`, where it stays in that browser tab only.
+4. Click **Deploy**. Note the site URL, e.g. `https://u-tax.vercel.app`.
+5. **On the gateway**, then restart it:
+   - Add that URL to `THEATER_ORIGIN` (comma-separated, no trailing slash, e.g. `http://localhost:3000,https://u-tax.vercel.app`). Without it, CORS blocks the theater, `/ceo`, `/talk` and `/api/tts`.
+   - Set `PUBLIC_TALK_URL` to `https://<site>/talk`. Keep it fixed once posts start, because post approvals digest the text before the link.
+6. **Smoke test**, about 1 minute:
+   - `https://<site>/` shows "LIVE · gateway" and the clock ticking. "Theater token rejected" means the token doesn't match.
+   - `/ceo`: sign in with the admin token. The brief appears.
+   - `/talk`: the consent screen shows.
+   - If anything shows "Can't reach the gateway", check `NEXT_PUBLIC_API_URL` and `THEATER_ORIGIN`.
+
+## Real-mic check in Chrome (2 minutes, at the venue, on the real speakers)
+
+Use desktop Chrome on the laptop that will run the demo, with the mic you'll use (a headset is best). Allow the microphone when Chrome asks.
+
+**/talk (60 s):**
+1. Open `https://<site>/talk` and click **I agree, start talking**.
+   - Expect: "U-Tax listens through your browser…", and the first question spoken in the ElevenLabs voice.
+   - If the voice sounds robotic, that's the browser's own voice: `/api/tts` isn't up (check `ELEVENLABS_API_KEY` on the gateway).
+2. While U-Tax speaks, the hint says "U-Tax is speaking". When it stops, it says "Listening".
+3. Say "Yes, we're a Delaware C corporation". It appears as your answer about a second after you stop, and the next question follows.
+   - Nothing appears: the hint says why (mic blocked, or "Listening isn't working on this network"). Typing still works.
+4. Talk over U-Tax while it asks a question. Nothing you say during its speech becomes an answer.
+5. Click into the email box. "Speak answers" turns off. Type an email and send. The estimate is read out in the firm's voice.
+
+**/ceo (60 s):**
+1. Open `https://<site>/ceo` and sign in. Turn on **Hands-free**.
+   - Expect: "Hands-free: the browser is listening". With no Realtime key that's correct.
+2. Say "approve the latest", or type it.
+   - The card appears, and the readback plays in the firm's voice: "… Say confirm."
+   - While it plays the status is not "listening", so the speakers' "Say confirm" can't count.
+3. After the readback ends, wait a beat and say "confirm". You get "Done: …", and the approval leaves the list.
+   - "That wasn't taken as a confirm" means you spoke over the voice or too soon: say it again, or click **Confirm**.
+4. Press **Esc**. You get "Paused everything…". Resume the kinds under Standing orders.
+
+If either page can't hear you at all: check Chrome's site permission (the lock icon → Microphone → Allow), and that the laptop isn't on a network that blocks Google's speech service. Both pages always work by typing and clicking.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
