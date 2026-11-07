@@ -111,10 +111,23 @@ describe("the spoken confirm grammar (contract v1.8.4, identical to the gateway)
 
   it("a readback counts as heard only when the reply carried most of its words and asked nothing after", () => {
     const rb = "Approve First re-ask email: Team #1, needs whether a foreign owner holds 25%+. That also turns emails automatic. Say confirm.";
-    expect(readbackCovered("Approve first re-ask email for Team 1: it needs whether a foreign owner holds twenty-five percent. That also turns emails automatic. Say confirm.", rb)).toBe(true);
+    expect(readbackCovered("Approve first re-ask email: Team 1 needs whether a foreign owner holds 25%. That also turns emails automatic. Say confirm.", rb)).toBe(true);
     expect(readbackCovered("Approve the first re-ask email for Team 1. Say confirm.", rb)).toBe(false); // the side effect was dropped
     expect(readbackCovered(`${rb} Anything else?`, rb)).toBe(false); // a question after it
     expect(readbackCovered("Say confirm.", "Say confirm.")).toBe(true);
+  });
+
+  it.each([
+    ["the verb swapped", "Hire Candidate B (screened) and email them the decision. Say confirm.", "Decline Candidate B (screened) and email them the decision. Say confirm."],
+    ["the status reversed", "Unblock Team #7 to READY. Say confirm.", "Unblock Team #7 to BLOCKED. Say confirm."],
+    ["a different figure", "Approve the memo for Team #7: $450 to their inbox. Say confirm.", "Approve the memo for Team #7: $4500 to their inbox. Say confirm."],
+    ["a different team", "Approve the memo for Team #7: $450 to their inbox. Say confirm.", "Approve the memo for Team #1: $450 to their inbox. Say confirm."],
+    ["a different candidate", "Hire Candidate B and email them the decision. Say confirm.", "Hire Candidate C and email them the decision. Say confirm."],
+    ["a negation added", "Approve the memo for Team #7: $450 to their inbox. Say confirm.", "I will not approve the memo for Team #7: $450 to their inbox. Say confirm."],
+    ["the words out of order", "Set posting back to ask first. Say confirm.", "Set first ask back to posting. Say confirm."],
+  ])("a reply with %s never counts as the readback", (_why, readback, said) => {
+    expect(readbackCovered(said, readback)).toBe(false);
+    expect(readbackCovered(readback, readback)).toBe(true);
   });
 
   it("'approve it' confirms an approve proposal only", () => {
@@ -266,12 +279,35 @@ describe("Realtime: who can confirm (v1.8.1 echo guard)", () => {
     expect(confirms(run(state, [[4000, started("x")], [4300, heard("x", "confirm")]]).effects)).toEqual([]);
   });
 
-  it("a cancelled or failed reply never arms the card, even with text", () => {
+  it.each(["cancelled", "failed", "incomplete"])("a %s text reply never arms the card", (status) => {
     const { state } = run(opened(), [
       [200, { type: "response.created", response: { id: "r" } }],
-      [700, { type: "response.done", response: { id: "r", status: "cancelled", output: [{ type: "message", content: [{ type: "output_text", text: proposal.readback }] }] } }],
+      [700, { type: "response.done", response: { id: "r", status, output: [{ type: "message", content: [{ type: "output_text", text: proposal.readback }] }] } }],
     ]);
     expect(state.proposal).toMatchObject({ heardAt: null, replyId: null });
+  });
+
+  it.each(["cancelled", "failed", "incomplete"])("a %s audio reply never arms the card, even after its full transcript and a stopped event", (status) => {
+    const { state, effects } = run(opened(), [
+      [200, { type: "response.created", response: { id: "r" } }],
+      [300, { type: "output_audio_buffer.started", response_id: "r" }],
+      [1500, said("r")],
+      [1600, { type: "response.done", response: { id: "r", status, output: [{ type: "message", content: [{ type: "output_audio" }] }] } }],
+      [1700, { type: "output_audio_buffer.stopped", response_id: "r" }],
+      [4000, started("x")],
+      [4300, heard("x", "confirm")],
+    ]);
+    expect(confirms(effects)).toEqual([]);
+    expect(state.proposal?.heardAt).toBeNull();
+  });
+
+  it("a text-only reply that paraphrases the readback leaves the card unread", () => {
+    const { state, effects } = run(opened(), [
+      [200, { type: "response.created", response: { id: "r" } }],
+      [900, { type: "response.done", response: { id: "r", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: "Want to send that memo?" }] }] } }],
+    ]);
+    expect(effects).toContainEqual({ type: "unread" });
+    expect(state.proposal?.heardAt).toBeNull();
   });
 
   it("a transcript that completes while agent audio is still playing is ignored", () => {
@@ -401,6 +437,10 @@ describe("the send gate (claimCard), shared by voice, typing and clicks", () => 
     expect(decideTyped(unread, "cancel", T0, true)).toMatchObject({ type: "confirm", decision: "cancel" });
     const read = readbackHeard(unread, "prop_1", T0 + 3000);
     expect(decideTyped(read, "confirm", T0 + 4000, true)).toMatchObject({ type: "confirm", decision: "confirm" });
+    // ...and never over agent audio (the brief or an alert playing through the speakers)
+    const briefOn = agentAudio(read, "other:brief", true, T0 + 3500);
+    expect(decideTyped(briefOn, "confirm", T0 + 4000, true)).toEqual({ type: "ignored", text: "confirm" });
+    expect(decideTyped(briefOn, "confirm", T0 + 4000)).toMatchObject({ type: "confirm" }); // typing is the CEO's hands
   });
 
   it("a click or typed words claim the card once, and never confirm after expiry", () => {

@@ -30,9 +30,9 @@ import {
   functionOutputItem,
   isApproveIt,
   isBareCancel,
+  localExpiry,
   matchConfirm,
   parseToolResult,
-  PROPOSAL_TTL_MS,
   readbackHeard,
   secondsLeft,
   STOP_EVERYTHING,
@@ -84,7 +84,11 @@ interface Card extends Proposal {
 
 /** Other agent audio on the console (the brief): CeoVoice counts it and mutes the mic meanwhile. */
 export const AGENT_AUDIO_EVENT = "utax:agent-audio";
+/** Other audio playing now, kept here too: a voice panel that mounts mid-brief still sees it. */
+const otherPlaying = new Set<string>();
 export const announceAgentAudio = (source: string, on: boolean) => {
+  if (on) otherPlaying.add(source);
+  else otherPlaying.delete(source);
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(AGENT_AUDIO_EVENT, { detail: { source, on } }));
 };
 
@@ -217,6 +221,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   /** Late-bound handlers for closures made before them (a fatal Realtime error, the other-audio listener). */
   const fatalRef = useRef<(why: string) => void>(() => {});
   const applyMicRef = useRef<() => void>(() => {});
+  const stopListeningRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     namesRef.current = names;
@@ -350,7 +355,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   }, []);
 
   const listen = useCallback(() => {
-    if (recRef.current || speaking.current > 0 || linkRef.current !== "fallback" || deaf.current) return;
+    if (recRef.current || speaking.current > 0 || otherAudio.current > 0 || linkRef.current !== "fallback" || deaf.current) return;
     const Ctor = recognitionCtor();
     if (!Ctor) return goDeaf(null);
     const r = new Ctor();
@@ -377,7 +382,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     r.onend = () => {
       if (recRef.current !== r) return;
       recRef.current = null;
-      if (alive.current && handsRef.current && speaking.current === 0 && linkRef.current === "fallback" && !deaf.current) {
+      if (alive.current && handsRef.current && speaking.current === 0 && otherAudio.current === 0 && linkRef.current === "fallback" && !deaf.current) {
         // A failing recognizer (offline, no device) restarts after a pause, never in a tight loop.
         if (failed) setTimeout(() => alive.current && handsRef.current && listenRef.current(), 2000);
         else listenRef.current();
@@ -453,7 +458,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       vs.current = armProposal(vs.current, p, Date.now(), voiced ? "browser" : "none");
       showCard(p);
       addLine("firm", say);
-      if (replaced) tellModel(`The open proposal was replaced. Only this one can be confirmed now: ${p.readback}`, false);
+      // No readback text in a system item: it can carry agent-written words (a post), never system authority.
+      if (replaced) tellModel("The CEO typed a new command, so the earlier proposal was replaced. Only the newest card on the console can be confirmed now.", false);
       speak(say, (played) => {
         // Spoken confirms count only once the readback was actually heard (a cut-off reading doesn't arm it).
         if (played) vs.current = readbackHeard(vs.current, p.proposalId, Date.now());
@@ -466,7 +472,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const send_confirm = useCallback(
     async (proposalId: string, decision: "confirm" | "cancel", via: "voice" | "click", heard: string) => {
       const epoch = stopEpoch.current;
-      confirmingAt.current = Date.now();
+      if (decision === "confirm") confirmingAt.current = Date.now(); // a cancel leaves nothing to duplicate
       setCard((c) => (c && c.proposalId === proposalId ? { ...c, sending: true } : c));
       try {
         const r = await post("/ceo/confirm", { proposal_id: proposalId, decision, via, heard });
@@ -528,7 +534,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const settle = useCallback(
     (decision: "confirm" | "cancel", via: "voice" | "click", heard: string, claimed?: string, onScreen?: string) => {
       const c = claimCard(vs.current, decision, Date.now(), claimed, onScreen);
-      if (!c) return Promise.resolve();
+      if (!c) {
+        if (onScreen !== undefined && vs.current.proposal && vs.current.proposal.proposalId !== onScreen)
+          setOutcome({ ok: false, text: "That card changed just as you clicked. Check the new one, then click again." });
+        return Promise.resolve();
+      }
       vs.current = c.state;
       return send_confirm(c.proposal.proposalId, decision, via, heard);
     },
@@ -548,7 +558,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           const replaced = vs.current.proposal && vs.current.proposal.proposalId !== r.proposalId;
           vs.current = armProposal(vs.current, { ...r, tool }, Date.now(), "model");
           showCard({ ...r, tool });
-          if (replaced) send([actionResultItem(`The earlier proposal was replaced. Only this one can be confirmed now: ${r.readback}`)]);
+          send([functionOutputItem(callId, toolOutput(r))]);
+          if (replaced) send([actionResultItem("The earlier proposal was replaced. Only the newest one (from the last tool result) can be confirmed now.")]);
+          return;
         }
         send([functionOutputItem(callId, toolOutput(r))]);
         return;
@@ -565,9 +577,16 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
             .catch((e: unknown) => !unauthorized(e) && setOutcome({ ok: false, text: voiceError(e) }));
           return;
         }
+        const open = vs.current.proposal;
+        if (open && open.proposalId === r.proposalId) {
+          // The card on screen already: keep its state (a confirm may be on its way); only learn it is an approve.
+          if (isApproveIt(said) && !open.tool) vs.current = { ...vs.current, proposal: { ...open, tool: "approve" } };
+          if (!open.settling) setOutcome({ ok: false, text: "Say “confirm”, or click Confirm on the card." });
+          return;
+        }
         // Never confirm a card the CEO hasn't seen: show it, and ask for a fresh confirm.
         // ("approve it" only ever matches an approve proposal: v1.8.4.) The gateway's own expiry may come sooner; its 409 expired rules.
-        const p = { proposalId: r.proposalId, readback: r.readback || "The open proposal.", expiresAt: Date.now() + PROPOSAL_TTL_MS, tool: isApproveIt(said) ? "approve" : null };
+        const p = { proposalId: r.proposalId, readback: r.readback || "The open proposal.", expiresAt: localExpiry(null, Date.now()), tool: isApproveIt(said) ? "approve" : null };
         return openLocalCard(p, `${p.readback} Confirm again to go ahead.`);
       }
       const text = r.kind === "read" ? describeRead(r.data) : r.kind === "done" ? r.summary : r.kind === "unknown" ? r.say : "";
@@ -633,7 +652,12 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       if (d?.type === "confirm") {
         await settle(d.decision, via, d.heard);
         if (d.decision === "confirm" || isBareCancel(t)) return; // "stop everything" also goes on as a command
-      } else if (vs.current.proposal && matchConfirm(t, vs.current.proposal)) return; // the card is settling or expired
+      } else if (vs.current.proposal) {
+        // The card is settling or expired: a repeated confirm or a bare cancel goes nowhere, but
+        // "stop everything" / "stop posting" are commands and must go through.
+        const m = matchConfirm(t, vs.current.proposal);
+        if (m === "confirm" || (m === "cancel" && isBareCancel(t))) return;
+      }
       const epoch = stopEpoch.current;
       try {
         const r = await post("/ceo/command", { text: t.slice(0, 500) });
@@ -668,7 +692,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
             break;
           case "reply":
             send([functionOutputItem(ef.callId, ef.output)]);
-            respond();
+            if (Date.now() - stoppedAt.current >= STOP_FENCE_MS) respond(); // after STOP the model stays quiet
             break;
           case "confirm":
             void settle(ef.decision, "voice", ef.heard, ef.proposalId);
@@ -833,8 +857,12 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         console.warn("[ceo voice] unreadable realtime message");
         return;
       }
+      const before = vs.current.proposal;
       const r = voiceStep(vs.current, raw, Date.now());
       vs.current = r.state;
+      const after = r.state.proposal;
+      // The card was just read in full: an earlier "not read yet" notice no longer holds.
+      if (before && after && before.proposalId === after.proposalId && before.heardAt === null && after.heardAt !== null) setOutcome(null);
       run(r.effects);
     };
     let grace: ReturnType<typeof setTimeout> | undefined;
@@ -990,7 +1018,14 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       otherAudio.current = Math.max(0, otherAudio.current + (on ? 1 : -1));
       vs.current = agentAudio(vs.current, source, on, Date.now());
       applyMicRef.current();
+      // The browser's own ear (fallback) closes too, and reopens a moment after the room is quiet.
+      if (on) stopListeningRef.current();
+      else if (otherAudio.current === 0 && linkRef.current === "fallback" && handsRef.current)
+        setTimeout(() => {
+          if (alive.current && otherAudio.current === 0 && speaking.current === 0 && handsRef.current) listenRef.current();
+        }, EAR_REOPEN_MS);
     };
+    for (const src of otherPlaying) onAudio(new CustomEvent(AGENT_AUDIO_EVENT, { detail: { source: src, on: true } }));
     window.addEventListener(AGENT_AUDIO_EVENT, onAudio);
     return () => window.removeEventListener(AGENT_AUDIO_EVENT, onAudio);
   }, []);
@@ -1008,7 +1043,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     lineRef.current = addLine;
     closeRef.current = closeCard;
     applyMicRef.current = applyMic;
-  }, [speak, addLine, closeCard, applyMic]);
+    stopListeningRef.current = stopListening;
+  }, [speak, addLine, closeCard, applyMic, stopListening]);
   useEffect(() => {
     feedRef.current = (events, reset) => {
       const top = events.reduce((m, e) => (typeof e.id === "number" && e.id > m ? e.id : m), 0);
@@ -1024,7 +1060,12 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         if (!open || pid !== open.proposalId || open.settling) continue;
         if (e.type === "ceo.cancelled" || e.type === "ceo.confirmed") {
           closeRef.current(open.proposalId);
-          const why = e.type === "ceo.confirmed" ? "was confirmed elsewhere" : "was cancelled by the gateway (a pause, a newer proposal, or a change)";
+          const why =
+            e.type === "ceo.confirmed"
+              ? unknownIds.current.has(open.proposalId)
+                ? "went through after all (your earlier confirm landed)"
+                : "was confirmed elsewhere"
+              : "was cancelled by the gateway (a pause, a newer proposal, or a change)";
           noteRef.current(`That proposal ${why}. Nothing more to do on it here.`);
         }
       }

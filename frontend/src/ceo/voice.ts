@@ -115,13 +115,32 @@ export const isApproveIt = (text: string) => APPROVE_IT_RE.test(speech(clipHeard
  * they'd confirm, and only a click or typing can.
  */
 export function readbackCovered(said: string, readback: string): boolean {
-  const want = new Set(readbackBody(readback).split(" ").filter((w) => /^[a-z']{3,}$/.test(w)));
-  if (!want.size) return true;
-  const got = new Set(speech(said).split(" "));
-  let hit = 0;
-  for (const w of want) if (got.has(w)) hit += 1;
+  const want = readbackBody(readback).split(" ").filter(Boolean);
+  if (!want.length) return true;
+  const got = speech(said).split(" ").filter(Boolean);
+  // In order: the longest common subsequence of the readback's words and the reply's.
+  const lcs = Array.from({ length: want.length + 1 }, () => new Array<number>(got.length + 1).fill(0));
+  for (let i = want.length - 1; i >= 0; i--)
+    for (let j = got.length - 1; j >= 0; j--) lcs[i][j] = want[i] === got[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const matched = new Set<number>(); // indexes of `want` in that subsequence
+  for (let i = 0, j = 0; i < want.length && j < got.length; ) {
+    if (want[i] === got[j]) {
+      matched.add(i);
+      i += 1;
+      j += 1;
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) i += 1;
+    else j += 1;
+  }
+  // The words that decide what runs must all be there, in place: the verb, every figure and
+  // target (digits, a candidate letter), and every status word ("READY", "AUTO").
+  const caps = new Set(Array.from(readback.matchAll(/\b[A-Z][A-Z_]+\b/g), (m) => m[0].toLowerCase().split("_")).flat());
+  const key = (w: string, i: number) => i === 0 || /\d/.test(w) || /^[a-z]$/.test(w) || caps.has(w);
+  if (want.some((w, i) => key(w, i) && !matched.has(i))) return false;
+  // A negation the readback doesn't have turns it around ("I will not approve…").
+  const added = got.filter((w) => CANCEL_RE.test(w) && !want.includes(w));
+  if (added.length) return false;
   const tail = said.trim().split(/(?<=[.!])\s+/).at(-1) ?? "";
-  return hit / want.size >= 0.8 && !/[?¿？]\s*$/.test(tail);
+  return matched.size / want.length >= 0.9 && !/[?¿？]\s*$/.test(tail);
 }
 
 /** A cancel with nothing else in it. "Stop everything" cancels the card AND goes on as a command. */
@@ -437,7 +456,8 @@ export function decideTyped(s: VoiceState, text: string, now: number, spoken = f
   if (!p || p.settling) return null;
   const d = classifyConfirm(text, p);
   if (!d) return null;
-  if (d === "blocked" || (d === "confirm" && spoken && p.heardAt === null)) return { type: "ignored", text };
+  // Browser-heard words are speech like any other: not before the readback was heard, not over agent audio.
+  if (d === "blocked" || (d === "confirm" && spoken && (p.heardAt === null || duringAgentAudio(s, now)))) return { type: "ignored", text };
   if (d === "confirm" && now >= p.expiresAt) return null;
   return { type: "confirm", proposalId: p.proposalId, decision: d, heard: clipHeard(text) };
 }

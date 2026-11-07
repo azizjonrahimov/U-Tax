@@ -77,14 +77,26 @@ const noToken = () => null;
 
 const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
 /** The brief, read by the browser. Voice mode counts it as agent audio (and mutes its mic) while it plays. */
+let sayTurn = 0;
+let sayTimer: ReturnType<typeof setTimeout> | undefined;
 function say(text: string) {
   if (!hasSpeech()) return;
   window.speechSynthesis.cancel();
+  clearTimeout(sayTimer);
+  const turn = ++sayTurn; // only this playback's end (or stall) may say the brief stopped
   const u = new SpeechSynthesisUtterance(text);
   announceAgentAudio("brief", true);
-  u.onend = u.onerror = () => announceAgentAudio("brief", false);
-  // A stalled utterance must not keep the voice mic muted forever.
-  setTimeout(() => announceAgentAudio("brief", false), Math.min(120_000, 3000 + text.split(/\s+/).length * 450));
+  u.onend = u.onerror = () => {
+    if (turn !== sayTurn) return;
+    clearTimeout(sayTimer);
+    announceAgentAudio("brief", false);
+  };
+  // A stalled utterance must not keep the voice mic muted forever: silence it, then say it stopped.
+  sayTimer = setTimeout(() => {
+    if (turn !== sayTurn) return;
+    if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
+    announceAgentAudio("brief", false);
+  }, Math.min(120_000, 3000 + text.split(/\s+/).length * 450));
   window.speechSynthesis.speak(u);
 }
 const hush = () => {
@@ -165,6 +177,8 @@ export function Ceo() {
     if (audioUrl.current) URL.revokeObjectURL(audioUrl.current);
     audioUrl.current = null;
     hush();
+    sayTurn += 1; // a stopped brief's own end and stall timer are void
+    clearTimeout(sayTimer);
     announceAgentAudio("brief", false);
   }, []);
 
