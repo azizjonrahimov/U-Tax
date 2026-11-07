@@ -21,17 +21,20 @@ _STATUS_CODES = {
 class APIError(Exception):
     """Raise from any route to return the contract error shape."""
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(self, status_code: int, code: str, message: str,
+                 details: dict | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.details = details or {}  # extra fields in the error object (contract-named)
 
 
-def error_response(status_code: int, code: str, message: str) -> JSONResponse:
+def error_response(status_code: int, code: str, message: str,
+                   details: dict | None = None) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
-        content={"error": {"code": code, "message": message}},
+        content={"error": {**(details or {}), "code": code, "message": message}},
     )
 
 
@@ -40,7 +43,7 @@ def _code_for(status_code: int) -> str:
 
 
 async def _api_error(_: Request, exc: APIError) -> JSONResponse:
-    return error_response(exc.status_code, exc.code, exc.message)
+    return error_response(exc.status_code, exc.code, exc.message, exc.details)
 
 
 async def _http_error(_: Request, exc: StarletteHTTPException) -> JSONResponse:

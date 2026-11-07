@@ -44,6 +44,8 @@ _REFUSED_STATUS = {
     "qa_gate": 409, "at_capacity": 429, "too_long": 400,
 }
 _ERROR_STATUS = {"store_unavailable": 503, "internal_error": 500}
+# refusal data the contract puts in the HTTP error object (the rest stays agent-only)
+_REFUSED_DETAILS = {"superseded": ("approval_id", "superseded_by")}  # v1.7.8
 
 
 def result_or_raise(result: ToolResult) -> dict[str, Any]:
@@ -55,7 +57,10 @@ def result_or_raise(result: ToolResult) -> dict[str, Any]:
                 **result.data}
     err = result.error or {"code": "error", "message": "failed"}
     if result.status == "refused":
-        raise APIError(_REFUSED_STATUS.get(err["code"], 409), err["code"], err["message"])
+        named = _REFUSED_DETAILS.get(err["code"], ())
+        details = {k: (result.data or {}).get(k) for k in named}
+        raise APIError(_REFUSED_STATUS.get(err["code"], 409), err["code"], err["message"],
+                       details)
     raise APIError(_ERROR_STATUS.get(err["code"], 502), err["code"], err["message"])
 
 
