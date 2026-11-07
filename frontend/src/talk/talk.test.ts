@@ -205,6 +205,17 @@ describe("following the case", () => {
     // The re-ask mail's approval is not the memo's sign-off.
     p = followCase(p, [ev(15, "approval.requested", { approval_id: "a", action_type: "email", summary: "s" }, { actor: "system" })]);
     expect(p.awaitingCeo).toBe(false);
+    // The client replies: the rejected figure does not come back before a new computation.
+    p = followCase(p, [ev(16, "facts.extracted", { facts: {}, quotes: {}, assumed: [] })]);
+    expect(p.totalCents).toBeNull();
+    expect(progressLine(p)).not.toMatch(/\$/);
+    p = followCase(p, [{ ...tax, id: 17 }]);
+    expect(p.totalCents).toBe(45000);
+  });
+
+  it("a QA failure alone (no question) hides the rejected figure", () => {
+    const p = followCase(emptyProgress("case_7"), [tax, ev(13, "qa.failed", { checks: [] }, { actor: "qa" })]);
+    expect(p.totalCents).toBeNull();
   });
 
   it("says when the firm needs more facts, is not eligible, or waits on a human", () => {

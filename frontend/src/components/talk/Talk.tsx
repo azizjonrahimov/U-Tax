@@ -102,6 +102,8 @@ export function Talk() {
   const [streamDown, setStreamDown] = useState(false);
   /** A send that may have reached the gateway (timeout, network, 5xx): a retry returns that case, so edits are locked. */
   const [mayHaveLanded, setMayHaveLanded] = useState(false);
+  /** The last spoken answer was still being transcribed when the call ended. */
+  const [lostAnswer, setLostAnswer] = useState(false);
   /** Stream start: the last event id before our case opened (so we don't replay the night). */
   const [followFrom, setFollowFrom] = useState(0);
   /** The turns as of the last change: handlers read this, never a state updater with side effects. */
@@ -178,14 +180,15 @@ export function Talk() {
     timers.current.clear();
   }, []);
 
-  /** End the current call and any voice attempt still connecting. */
-  const hangUp = useCallback(() => {
+  /** End the current call and any voice attempt still connecting. Returns how many unheard answers were dropped. */
+  const hangUp = useCallback((): number => {
     attemptRef.current += 1;
     const c = callRef.current;
     callRef.current = null;
-    if (!c) return;
+    if (!c) return 0;
     const kept = dropPending(turnsRef.current);
-    if (kept.length !== turnsRef.current.length) {
+    const dropped = turnsRef.current.length - kept.length;
+    if (dropped) {
       turnsRef.current = kept;
       setTurns(kept);
     }
@@ -193,6 +196,7 @@ export function Talk() {
     c.pc.close();
     c.audio.pause();
     c.audio.srcObject = null;
+    return dropped;
   }, []);
   useEffect(
     () => () => {
@@ -219,11 +223,11 @@ export function Talk() {
   /** Switch to typing. Only from the conversation step: a late voice failure never drags a sent case back. */
   const startTyped = useCallback(
     (why: string | null) => {
-      hangUp();
+      const dropped = hangUp();
       if (phaseRef.current !== "talk" && phaseRef.current !== "consent") return;
       setMode("typed");
       go("talk");
-      setNotice(why);
+      setNotice(dropped ? `${why ?? ""} Your last answer didn't come through, so please type it.`.trim() : why);
       // A fresh conversation runs the five questions; after a voice drop the caller just finishes typing.
       const hadAnswers = turnsRef.current.some((t) => t.speaker === "customer" && t.text);
       scriptFrom.current = hadAnswers ? null : turnsRef.current.length;
@@ -371,14 +375,13 @@ export function Talk() {
     // The last spoken answer is still being transcribed for a moment after it was said.
     for (let waited = 0; callRef.current && pendingTurns(turnsRef.current) > 0 && waited < TRANSCRIPT_WAIT_MS; waited += 100) await sleep(100);
     const wasVoice = mode === "voice";
-    const lost = pendingTurns(turnsRef.current);
-    hangUp();
+    const lost = hangUp() > 0;
     hush();
     if (wasVoice) {
       setMode("typed"); // the call is over either way; a failed send continues by typing
       scriptFrom.current = null; // ...without the scripted questions
     }
-    if (lost) setNotice("Your last spoken answer didn't come through in time. If it mattered, type it after sending, or reply to the memo.");
+    setLostAnswer(lost);
 
     requestId.current ??= newRequestId();
     // Where the stream should start: just before our case opens. Measured once per request id.
@@ -416,12 +419,20 @@ export function Talk() {
       // must come back for the same case, and the conversation is locked so nothing is silently dropped.
       const code = e instanceof ApiError ? e.code : "";
       if (code === "bad_input" || code === "too_long") {
+        // The gateway checks the content before anything is saved: nothing landed.
         requestId.current = null;
         requestAfter.current = null;
-      } else if (status !== 429) {
-        setMayHaveLanded(true);
+        setMayHaveLanded(false);
+      } else if (status === 0 || status >= 500) {
+        setMayHaveLanded(true); // a timeout or server error may follow a send that landed
       }
-      if (wasVoice) setNotice("The voice call ended. You can still type and send.");
+      setNotice(
+        lost
+          ? "Your last spoken answer didn't come through, so please type it before sending again."
+          : wasVoice
+            ? "The voice call ended. You can still type and send."
+            : null,
+      );
       go("talk");
     }
   };
@@ -480,6 +491,7 @@ export function Talk() {
     setError(null);
     setStreamDown(false);
     setMayHaveLanded(false);
+    setLostAnswer(false);
     setMode("typed");
     go("consent");
   };
@@ -620,6 +632,21 @@ export function Talk() {
                   {mayHaveLanded ? " It may already have reached U-Tax; sending again won't open a second case." : ""}
                 </p>
               )}
+              {mayHaveLanded && (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    // The caller chooses: edit and send as a new request (a second case if the first one landed).
+                    requestId.current = null;
+                    requestAfter.current = null;
+                    setMayHaveLanded(false);
+                    setError(null);
+                  }}
+                >
+                  Change something and send as a new request
+                </button>
+              )}
             </form>
             {mode === "voice" && phase === "talk" && (
               <button className="ghost end" onClick={() => startTyped("Call ended. You can still type and send.")}>
@@ -662,6 +689,7 @@ export function Talk() {
                 ))}
               </ol>
             )}
+            {lostAnswer && <p className="hint">Your last spoken answer didn&rsquo;t come through. If it mattered, reply to the memo email with it.</p>}
             {streamDown && !done && <p className="hint">Live updates paused. The memo still arrives by email.</p>}
             <div className="actions">
               <Link className="secondary" href="/">

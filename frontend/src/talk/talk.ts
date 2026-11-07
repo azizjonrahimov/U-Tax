@@ -252,10 +252,15 @@ export function followCase(p: CaseProgress, events: readonly UTaxEvent[]): CaseP
       case "facts.extracted":
         s = { ...s, stage: up("facts"), askedFor: [], awaitingCeo: false };
         break;
+      case "qa.failed":
+        // QA rejected the computation: its figure must never show (or be spoken) again.
+        s = { ...s, totalCents: null, method: null, awaitingCeo: false };
+        break;
       case "client.asked":
       case "facts.missing":
-        // Can come after a computation too (a QA re-ask): the question replaces the estimate line.
-        s = { ...s, awaitingCeo: false, askedFor: Array.isArray(pl.missing) ? pl.missing.filter((m): m is string => typeof m === "string").slice(0, 8) : [] };
+        // Can come after a computation too (a QA re-ask): the question replaces the estimate,
+        // and the old figure goes until the next computation.
+        s = { ...s, totalCents: null, method: null, awaitingCeo: false, askedFor: Array.isArray(pl.missing) ? pl.missing.filter((m): m is string => typeof m === "string").slice(0, 8) : [] };
         break;
       case "tax.computed":
         if (Number.isSafeInteger(pl.total_cents) && (pl.total_cents as number) >= 0) {
