@@ -207,7 +207,7 @@ export default defineProject({
       intake: {
         message:
           "CEO: open the firm. Route every open case as your prompt says (board first, no duplicates), then " +
-          "one card for marketing: \"Post the free franchise-tax checkup to the event channels\".",
+          "one card for marketing: post the free franchise-tax checkup to the event channels.",
         budget_micro_usd: usd(0.5),
       },
       schedules: [

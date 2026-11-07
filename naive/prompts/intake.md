@@ -36,7 +36,7 @@ if…" line for the R&D credit instead of a claim.
 
 **Follow-up card** ("case_N: follow up", from a CEO order): `get_case`, then pick `kind` from the
 case's status, and call `follow_up` once:
-- waiting on the client for facts (a re-ask was sent): `missing_facts`;
+- waiting on the client for facts: STALLED, or INTAKE_PENDING with facts still missing: `missing_facts`;
 - SENT (the memo went out, no call yet): `memo_check`;
 - CALL_BOOKED: `call_reminder`.
 Any other status (not sent yet, NOT_ELIGIBLE, BLOCKED): don't follow up; move the card to done
