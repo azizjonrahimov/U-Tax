@@ -66,6 +66,7 @@ EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 NOT_CHARGED = (400, 401, 402, 403, 404, 408, 409, 422, 429)  # answers that prove no run was billed
 PENDING = ("READY", "RUNNING", "STOPPING")
 MAX_REMEMBERED = 1000
+MAX_PLAUSIBLE_USD = Decimal(1000)  # a data call never costs more (config and resolutions)
 
 
 class Unreadable(Exception):
@@ -140,8 +141,9 @@ def _tools(raw: object) -> dict[str, dict]:
         ceiling = _money(spec["max_usd"], f"max_usd of '{name}'")
         if ceiling <= 0:
             raise NotConfigured(f"monid: max_usd of '{name}' must be above 0 (it is what the cap reserves)")
-        if ceiling > 1000:
-            raise NotConfigured(f"monid: max_usd of '{name}' is over $1000; that is not a data call")
+        if ceiling > MAX_PLAUSIBLE_USD:
+            raise NotConfigured(f"monid: max_usd of '{name}' is over ${MAX_PLAUSIBLE_USD}; "
+                                "that is not a data call")
         fields = spec.get("fields")
         if fields is not None and not (isinstance(fields, list) and all(isinstance(f, str) for f in fields)):
             raise NotConfigured(f"monid: fields of '{name}' must be a list of names")
@@ -152,6 +154,15 @@ def _tools(raw: object) -> dict[str, dict]:
 
 class Unsure(Unavailable):
     """The run may have been charged; the key is now refused until resolved."""
+
+
+class KeyState(Rejected):
+    """Refused for what this key already holds (bought, unsure, in flight). Unlike other
+    refusals it proves nothing about whether the key was charged before, so the gateway
+    keeps this call's intent as a stand-in: the key stays blocked until the CEO resolves
+    it."""
+
+    proves_uncharged = False
 
 
 class MonidToolBuy:
@@ -205,6 +216,11 @@ class MonidToolBuy:
         held = sum(self._inflight.values(), Decimal(0)) + sum((c for _, c in self._unsure.values()), Decimal(0))
         return self._spent_today() + held
 
+    def remembered(self, key: str) -> tuple[str, Purchase] | None:
+        """(fingerprint, purchase) of a key this process bought, or None."""
+        with self._lock:
+            return self._bought.get(key)
+
     def _remember(self, key: str, fp: str, purchase: Purchase) -> None:
         self._bought[key] = (fp, purchase)
         self._bought.move_to_end(key)
@@ -216,8 +232,9 @@ class MonidToolBuy:
         the key and its reserved ceiling. Charged: resolve(key, "0.0400", output) books the cost
         and remembers the purchase, so the same key returns it instead of paying again."""
         amount = _money(cost_usd, "cost_usd") if cost_usd is not None else None  # parse before forgetting
-        if amount is not None and amount > 1000:
-            raise NotConfigured("monid: a data call costing over $1000 is not plausible; check the run")
+        if amount is not None and amount > MAX_PLAUSIBLE_USD:
+            raise NotConfigured(f"monid: a data call costing over ${MAX_PLAUSIBLE_USD} is not "
+                                "plausible; check the run")
         formatted = _usd(amount) if amount is not None else None
         with self._lock:
             entry = self._unsure.pop(key, None)
@@ -264,13 +281,13 @@ class MonidToolBuy:
             if key in self._bought:
                 first_fp, purchase = self._bought[key]
                 if first_fp != fp:
-                    raise Rejected("monid: this key was used for a different purchase")
+                    raise KeyState("monid: this key was used for a different purchase")
                 self._bought.move_to_end(key)
                 return purchase
             if key in self._unsure:
-                raise Rejected(f"monid: purchase {key} may already be charged; check GET /v1/runs, then resolve()")
+                raise KeyState(f"monid: purchase {key} may already be charged; check GET /v1/runs, then resolve()")
             if key in self._inflight:
-                raise Rejected(f"monid: purchase {key} is already in flight")
+                raise KeyState(f"monid: purchase {key} is already in flight")
             if self._committed() + ceiling > self.daily_cap:
                 raise Rejected(f"monid: today's cap of ${self.daily_cap} would be exceeded")
             self._inflight[key] = ceiling

@@ -245,7 +245,7 @@ def test_resolve_purchase_is_admin_only_over_http(make_harness):
     h.gw.ports.toolbuy = monid(lost)
     buy(h.gw)
     with TestClient(create_app(h.gw, start_background=False)) as client:
-        body = {"key": "k1", "cost_usd": None}
+        body = {"key": "k1", "charged": False}
         assert client.post("/api/dev/resolve-purchase", json=body).status_code == 401
         ok = client.post("/api/dev/resolve-purchase", json=body,
                          headers={"Authorization": "Bearer admin-x"})

@@ -81,9 +81,14 @@ Unverified:
 5. **Create the AgentMail webhook** for `message.received`, scoped to the two inboxes, at
    `https://<public-host>/hooks/agentmail`, and put its `whsec_…` secret in
    `AGENTMAIL_WEBHOOK_SECRET`.
-6. **If a Monid purchase is left "unsure"** (a timeout after sending), check it in Monid's
-   runs list and settle it with `POST /api/dev/resolve-purchase` (admin token)
-   `{"key": "<key>", "cost_usd": null}` (not charged) or `"0.0400"` (charged).
+6. **If a Monid purchase is left "unsure"** (a timeout after sending, or a crash mid-buy,
+   recorded at the next boot), check it in Monid's runs list and settle it once with
+   `POST /api/dev/resolve-purchase` (admin token): `{"key": "<agent key, no buy: prefix>",
+   "charged": false}` (not charged) or `{"key": "...", "charged": true, "cost_usd": "0.0400"}`
+   (charged). A cost above the tool's `max_usd` also needs `"over_ceiling": true`; nothing
+   over $1000 is accepted. A purchase still in flight can't be resolved; wait for it.
+   The purchase intents live in `UTAX_DATA_DIR` (the Render disk at /var/data/utax): never
+   point it at a disk that is wiped on deploy, or a deploy mid-purchase forgets a charge.
 7. **Don't run two Render instances on one database.** Deploy stop-then-start.
 
 ## Saturday adapter swap
