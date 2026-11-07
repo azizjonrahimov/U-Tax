@@ -115,9 +115,11 @@ through every department is the proof.
       of that kind): social posts running on their own for shot 2 (Resume them if a live demo
       paused them), email and calendar invites running on their own for shots 8 and 10 (or the
       step waits for a click), and a candidate shortlisted before shot 14.
-- [ ] Record on a fresh event store (a new gateway data file) if a demo or rehearsal ran first.
-      Otherwise the Hiring pane counts the earlier applicants, the teammate isn't Candidate A, and
-      re-injecting a fixture is refused as a duplicate (fixed Message-IDs). Without a fresh store,
+- [ ] Record on a fresh event store (a new gateway data file) if a demo or rehearsal ran first,
+      and let the crew run a night's work on it before shot 15, so "the whole night, replayed"
+      is true; otherwise say "here's today, replayed from the log". With an old store the Hiring
+      pane counts the earlier applicants, the teammate isn't Candidate A, and re-injecting a
+      fixture is refused as a duplicate (fixed Message-IDs). Without a fresh store,
       inject with a new `message_id` and `from` through `POST /api/dev/inject-email`, and caption
       the counts from `/api/state` at recording time.
 

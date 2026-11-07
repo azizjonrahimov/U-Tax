@@ -333,17 +333,19 @@ else {
 
 // 13. the /talk phrase registry (contract v1.10.2): POST /api/tts purpose "talk" speaks only these
 // lines; the gateway fills each {placeholder} with a whole number (an arg named *_cents is spoken as
-// dollars). Mirrors the backend's strict loader, which refuses the whole file on any bad entry: a
-// flat key → line object, keys of a-z 0-9 _ . - (1–64), lines of 1–600 characters, plain {name}
-// placeholders only ({{ }} for a literal brace). Plus the U-Tax rules: one key per voice-intake.md
-// question, word for word, and every other key with exactly its expected placeholders.
+// dollars, "$85,165"). Mirrors the backend's strict loader (backend/app/gateway/talk_phrases.py),
+// which refuses the whole file on any bad entry: a flat key → line object, keys of a-z 0-9 _ . -
+// (1–64), lines of 1–600 characters that aren't blank, plain {name} placeholders of at most 32
+// characters ({{ }} for a literal brace). Plus the U-Tax rules: question.N is the page's own
+// question N word for word (frontend/src/talk/talk.ts TYPED_SCRIPT, which the page shows and maps to
+// these keys), as many questions as voice-intake.md has, and every other key with exactly its
+// expected placeholders.
 const CLIENTS_INBOX = "utax-clients@agentmail.to";
 const TALK_FIXED = {
   "estimate.authorized": ["total_cents"],
   "estimate.assumed_par": ["total_cents"],
   "memo.on_its_way": [],
   at_capacity: [],
-  goodbye: [],
 };
 
 /** voice-intake.md's numbered questions, each its first "…" quote (whitespace collapsed). */
@@ -353,10 +355,17 @@ function talkQuestions(md) {
     .map((item) => item.replace(/\s+/g, " ").match(/^\d+\. \*\*.+?\*\*.*?"([^"]+)"/)?.[1] ?? null);
 }
 
+/** The /talk page's own questions (TYPED_SCRIPT in frontend/src/talk/talk.ts), or null. */
+function pageQuestions(ts) {
+  const block = ts.match(/export const TYPED_SCRIPT[^=]*=\s*\[([\s\S]*?)\];/)?.[1];
+  if (!block) return null;
+  return [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
+}
+
 /**
  * A line's placeholder names, Python str.format style ({{ and }} are literal braces), or an error
  * for anything the loader refuses: an unmatched brace, a format spec, a conversion, an attribute
- * or an index, or a name that isn't a plain identifier.
+ * or an index, or a name that isn't a plain identifier of at most 32 characters.
  */
 function talkPlaceholders(line) {
   const names = [];
@@ -371,7 +380,8 @@ function talkPlaceholders(line) {
     const end = line.indexOf("}", i);
     if (end < 0) return { error: "an unmatched {" };
     const name = line.slice(i + 1, end);
-    if (!/^[a-z_][a-z0-9_]*$/.test(name)) return { error: `the placeholder {${name}} (plain {name} only: no format spec, !conversion, .attr or [index])` };
+    if (!/^[a-z_][a-z0-9_]{0,31}$/.test(name))
+      return { error: `the placeholder {${name}} (plain {name} of at most 32 characters only: no format spec, !conversion, .attr or [index])` };
     names.push(name);
     i = end;
   }
@@ -379,12 +389,14 @@ function talkPlaceholders(line) {
 }
 
 /** Every problem with a talk-phrases registry (pure, so it can be self-tested). */
-function talkPhraseProblems(phrases, questions) {
+function talkPhraseProblems(phrases, { questions, scriptCount }) {
   const out = [];
   const bad = (msg) => out.push(`prompts/talk-phrases.json: ${msg}`);
   if (!phrases || typeof phrases !== "object" || Array.isArray(phrases)) return ["prompts/talk-phrases.json: not a flat JSON object of key → line"];
-  if (questions.length === 0 || questions.includes(null)) bad("could not read the numbered questions from voice-intake.md");
-  const expected = { ...Object.fromEntries(questions.map((q, i) => [`question.${i + 1}`, []])), ...TALK_FIXED };
+  if (!questions || questions.length === 0) bad("could not read the /talk page's questions (TYPED_SCRIPT in frontend/src/talk/talk.ts)");
+  else if (questions.length !== scriptCount)
+    bad(`the /talk page has ${questions.length} questions but voice-intake.md has ${scriptCount}; they are one script`);
+  const expected = { ...Object.fromEntries((questions ?? []).map((q, i) => [`question.${i + 1}`, []])), ...TALK_FIXED };
   const have = Object.keys(phrases);
   const missing = Object.keys(expected).filter((k) => !have.includes(k));
   const extra = have.filter((k) => !(k in expected));
@@ -393,16 +405,18 @@ function talkPhraseProblems(phrases, questions) {
   for (const [key, line] of Object.entries(phrases)) {
     if (!/^[a-z0-9_.-]{1,64}$/.test(key)) bad(`key "${key}" must be 1–64 characters of a-z 0-9 _ . -`);
     if (typeof line !== "string") { bad(`${key} must be a string line (the file is flat: key → line)`); continue; }
-    if (line.length < 1 || line.length > 600) bad(`${key} is ${line.length} characters (1–600)`);
+    if (!line.trim() || line.length > 600) bad(`${key} is ${line.trim() ? line.length : "a blank line of " + line.length} characters (1–600, not blank)`);
     const { names, error } = talkPlaceholders(line);
     if (error) { bad(`${key} has ${error}`); continue; }
     const want = expected[key];
     if (want && JSON.stringify([...new Set(names)].sort()) !== JSON.stringify([...want].sort()))
       bad(`${key} must have exactly the placeholders ${want.length ? want.map((n) => `{${n}}`).join(", ") : "none"} (has ${names.length ? names.map((n) => `{${n}}`).join(", ") : "none"})`);
-    if (/\{\w+_cents\}\s*cents\b/i.test(line)) bad(`${key} says "{…_cents} cents"; a *_cents arg is spoken as dollars`);
+    if (/\$\s*\{\w+_cents\}|\{\w+_cents\}\s*(?:cents|dollars?)\b/i.test(line))
+      bad(`${key} wraps a {…_cents} arg in "$" or a unit; a *_cents arg is already spoken as dollars ("$85,165")`);
     const m = key.match(/^question\.(\d+)$/);
-    const q = m ? questions[Number(m[1]) - 1] : null;
-    if (q && line !== q) bad(`${key} must be voice-intake.md's question ${m[1]} word for word: "${q}"`);
+    const q = m ? questions?.[Number(m[1]) - 1] : null;
+    if (q && line !== q) bad(`${key} must be the /talk page's question ${m[1]} word for word: "${q}"`);
+    if (key === "question.1" && !/\bAI\b/.test(line)) bad("question.1 must say the caller is talking to an AI");
     if (key.startsWith("estimate.") && !line.includes("not tax advice")) bad(`${key} speaks a figure, so it must say "not tax advice"`);
     const emails = line.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g) ?? [];
     if (emails.some((e) => key !== "at_capacity" || e !== CLIENTS_INBOX)) bad(`${key} names an email address (only at_capacity names ${CLIENTS_INBOX})`);
@@ -413,9 +427,13 @@ function talkPhraseProblems(phrases, questions) {
 }
 
 const talkPath = join(ROOT, "prompts", "talk-phrases.json");
+const talkPagePath = join(ROOT, "..", "frontend", "src", "talk", "talk.ts");
 if (!existsSync(talkPath)) fail("prompts/talk-phrases.json is missing");
 else if (existsSync(voicePath)) {
-  const questions = talkQuestions(readFileSync(voicePath, "utf8"));
+  const script = {
+    questions: existsSync(talkPagePath) ? pageQuestions(readFileSync(talkPagePath, "utf8")) : null,
+    scriptCount: talkQuestions(readFileSync(voicePath, "utf8")).filter(Boolean).length,
+  };
   let phrases = null;
   try {
     phrases = JSON.parse(readFileSync(talkPath, "utf8"));
@@ -423,30 +441,42 @@ else if (existsSync(voicePath)) {
     fail(`prompts/talk-phrases.json: not valid JSON (${e.message})`);
   }
   if (phrases) {
-    for (const problem of talkPhraseProblems(phrases, questions)) fail(problem);
+    for (const problem of talkPhraseProblems(phrases, script)) fail(problem);
     // The rule must be able to fail: each broken copy has to produce its problem.
     const TALK_SELF_TEST = [
-      [(p) => { p.goodbye = "Bye {name!r}!"; }, "plain {name} only"],
-      [(p) => { p.goodbye = "Bye {total_cents:,}!"; }, "plain {name} only"],
-      [(p) => { p.goodbye = "Bye {who.name}!"; }, "plain {name} only"],
-      [(p) => { p.goodbye = "Bye {"; }, "unmatched {"],
-      [(p) => { p.goodbye = "Bye }"; }, "unmatched }"],
-      [(p) => { p.goodbye = "Bye {n}!"; }, "exactly the placeholders none"],
-      [(p) => { p["estimate.authorized"] = "It's {total_cents} cents. Not tax advice."; }, "spoken as dollars"],
+      [(p) => { p["memo.on_its_way"] = "On its way {n!r}."; }, "plain {name}"],
+      [(p) => { p["memo.on_its_way"] = "On its way {total_cents:,}."; }, "plain {name}"],
+      [(p) => { p["memo.on_its_way"] = "On its way {who.name}."; }, "plain {name}"],
+      [(p) => { p["memo.on_its_way"] = `On its way {${"a".repeat(33)}}.`; }, "at most 32 characters"],
+      [(p) => { p["memo.on_its_way"] = "On its way {"; }, "unmatched {"],
+      [(p) => { p["memo.on_its_way"] = "On its way }"; }, "unmatched }"],
+      [(p) => { p["memo.on_its_way"] = "On its way {n}."; }, "exactly the placeholders none"],
+      [(p) => { p["estimate.authorized"] = "It's {total_cents} cents. Not tax advice."; }, "already spoken as dollars"],
+      [(p) => { p["estimate.authorized"] = "It's ${total_cents}. Not tax advice."; }, "already spoken as dollars"],
+      [(p) => { p["estimate.authorized"] = "It's {total_cents} dollars. Not tax advice."; }, "already spoken as dollars"],
       [(p) => { p["estimate.assumed_par"] = "It's about {total_cents}."; }, "not tax advice"],
       [(p) => { delete p["question.2"]; }, "missing keys question.2"],
       [(p) => { p["question.1"] = "Are you a Delaware company?"; }, "word for word"],
-      [(p) => { p.goodbye = "Write to me@example.com"; }, "names an email address"],
+      [(p) => { p["memo.on_its_way"] = "Write to me@example.com"; }, "names an email address"],
       [(p) => { p["Voice Note"] = "hi"; }, "a-z 0-9"],
-      [(p) => { p.goodbye = { text: "Bye" }; }, "must be a string line"],
-      [(p) => { p.goodbye = ""; }, "(1–600)"],
+      [(p) => { p.extra = "hi"; }, "unknown keys extra"],
+      [(p) => { p["memo.on_its_way"] = { text: "Bye" }; }, "must be a string line"],
+      [(p) => { p["memo.on_its_way"] = ""; }, "not blank"],
+      [(p) => { p["memo.on_its_way"] = "   "; }, "not blank"],
+      [(p) => { p["memo.on_its_way"] = "a".repeat(601); }, "601 characters"],
       [(p) => { p.at_capacity = "We're full."; }, "plain text"],
     ];
     for (const [mutate, why] of TALK_SELF_TEST) {
       const copy = structuredClone(phrases);
       mutate(copy);
-      if (!talkPhraseProblems(copy, questions).some((p) => p.includes(why))) fail(`talk-phrases rule self-test: expected "${why}"`);
+      if (!talkPhraseProblems(copy, script).some((p) => p.includes(why))) fail(`talk-phrases rule self-test: expected "${why}"`);
     }
+    const noAi = "Is your company a Delaware corporation?";
+    if (!talkPhraseProblems({ ...phrases, "question.1": noAi }, { ...script, questions: script.questions?.map((q, i) => (i ? q : noAi)) })
+      .some((p) => p.includes("talking to an AI")))
+      fail('talk-phrases rule self-test: expected "talking to an AI"');
+    if (!talkPhraseProblems(phrases, { ...script, scriptCount: script.scriptCount + 1 }).some((p) => p.includes("they are one script")))
+      fail('talk-phrases rule self-test: expected "they are one script"');
     if (talkPlaceholders("A literal {{brace}} and {total_cents}.").names?.join() !== "total_cents")
       fail("talk-phrases rule self-test: {{ }} must read as a literal brace");
   }

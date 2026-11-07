@@ -7,9 +7,9 @@ Voice: Chrome's speech recognition listens, and the gateway turns the words into
 fixed list of phrases, so **say the phrases exactly as written here** ("approve the latest", not
 "approve the memo for Team 7"). The firm answers with ElevenLabs once the D30 build is deployed
 (`POST /api/tts`), else with the browser's own voice. Until then keep `ADAPTER_VOICE=none`: on an
-older build `elevenlabs` stops the gateway from starting. `openai` with a key is a trade: it gives
-`/talk` its spoken intake, but switches `/ceo` to a free-form model where this phrase list doesn't
-apply. Without it, the judge types on `/talk` (card 4).
+older build `elevenlabs` stops the gateway from starting, and `openai` with a key switches `/ceo`
+to a free-form model where this phrase list doesn't apply. Without a Realtime voice, `/talk` still
+listens through Chrome ("U-Tax listens through your browser"), so the judge speaks either way.
 Each card has the time, what's on screen, what the presenter says (plain text) and what to click.
 Every number on screen comes from the event log; say "estimated" for money the firm spent.
 
@@ -70,6 +70,8 @@ hands-free off it closes after every reply):**
    case you staged, see the checklist.) The firm reads it back,
    for example: "Approve memo email: Team #7, $85,165 → $450. That also turns emails automatic.
    Say confirm." The confirm card shows the same sentence.
+   Listen first: if the readback names another team, or says it "runs the other waiting" emails,
+   say "cancel" and click Approve on the staged memo's card instead.
 3. "Confirm." The touches log adds a line with a mic icon (an Operating touch; Training if it's
    email's first-ever approval). Accounting then picks the memo up: on the live crew that can
    take a few seconds, and it may land during card 3b.
@@ -94,9 +96,9 @@ and the Hiring pane reads "1 hired". Then press S to turn stage mode back on (St
 ## Card 4 · 1:05–2:35 · Finale: a judge becomes a client
 **Screen:** `/talk` on the judge's phone or laptop, the theater on the projector in stage mode.
 **Say:** "Judge, you're a Delaware C-corp. Tell U-Tax your numbers. Make them up if you like."
-**Do:** the judge says yes to the transcription notice and answers four short questions: by voice
-if the page offers it, or typed ("I agree, type instead") when it shows "Voice isn't available".
-Then the judge types an email into the box and confirms. Stay quiet near the mic until the page
+**Do:** the judge says yes to the transcription notice ("I agree, start talking") and answers four
+short questions by voice (Chrome listens), or typed when the page says it can't listen or the
+microphone is off. Then the judge types an email into the box and confirms. Stay quiet near the mic until the page
 says the intake is sent.
 **Say, one line per department as its cursor moves:**
 1. Intake fills the fact cells: "Intake is onboarding you: every fact comes from your own answers."
@@ -151,11 +153,14 @@ mattered. Educational estimates, not tax advice."
 - [ ] The `/talk` test run (10 AM) done now, before the next step
 - [ ] Social posts on "runs on its own" (Resume them if needed). On "asks you first", each new
       post waits as an approval, and "approve the latest" could pick it
-- [ ] Last, put email back to "asks you first" (the console has no button for it). In Git Bash,
-      with `ADMIN_TOKEN` exported:
-      `curl -X POST <gateway>/api/trust -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"action_type":"email","state":"ASK"}'`
-      (in PowerShell use `curl.exe` and `$env:ADMIN_TOKEN`). Check that Standing orders now show
-      email "asks you first". Then let the staged case reach its memo, so the memo waits, and note
+- [ ] Last, put email back to "asks you first" (the console has no button for it). Do it before the
+      projector is connected, set the token without pasting it into the command (Git Bash:
+      `read -s ADMIN_TOKEN && export ADMIN_TOKEN`), and close the terminal afterwards. In Git Bash:
+      `curl -X POST <gateway>/api/trust -H "Authorization: Bearer $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{"action_type":"email","state":"ASK"}'`.
+      In PowerShell (its `curl.exe` mangles the JSON quotes):
+      `Invoke-RestMethod -Method Post -Uri <gateway>/api/trust -Headers @{Authorization="Bearer $env:ADMIN_TOKEN"} -ContentType application/json -Body '{"action_type":"email","state":"ASK"}'`.
+      It counts as one human touch (K goes up by one). Check that Standing orders now show email
+      "asks you first". Then let the staged case reach its memo, so the memo waits, and note
       its Team number. No other client traffic until card 3a: any new email waits as an approval
 - [ ] Just before card 3a, say "what's pending" in the test profile: exactly one item, the staged
       memo
