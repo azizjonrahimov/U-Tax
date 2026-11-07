@@ -68,9 +68,13 @@ class _KeyedJson:
         return self.load().get(key)
 
     def put(self, key: str, value: Any) -> None:
+        """Store `value` under `key`; None removes the key (the file never grows with them)."""
         with self._lock:
             data = self.load()
-            data[key] = value
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
             self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".tmp")
             tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")

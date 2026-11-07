@@ -191,6 +191,22 @@ def _episode(n: int) -> str:
     return f"#{n}" if n else ""
 
 
+def _holds_nul(value: Any) -> bool:
+    """Any string (key or value) in a JSON value that holds a NUL character."""
+    stack = [value]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, str):
+            if "\x00" in node:
+                return True
+        elif isinstance(node, dict):
+            stack.extend(node.keys())
+            stack.extend(node.values())
+        elif isinstance(node, list):
+            stack.extend(node)
+    return False
+
+
 def _digest(value: Any) -> str:
     raw = json.dumps(value, sort_keys=True, default=str, ensure_ascii=False)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
@@ -1853,6 +1869,9 @@ class Gateway:
             return {"refused": f"purchase {key} may already be charged; the CEO resolves it "
                                "(resolve_purchase) before it can run again"}
         left = self._buy_intents.get(port_key)
+        if left and self.ports.toolbuy.provider == "local":  # log-only: it never charged
+            self._buy_intents.put(port_key, None)
+            left = None
         if left:  # never overwrite, never clear what an unsettled earlier call wrote
             return self._buy_leftover(port_key, key, fp, left, episode)
         with self._lock:  # the budget gates only a call that would pay (a repeat is free)
@@ -1939,28 +1958,37 @@ class Gateway:
             except (TypeError, ValueError, RecursionError):
                 why = "is not plain JSON (NaN, Infinity, a lone surrogate or a non-JSON value)"
             else:
-                if "\\u0000" not in text:  # Postgres jsonb refuses NUL
+                if not _holds_nul(result):  # Postgres jsonb refuses NUL
                     return result, len(text)
                 why = "holds a NUL character"
         log.warning("buy_tool %s: the paid result %s; dropped, the cost is booked", key, why)
-        return None, 4
+        return None, len("null")
 
     def _resolve_purchase(self, args: dict) -> dict:
         """POST /api/dev/... or the CEO console: an unsure purchase checked in Monid's
-        GET /v1/runs. `cost_usd` null = never charged (frees the key and its reservation);
-        a decimal = charged (booked once, remembered)."""
+        GET /v1/runs. `key` is the agent's key. `cost_usd` null (or `charged: false`) = never
+        charged (frees the key and its reservation); a decimal (`charged: true`) = charged,
+        booked and remembered. Answers once per episode; checked before anything is booked:
+        a cost over the purchase's ceiling needs `over_ceiling: true`, never over
+        monid.MAX_PLAUSIBLE_USD."""
         key = _str(args, "key", max_len=120)
         if not self._BUY_KEY.fullmatch(key):  # "#" separates episodes: never in a key
             raise Refused("bad_input", "key must be the agent's buy_tool key "
                                        "(1-120 of A-Z a-z 0-9 _ . : -)")
         port_key = f"buy:{key}"  # the agent's key, exactly as buy_tool's refusal names it
         episode, unsure, resolved = self._buy_episode(port_key)
+        left = self._buy_intents.get(port_key) if unsure is None and resolved is None else None
+        if isinstance(left, dict):  # unsettled, not on the log yet: record it first
+            self._record_leftover(port_key, left)
+            episode, unsure, resolved = self._buy_episode(port_key)
         if resolved is not None:  # once only: a second answer used to book its cost too
             raise Refused("wrong_status", f"purchase {key} is already resolved as charged")
         if unsure is None:
             if episode:
                 raise Refused("wrong_status", f"purchase {key} is already resolved as not charged")
-            raise Refused("not_found", f"no unsure purchase {key}")
+            hint = " (use the agent's key, without the buy: prefix)" \
+                if key.startswith("buy:") else ""
+            raise Refused("not_found", f"no unsure purchase {key}{hint}")
         raw = args.get("cost_usd")
         try:
             cost = parse_usd(raw) if raw not in (None, "") else None
@@ -1973,10 +2001,19 @@ class Gateway:
             raise Refused("bad_input", "charged: true needs the cost_usd Monid's run shows")
         if charged is False and cost:
             raise Refused("bad_input", "charged: false takes no cost_usd")
-        ceiling = self._resolve_ceiling(unsure)
-        if cost and cost > ceiling:  # checked before anything is booked: it answers once
+        over = args.get("over_ceiling")
+        if over is not None and not isinstance(over, bool):
+            raise Refused("bad_input", "over_ceiling must be true or false")
+        from app.gateway.adapters.monid import MAX_PLAUSIBLE_USD
+
+        ceiling = self._resolve_ceiling(unsure)  # checked before anything is booked: once only
+        if cost and cost > MAX_PLAUSIBLE_USD:
+            raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over "
+                                       f"${MAX_PLAUSIBLE_USD}; no data call costs that")
+        if cost and cost > ceiling and not over:  # max_usd is ours: Monid can charge more
             raise Refused("bad_input", f"cost_usd {usd_string(cost)} is over this purchase's "
-                                       f"ceiling ${usd_string(ceiling)}; check the run in Monid")
+                                       f"ceiling ${usd_string(ceiling)}; check the run in Monid, "
+                                       "then resend with over_ceiling: true if it is right")
         provider = unsure.provider or self.ports.toolbuy.provider
         tool = unsure.payload.get("tool", "?")
         private = {"key": port_key, "fingerprint": (unsure.private or {}).get("fingerprint"),
@@ -2010,39 +2047,46 @@ class Gateway:
         except Exception:  # noqa: BLE001 - a bad file never stops the server
             log.exception("toolbuy intents unreadable at boot")
             return
-        provider = self.ports.toolbuy.provider
         for port_key, left in intents.items():
             if not left:
                 continue
-            episode, unsure, resolved = self._buy_episode(port_key)
-            settled = self._done_from(f"tool:{port_key}") is not None or (
-                resolved is not None and resolved.status == "ok")
-            if not settled and unsure is None:
-                try:
-                    with self._lock:
-                        self._emit([NewEvent(
-                            type="tool.bought", actor="system", provider=provider,
-                            status="failed",
-                            payload={"tool": left.get("tool") or "?", "provider": provider},
-                            idempotency_key=f"tool:unsure:{port_key}{_episode(episode)}",
-                            private={"key": port_key, "fingerprint": left.get("fingerprint"),
-                                     "unsure": True, "ceiling": left.get("ceiling")})])
-                except EventWriteError as err:  # the first retry of the key records it
-                    log.error("leftover purchase %s not recorded at boot: %s", port_key, err)
-                    continue
+            try:
+                self._record_leftover(port_key, left)
+            except Exception:  # noqa: BLE001 - the intent stays; the key's first retry records it
+                log.exception("leftover purchase %s not recorded at boot", port_key)
+
+    def _record_leftover(self, port_key: str, left: dict) -> None:
+        """One unsettled intent onto the log as an unsure record (unless the key is settled
+        or already unsure), then cleared. The local toolbuy never charges: just cleared."""
+        if self.ports.toolbuy.provider == "local":
             self._buy_intents.put(port_key, None)
+            return
+        episode, unsure, resolved = self._buy_episode(port_key)
+        settled = self._done_from(f"tool:{port_key}") is not None or (
+            resolved is not None and resolved.status == "ok")
+        if not settled and unsure is None:
+            provider = self.ports.toolbuy.provider
+            with self._lock:
+                self._emit([NewEvent(
+                    type="tool.bought", actor="system", provider=provider, status="failed",
+                    payload={"tool": left.get("tool") or "?", "provider": provider},
+                    idempotency_key=f"tool:unsure:{port_key}{_episode(episode)}",
+                    private={"key": port_key, "fingerprint": left.get("fingerprint"),
+                             "unsure": True, "ceiling": left.get("ceiling")})])
+        self._buy_intents.put(port_key, None)
 
-    RESOLVE_MAX_USD = Decimal(1000)  # the adapter's own plausibility bound
+    @staticmethod
+    def _resolve_ceiling(unsure: Event) -> Decimal:
+        """The ceiling the purchase reserved (the tool's max_usd); monid.MAX_PLAUSIBLE_USD
+        when the record has none."""
+        from app.gateway.adapters.monid import MAX_PLAUSIBLE_USD
 
-    def _resolve_ceiling(self, unsure: Event) -> Decimal:
-        """The most a resolution may book: the ceiling the purchase reserved (the tool's
-        max_usd), never over RESOLVE_MAX_USD."""
         raw = (unsure.private or {}).get("ceiling")
         try:
-            ceiling = parse_usd(raw) if raw not in (None, "") else self.RESOLVE_MAX_USD
+            ceiling = parse_usd(raw) if raw not in (None, "") else MAX_PLAUSIBLE_USD
         except (TypeError, ValueError, InvalidOperation):
-            ceiling = self.RESOLVE_MAX_USD
-        return min(ceiling, self.RESOLVE_MAX_USD)
+            ceiling = MAX_PLAUSIBLE_USD
+        return min(ceiling, MAX_PLAUSIBLE_USD)
 
     def _restore_toolbuy(self) -> None:
         """Monid keeps purchases, unsure keys and today's spend in memory; replay them from

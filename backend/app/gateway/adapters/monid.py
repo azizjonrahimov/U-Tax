@@ -66,6 +66,7 @@ EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 NOT_CHARGED = (400, 401, 402, 403, 404, 408, 409, 422, 429)  # answers that prove no run was billed
 PENDING = ("READY", "RUNNING", "STOPPING")
 MAX_REMEMBERED = 1000
+MAX_PLAUSIBLE_USD = Decimal(1000)  # a data call never costs more (config and resolutions)
 
 
 class Unreadable(Exception):
@@ -140,8 +141,9 @@ def _tools(raw: object) -> dict[str, dict]:
         ceiling = _money(spec["max_usd"], f"max_usd of '{name}'")
         if ceiling <= 0:
             raise NotConfigured(f"monid: max_usd of '{name}' must be above 0 (it is what the cap reserves)")
-        if ceiling > 1000:
-            raise NotConfigured(f"monid: max_usd of '{name}' is over $1000; that is not a data call")
+        if ceiling > MAX_PLAUSIBLE_USD:
+            raise NotConfigured(f"monid: max_usd of '{name}' is over ${MAX_PLAUSIBLE_USD}; "
+                                "that is not a data call")
         fields = spec.get("fields")
         if fields is not None and not (isinstance(fields, list) and all(isinstance(f, str) for f in fields)):
             raise NotConfigured(f"monid: fields of '{name}' must be a list of names")
@@ -230,8 +232,9 @@ class MonidToolBuy:
         the key and its reserved ceiling. Charged: resolve(key, "0.0400", output) books the cost
         and remembers the purchase, so the same key returns it instead of paying again."""
         amount = _money(cost_usd, "cost_usd") if cost_usd is not None else None  # parse before forgetting
-        if amount is not None and amount > 1000:
-            raise NotConfigured("monid: a data call costing over $1000 is not plausible; check the run")
+        if amount is not None and amount > MAX_PLAUSIBLE_USD:
+            raise NotConfigured(f"monid: a data call costing over ${MAX_PLAUSIBLE_USD} is not "
+                                "plausible; check the run")
         formatted = _usd(amount) if amount is not None else None
         with self._lock:
             entry = self._unsure.pop(key, None)

@@ -388,10 +388,15 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
 
     @router.post("/api/dev/resolve-purchase")
     def resolve_purchase(body: dict = Body(...), authorization: str | None = Header(None)):
-        """Admin: an unsure Monid purchase checked in Monid's runs list. cost_usd null =
-        never charged (frees the key); a decimal = charged (booked once)."""
+        """Admin: an unsure Monid purchase checked in Monid's runs list. `key` is the agent's
+        buy_tool key (no "buy:" prefix). cost_usd null (or charged: false) = never charged
+        (frees the key); a decimal (charged: true) = charged, booked. A purchase resolves
+        once; a cost over its ceiling (max_usd) needs over_ceiling: true, never over $1000."""
         require_admin(authorization)
-        return act("resolve_purchase", _pick(body, "key", "charged", "cost_usd"))
+        picked = _pick(body, "key", "charged", "cost_usd", "over_ceiling")
+        if not isinstance(picked.get("charged"), bool):  # "not charged" frees the key: say so
+            raise APIError(400, "bad_input", "charged: true or false is required")
+        return act("resolve_purchase", picked)
 
     @router.post("/hooks/agentmail")
     async def agentmail_hook(request: Request,
