@@ -31,8 +31,9 @@ because nothing has to happen on cue.
 
 ## Shot list
 
-Record shot 16 **first**, before anything opens `/ceo` in the recording browser: the morning brief
-covers what happened since that browser's last `/ceo` visit. Edit it into its place at the end.
+Record shot 16 **last**, in a fresh Chrome profile or incognito window that has never opened
+`/ceo` (its brief then covers the whole log, the day included), and at least a minute after any
+other `/ceo` login (the gateway reuses a brief for 60 s).
 
 | # | Time | Screen | What happens | Voiceover | Proof (event or tool call) |
 |---|---|---|---|---|---|
@@ -49,9 +50,9 @@ covers what happened since that browser's last `/ceo` visit. Edit it into its pl
 | 11 | 1:34–1:46 | Theater, stage mode off: Money pane and the Cases tag | "Clients saved" and "Firm spent (est.)" tick up. The Cases header shows the CRM stage. | "Then the books. Agent time and every paid tool run are booked from the log, in code: what we saved clients against what the firm spent. No agent touches the ledger." | `cost.booked` (summed into `/api/state` `money`); `crm.synced` |
 | 12 | 1:46–1:56 | Theater, Hiring pane; then the questionnaire mail | "1 applicant". The applicant gets the questionnaire, with the line "This screen is run by an AI agent. A human makes the final hiring decision." | "HR is recruiting a CPA for a paid one-hour gig. Every applicant gets a questionnaire, and is told an AI runs the screen." | `hr.applicant`; `hr.questionnaire_sent` (actor `system`) |
 | 13 | 1:56–2:06 | Theater, Hiring pane; then the CEO's inbox | "screened · shortlisted", then "Shortlist ready · waiting on CEO". The CEO gets an email. | "HR screens the answers and shortlists. It never hires and never declines." | `get_candidate`, `hr_record` → `hr.screened`, `hr.shortlisted`; `ceo.notified` (reason `shortlisted`) |
-| 14 | 2:06–2:24 | `/ceo` voice mode, then the theater (stage mode off) | The CEO says "Hire candidate B." The firm reads it back, ending "Say confirm." The CEO says "Confirm." The theater's Hiring pane reads "1 hired", and the touches log shows a mic icon. | "The decisions that matter stay with the human. I make the hire, by voice, and the firm waits for my own confirm." | `decide_candidate` → `ceo.proposed`; `ceo.confirmed` (`via: "voice"`); `hr.hired` (actor `ceo`); `touch.operating` (`channel: "voice"`); `hr.decision_mailed` |
+| 14 | 2:06–2:24 | `/ceo` voice mode, then the theater (stage mode off) | The CEO says "Hire candidate A" (the label `/ceo`'s shortlist shows; the first applicant is Candidate A). The firm reads it back, ending "Say confirm." The CEO says "Confirm." The theater's Hiring pane reads "1 hired", and the touches log shows a mic icon. | "The decisions that matter stay with the human. I make the hire, by voice, and the firm waits for my own confirm." | `decide_candidate` → `ceo.proposed`; `ceo.confirmed` (`via: "voice"`); `hr.hired` (actor `ceo`); `touch.operating` (`channel: "voice"`); `hr.decision_mailed` |
 | 15 | 2:24–2:36 | Theater, full-log replay at 16×, stage mode | The whole night replays: cursors swarm, then line up under "Saved vs spent". Label: "Replay · 16×". | "That was one client and one hire. Here's the whole night, replayed from the log." | `GET /api/events` (the full log) |
-| 16 | 2:36–2:52 | `/ceo`, just logged in (recorded first, see above) | The morning brief plays aloud and shows as text. | "Next morning, the firm briefs me: clients served, saved against spent, and what's waiting for me." | `GET /api/ceo/brief` → `brief.generated` (the gateway's brief template over the log); `ceo.notified` (channel `login`) |
+| 16 | 2:36–2:52 | `/ceo`, just logged in (recorded last, see above) | The brief plays aloud and shows as text. | "And whenever I log in, the firm briefs me: clients served, saved against spent, and what's waiting for me." | `GET /api/ceo/brief` → `brief.generated` (the gateway's brief template over the log); `ceo.notified` (channel `login`) |
 | 17 | 2:52–3:00 | Theater, stage mode | The three big numbers: clients served, human touches, saved vs spent. Then the end card. | "A real firm's departments, every one an agent, and one human. Educational estimates, not tax advice." | `GET /api/state` (`firm`, `touches`, `money`) |
 
 If the cut runs long, shorten shot 15 first, then shot 4. Don't cut shots 5–8: the case going
@@ -63,14 +64,14 @@ through every department is the proof.
 
 | Shot | Needs | Without it |
 |---|---|---|
-| 2 | The Naïve social workspace with X and LinkedIn connected (`ADAPTER_SOCIAL=naive`; no sponsor key) | `ADAPTER_SOCIAL=local` writes the same `post.published` and the Social pane animates it, but there's no live post to cut to. Skip the X or LinkedIn cut. |
-| 3, 8 | **AgentMail** (`ADAPTER_MAIL=agentmail`, the clients inbox) | `ADAPTER_MAIL=local`, then, from `backend/`, `python -m app.devtools inject ../fixtures/inbox/01-team7-happy.eml` (writes the same `email.received`). Shot 8 then has no inbox cut: hold on the theater's "✓ Sent" line instead. |
+| 2 | The Naïve social workspace with X and LinkedIn connected (`ADAPTER_SOCIAL=naive`; no sponsor key) | `ADAPTER_SOCIAL=local` writes the same `post.published` and the Social pane still reads "Posted to x", but nothing was published. Caption the shot "stand-in (not published)", say "writes our posts" instead of "publishes", and skip the X or LinkedIn cut. |
+| 3, 8 | **AgentMail** (`ADAPTER_MAIL=agentmail`, the clients inbox) | `ADAPTER_MAIL=local`, then, from `backend/`, `python -m app.devtools inject ../fixtures/inbox/01-team7-happy.eml` (writes the same `email.received`). Caption shots 3 and 8 "stand-in mail (dev inject)". Shot 8 then has no inbox cut: hold on the theater's "✓ Sent" line instead. |
 | 4 | Naïve (the live crew) | No board exists without Naïve: drop shot 4 and say the routing line over shot 5. |
 | 9 | **Mobilerun** (`ADAPTER_DEVICE=mobilerun`; it also needs AgentMail) | `ADAPTER_DEVICE=local` renders the memo headlessly at phone size, but the Phone pane still reads "cloud phone", which would be untrue. Drop shot 9. |
 | 10 | **AgentMail** calendar (`ADAPTER_CALENDAR=agentmail`) | `ADAPTER_CALENDAR=local` writes the same `call.booked`. No invitation reaches an inbox, so don't show one. |
 | 11 | HubSpot for the CRM tag (`ADAPTER_CRM=hubspot`; optional) | `ADAPTER_CRM=local` still shows the stage tag. Don't say "HubSpot" over it. |
 | 12, 13 | **AgentMail** (the hiring inbox, the questionnaire mail and the CEO's email) | With `ADAPTER_MAIL=local`, from `backend/`: `python -m app.devtools inject --inbox hiring ../fixtures/hiring/01-applicant-ea.eml`, then a second mail from the same sender (`POST /api/dev/inject-email` with `inbox: "hiring"`) as the questionnaire answer. Without AgentMail there are no real mails to cut to, so stay on the theater's Hiring pane. |
-| 14, 16 | **ElevenLabs** (`ADAPTER_VOICE=elevenlabs`, the D30 build with `POST /api/tts`): the firm's spoken readback and the morning brief | Without it the page speaks with the browser's own voice (`speechSynthesis`). Listening is Chrome's speech recognition either way. If voice fails, click Hire: the touch shows `channel: "click"`, so say "one click", not "by voice". |
+| 14, 16 | **ElevenLabs** (`ADAPTER_VOICE=elevenlabs`, only on the D30 build with `POST /api/tts`; an older build won't start with that value): the firm's spoken readback and the brief | Keep `ADAPTER_VOICE=none`, and the page speaks with the browser's own voice (`speechSynthesis`). Listening is Chrome's speech recognition either way. If voice fails, click Hire: the touch shows `channel: "click"`, so say "one click", not "by voice". |
 | all | **Naïve** (`NAIVE_API_KEY`: the seven agents) | The local stand-in crew (`UTAX_DRIVER=local`) plays the same tool calls. Use it only for a rehearsal or a labelled fallback, never as "agents on Naïve" (the honesty rules above). |
 
 ---
@@ -90,8 +91,10 @@ through every department is the proof.
 **Browser**
 - [ ] Chrome (speech recognition needs it), zoom 100%, full screen (F11). Full screen also hides
       the address bar, which must never show a token.
-- [ ] Never record `.env`, a terminal holding keys, or the admin token. The theater and `/ceo`
-      show masked labels only. The inbox cuts (shots 8, 12 and 13) show the team's own test,
+- [ ] Never record `.env`, a terminal holding keys, the admin token, or the Naïve console's vault,
+      credentials or API-key pages (shot 4 records the board view only). The theater shows masked
+      labels only; `/ceo`'s shortlist also shows the applicant's own stated credentials, which is
+      why shots 12–14 use a teammate. The inbox cuts (shots 8, 12 and 13) show the team's own test,
       hiring and CEO addresses: blur them in the edit, and check every frame before export.
 
 **Theater**
@@ -103,17 +106,18 @@ through every department is the proof.
 - [ ] The overnight part (shot 15) in **replay mode**: press Replay in live mode (or open
       `/?source=replay`), then click 16× (4× if it's too fast to follow). Let the ending play out,
       through the cursors lining up under "Saved vs spent".
-- [ ] Trust staged for the shots you want: social posts on AUTO for shot 2 (resume them in `/ceo`
-      if a live demo paused them), email and calendar invites on AUTO for shots 8 and 10 (or the
+- [ ] Trust staged in `/ceo`'s Standing orders ("runs on its own" comes from approving one action
+      of that kind): social posts running on their own for shot 2 (Resume them if a live demo
+      paused them), email and calendar invites running on their own for shots 8 and 10 (or the
       step waits for a click), and a candidate shortlisted before shot 14.
 
 **Voice (shots 14 and 16)**
-- [ ] Shot 16 recorded first (above). If `/ceo` was opened earlier in the recording browser,
-      reset its last visit: on the `/ceo` page open DevTools, run
-      `localStorage.removeItem("utax.ceo.lastSeen")`, then reload.
-- [ ] Voice mode tested first in a separate Chrome profile or incognito window, with "what's
-      pending". Hands-free off, speaker low and away from the mic so the firm's voice can't
-      confirm itself. Say the phrases exactly: "hire candidate B", then "confirm".
+- [ ] Shot 16 recorded last, in a fresh profile or incognito window (above).
+- [ ] Voice rehearsed in a separate profile with the exact phrases ("what's pending", "hire
+      candidate A" or the label `/ceo` shows), saying "cancel" at the readback. If Chrome writes
+      number words or sound-alikes, click Hire instead. Hands-free off, speaker low and away from
+      the mic so the firm's voice can't confirm itself. Never press Esc on `/ceo` (STOP
+      EVERYTHING).
 
 **Edit and export**
 - [ ] Voiceover recorded separately, read from the table above, and laid over the clips.
