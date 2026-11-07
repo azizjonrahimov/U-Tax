@@ -173,6 +173,7 @@ class State:
     crm_failed: set[str] = field(default_factory=set)
     posts: int = 0
     briefs: list[int] = field(default_factory=list)
+    proposals: dict[str, dict] = field(default_factory=dict)  # v1.8 §5b: CEO proposals
 
     # ---------------------------------------------------------------- reads
 
@@ -233,7 +234,9 @@ class State:
             provider = e.provider or "unknown"
             self.spent_by_provider[provider] = (self.spent_by_provider.get(provider, Decimal(0))
                                                 + Decimal(e.cost_usd))
-            if str(e.payload.get("model", "")).startswith("realtime:"):  # Gateway.settle_voice
+            model = str(e.payload.get("model", ""))
+            # Gateway.settle_voice; the CEO's own mints (realtime:ceo/...) have their own cap
+            if model.startswith("realtime:") and not model.startswith("realtime:ceo/"):
                 day = e.ts[:10]
                 self.voice_mints_by_day[day] = self.voice_mints_by_day.get(day, 0) + 1
         for action_type, types in CAP_EVENTS.items():
@@ -447,7 +450,8 @@ class State:
     def _touch(self, kind: str, e: Event) -> None:
         self.touches[kind] += 1
         self.touch_log.append({"event_id": e.id, "ts": e.ts, "kind": kind,
-                               "note": e.payload["note"]})
+                               "note": e.payload["note"],
+                               "channel": e.payload.get("channel", "click")})
         approval_id = e.payload.get("approval_id")
         decision = (e.private or {}).get("decision")
         if approval_id in self.approvals and decision:
@@ -456,6 +460,19 @@ class State:
             approval.superseded_by = None  # a decision logged before task 14 stands
             if (e.private or {}).get("while_paused"):
                 approval.while_paused = True
+
+    def _on_ceo_proposed(self, e: Event) -> None:
+        self.proposals[e.payload["proposal_id"]] = {**e.payload, "status": "open"}
+
+    def _on_ceo_confirmed(self, e: Event) -> None:
+        proposal = self.proposals.get(e.payload["proposal_id"])
+        if proposal is not None:
+            proposal["status"] = "confirmed"
+
+    def _on_ceo_cancelled(self, e: Event) -> None:
+        proposal = self.proposals.get(e.payload["proposal_id"])
+        if proposal is not None and proposal["status"] == "open":
+            proposal["status"], proposal["reason"] = "cancelled", e.payload["reason"]
 
     def _on_touch_training(self, e: Event) -> None:
         self._touch("training", e)

@@ -16,7 +16,8 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -318,6 +319,7 @@ class Gateway:
         self._fee_refresh_lock = threading.Lock()
         self._epoch: str | None = None
         self._booted_at = self._now()  # the first CEO digest waits a full period from here
+        self._touch_channel: str | None = None  # v1.8: set by the console; touches: click
         self._law_inflight = 0
         self._buy_inflight: set[str] = set()  # buy keys between their intent and their events
         self._outbox_paused_until = 0.0  # a CRM rate limit pauses the whole outbox
@@ -361,6 +363,10 @@ class Gateway:
             "set_trust": self._set_trust,
             "candidate_decision": self._candidate_decision,
             "retry_wakes": self._retry_wakes_action,
+            # v1.8 §5b: the CEO voice console (admin routes only)
+            "ceo_tool": self._ceo_tool,
+            "ceo_confirm": self._ceo_confirm,
+            "ceo_command": self._ceo_command,
         }
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
@@ -372,6 +378,7 @@ class Gateway:
         self._buy_intents = _KeyedJson(settings.data_dir / "toolbuy-intents.json")
         self._restore_toolbuy()
         self._record_leftovers()
+        self._expire_proposals()
         self._outbox_tries: dict[str, tuple[int, float]] = {}
         self._outbox_inflight: set[str] = set()
         self._digest_backoff_until = 0.0
@@ -506,7 +513,7 @@ class Gateway:
             return 200 if self.settings.public_mode == "event" else 50
         return max(0, cap)
 
-    def voice_refusal(self, kind: str) -> str | None:
+    def voice_refusal(self, kind: str, *, public: bool = True) -> str | None:
         """Task 13: why paid voice (`realtime` mint, `tts` brief) can't run now, else None.
         Read under the lock. Typed chat and the browser's own speech keep working.
 
@@ -519,7 +526,7 @@ class Gateway:
         with self._lock:
             if cap is not None and self.state.spent_usd() + self._voice_pending_usd >= cap:
                 return "budget"
-            if kind != "realtime":
+            if kind != "realtime" or not public:  # the CEO's mints have their own cap
                 return None
             day = iso_ts(self._now())[:10]
             cases = self.public_case_cap()
@@ -530,7 +537,7 @@ class Gateway:
                 return "mints"
         return None
 
-    def reserve_voice(self, kind: str, *, paid: bool) -> str | None:
+    def reserve_voice(self, kind: str, *, paid: bool, public: bool = True) -> str | None:
         """Task 13: check `voice_refusal` and, for a paid provider, hold the estimate as in
         flight (counted against the budget and the mint cap) in one step under the lock,
         BEFORE the paid call, so concurrent calls can't all pass the same check. A store
@@ -539,7 +546,7 @@ class Gateway:
         from app.gateway.pricing import VOICE_USD
 
         with self._lock:
-            refusal = self.voice_refusal(kind)
+            refusal = self.voice_refusal(kind, public=public)
             if refusal or not paid:
                 return refusal
             try:
@@ -667,6 +674,10 @@ class Gateway:
     def _emit(self, events: list[NewEvent]) -> list[Event]:
         """Append atomically, then project and fan out the new ones. Raises EventWriteError."""
         # Timestamps follow ids: never earlier than the last event, 1 ms apart in a batch.
+        channel = getattr(self, "_touch_channel", None) or "click"
+        events = [replace(e, payload={**e.payload, "channel": channel})
+                  if e.type.startswith("touch.") and "channel" not in e.payload else e
+                  for e in events]  # v1.8: every touch says how the CEO touched
         base = self._now()
         last = self.store.since(self.state.last_event_id - 1) if self.state.last_event_id else ()
         last_ts = max((parse_ts(e.ts) for e in last), default=None)
@@ -1216,7 +1227,8 @@ class Gateway:
                          payload={"text": text, "channel": channel, "speaker": "ceo",
                                   "case_id": None}),
                 NewEvent(type="touch.operating", actor="ceo",
-                         payload={"note": f'order: "{clip(text, 120)}"', "approval_id": None}),
+                         payload={"note": f'order: "{clip(text, 120)}"', "approval_id": None,
+                                  "channel": self._touch_channel or channel}),
             ])
             self._wake(f"CEO: {text}")
             return {"forwarded": True}
@@ -2820,11 +2832,159 @@ class Gateway:
                              idempotency_key=f"decision_mailed:{candidate_id}")])
         return "sent"
 
+    # ------------------------------------------------------------ CEO voice console (§5b)
+
+    @contextmanager
+    def _channel(self, channel: str | None) -> Iterator[None]:
+        """Touches written inside carry `channel` (voice / click / typed)."""
+        before, self._touch_channel = self._touch_channel, channel
+        try:
+            yield
+        finally:
+            self._touch_channel = before
+
+    def _ceo_tool(self, args: dict) -> dict:
+        """POST /api/ceo/tool: a read, a stop carried out at once, or a start proposed."""
+        return self._ceo_run(_str(args, "name", max_len=40), args.get("args"), "realtime")
+
+    def _ceo_run(self, name: str, raw_args: Any, source: str) -> dict:
+        from app import ceo_tools
+
+        tool = ceo_tools.REGISTRY.get(name)
+        if tool is None:
+            raise Refused("unknown_tool", f"no CEO tool {name!r}; the tools are "
+                                          f"{', '.join(ceo_tools.REGISTRY)}")
+        try:
+            tool_args = tool.check(raw_args)
+            if tool.kind == "read":
+                return {"kind": "read", "data": tool.read(self, tool_args)}
+            if tool.kind == "stop":
+                with self._channel("voice"):
+                    return {"kind": "done", "summary": tool.carry(self, tool_args)}
+            pinned, readback = tool.pin(self, tool_args)
+        except ceo_tools.ToolRefused as err:
+            raise Refused(err.code, err.message, err.data) from err
+        return self._propose(name, pinned, readback, source)
+
+    def _open_proposals(self) -> list[dict]:
+        return [p for p in self.state.proposals.values() if p["status"] == "open"]
+
+    def _expired(self, proposal: dict) -> bool:
+        return parse_ts(proposal["expires_at"]) <= self._now()
+
+    @staticmethod
+    def _proposal_cancel(proposal: dict, reason: str, via: str, heard: str) -> NewEvent:
+        return NewEvent(type="ceo.cancelled", actor="ceo",
+                        payload={"proposal_id": proposal["proposal_id"], "via": via,
+                                 "heard": heard, "reason": reason})
+
+    def _propose(self, tool: str, pinned: dict, readback: str, source: str) -> dict:
+        """A start tool's single-use proposal: pinned to its exact target, 60 s. A newer
+        proposal supersedes every open one (confirm words go to the newest)."""
+        from app.ceo_tools import PROPOSAL_TTL
+
+        proposal_id = f"prop_{len(self.state.proposals) + 1}"
+        expires_at = iso_ts(self._now() + PROPOSAL_TTL)
+        events = [self._proposal_cancel(p, "expired" if self._expired(p) else "superseded",
+                                        "click", "") for p in self._open_proposals()]
+        events.append(NewEvent(type="ceo.proposed", actor="ceo", payload={
+            "proposal_id": proposal_id, "tool": tool, "args": pinned, "readback": readback,
+            "expires_at": expires_at, "source": source}))
+        self._emit(events)
+        return {"kind": "proposal", "proposal_id": proposal_id, "readback": readback,
+                "expires_at": expires_at}
+
+    def _ceo_confirm(self, args: dict) -> dict:
+        """POST /api/ceo/confirm: carry out a proposal's pinned action, once, within 60 s,
+        through the same internals as the §5 routes. A spoken confirm is re-checked here."""
+        from app import ceo_tools
+
+        proposal_id = _str(args, "proposal_id", max_len=40)
+        decision = _one_of(args, "decision", ("confirm", "cancel"))
+        via = _one_of(args, "via", ("voice", "click"))
+        heard = clip(_str(args, "heard", required=False, max_len=2000) or "",
+                     ceo_tools.HEARD_MAX)
+        proposal = self.state.proposals.get(proposal_id)
+        if proposal is None:
+            raise Refused("not_found", f"no proposal {proposal_id}")
+        if proposal["status"] == "confirmed":
+            raise Refused("used", f"{proposal_id} was already confirmed")
+        if proposal["status"] == "cancelled":
+            reason = proposal.get("reason")
+            if reason == "superseded":
+                raise Refused("superseded", f"{proposal_id} was replaced; confirm the newer one")
+            if reason == "expired":
+                raise Refused("expired", f"{proposal_id} expired; ask again")
+            raise Refused("used", f"{proposal_id} was cancelled")
+        if self._expired(proposal):
+            self._emit([self._proposal_cancel(proposal, "expired", via, heard)])
+            raise Refused("expired", f"{proposal_id} expired; ask again")
+        spoken = via == "voice"
+        if decision == "cancel" or (spoken and ceo_tools.heard_cancels(heard)):
+            self._emit([self._proposal_cancel(proposal, "spoken" if spoken else "clicked",
+                                              via, heard)])
+            return {"kind": "done", "summary": "Cancelled."}
+        if spoken and not ceo_tools.heard_confirms(heard):
+            raise Refused("not_a_confirm", "that was not a confirm: say confirm, or cancel")
+        pinned = dict(proposal["args"])
+        if proposal["tool"] in ("approve", "deny"):
+            approval = self.state.approvals.get(pinned["approval_id"])
+            if approval is not None and approval.decision == "superseded":
+                by = self._newest(approval)  # §5 body: never a figure the CEO didn't hear
+                self._emit([self._proposal_cancel(proposal, "superseded", via, heard)])
+                raise Refused("superseded", f"{approval.approval_id} is out of date: "
+                                            + (f"decide {by} instead" if by else
+                                               "the case changed; the crew asks again"),
+                              {"approval_id": approval.approval_id, "superseded_by": by})
+        # used before it runs: a failure after this never lets the same words act twice
+        self._emit([NewEvent(type="ceo.confirmed", actor="ceo",
+                             payload={"proposal_id": proposal_id, "via": via, "heard": heard})])
+        try:
+            with self._channel(via):
+                summary = ceo_tools.REGISTRY[proposal["tool"]].carry(self, pinned)
+        except ceo_tools.ToolRefused as err:
+            raise Refused(err.code, err.message, err.data) from err
+        return {"kind": "done", "summary": summary}
+
+    def _ceo_command(self, args: dict) -> dict:
+        """POST /api/ceo/command: the deterministic grammar (no LLM) for browser speech or
+        typing. Confirm and cancel words point at the newest open proposal."""
+        from app import ceo_tools
+
+        parsed = ceo_tools.parse(_str(args, "text", max_len=600))
+        if parsed is None:
+            return {"kind": "unknown", "say": ceo_tools.EXAMPLES}
+        kind, value = parsed
+        if kind == "tool":
+            return self._ceo_run(value[0], value[1], "command")
+        live = [p for p in self._open_proposals() if not self._expired(p)]
+        if not live:
+            return {"kind": "unknown", "say": "Nothing is waiting for a confirm. "
+                                              + ceo_tools.EXAMPLES}
+        return {"kind": kind, "proposal_id": live[-1]["proposal_id"],
+                "readback": live[-1]["readback"]}
+
+    def _expire_proposals(self) -> None:
+        """At boot: open proposals are rebuilt from the log; expired ones are cancelled."""
+        try:
+            stale = [p for p in self._open_proposals() if self._expired(p)]
+            if stale:
+                with self._lock:
+                    self._emit([self._proposal_cancel(p, "expired", "click", "") for p in stale])
+        except Exception:  # noqa: BLE001 - a store hiccup never stops the boot; confirm checks expiry
+            log.exception("expired CEO proposals not cancelled at boot")
+
     def _set_trust(self, args: dict) -> dict:
         """POST /api/trust: the CEO's standing order ("stop posting" = social_post PAUSED).
         AUTO and ASK set the state; RESUME (task 14) goes back to the state before the
         pause (ASK if none is known). Leaving PAUSED carries out the approvals allowed
         while paused. trust.changed + touch.operating."""
+        if args.get("action_type") == "*":  # v1.8: "pause everything"
+            if args.get("state") != "PAUSED":
+                raise Refused("bad_input", 'action_type "*" takes only state PAUSED')
+            return {"action_type": "*",
+                    "trust": {t: self._set_trust({"action_type": t, "state": "PAUSED"})["trust"]
+                              for t in TRUST_TYPES}}
         action_type = _one_of(args, "action_type", TRUST_TYPES)
         requested = _one_of(args, "state", ("PAUSED", "AUTO", "ASK", "RESUME"))
         current = self.state.trust[action_type]

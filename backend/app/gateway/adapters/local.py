@@ -302,7 +302,7 @@ class NoVoice:
 
     provider = None
 
-    def create_session(self, instructions: str = "") -> VoiceSession:
+    def create_session(self, instructions: str = "", tools: list[dict] | None = None) -> VoiceSession:
         raise NotConfigured("voice_unavailable: no OPENAI_API_KEY")
 
     def speak(self, text: str) -> bytes:

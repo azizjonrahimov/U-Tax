@@ -42,6 +42,9 @@ _REFUSED_STATUS = {
     "not_found": 404, "bad_input": 400, "unknown_action": 404, "not_local": 403,
     "tool_not_allowed": 403, "wrong_status": 409, "paused": 409, "denied": 409, "superseded": 409,
     "qa_gate": 409, "at_capacity": 429, "too_long": 400,
+    # v1.8 §5b: the CEO console
+    "unknown_tool": 400, "bad_args": 400, "not_a_confirm": 400, "nothing_pending": 409,
+    "used": 409, "expired": 409,
 }
 _ERROR_STATUS = {"store_unavailable": 503, "internal_error": 500}
 # refusal data the contract puts in the HTTP error object (the rest stays agent-only)
@@ -165,6 +168,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     send_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
     free_limiter = RateLimiter(limit=FREE_LIMITS[False][0])
     audio_limiter = RateLimiter(limit=30, global_limit=120)
+    ceo_mint_limiter = RateLimiter(limit=10, window=3600.0)  # v1.8: the CEO's 10 an hour
     audio_cache: dict[int, bytes] = {}  # brief text never changes: one TTS call per brief
 
     def gw() -> Gateway:
@@ -309,10 +313,22 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
                                           **_pick(body, "decision", "note")})
 
     @router.post("/api/voice/session")
-    def voice_session(request: Request):
+    def voice_session(request: Request, body: dict = Body(default_factory=dict),
+                      authorization: str | None = Header(None)):
+        mode = (body or {}).get("mode", "customer") if isinstance(body, dict) else None
+        if mode not in ("customer", "ceo"):
+            raise APIError(400, "bad_input", 'mode must be "customer" or "ceo"')
+        if mode == "ceo":
+            require_admin(authorization)
+            ceo_mint_limiter.check("ceo")
+            return _mint(gw().settings.ceo_voice_prompt_path, ceo=True)
         _talk_limit(mint_limiter, MINT_LIMITS)
         mint_limiter.check(_client_ip(request))
-        prompt_path = gw().settings.voice_prompt_path
+        return _mint(gw().settings.voice_prompt_path, ceo=False)
+
+    def _mint(prompt_path, *, ceo: bool) -> dict:
+        """One paid Realtime session: the prompt from disk (none: refuse), the budget and the
+        hold before the call, booked only if a session comes back."""
         try:
             instructions = prompt_path.read_text(encoding="utf-8").strip()
         except (OSError, UnicodeError):
@@ -324,11 +340,16 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         paid = voice.provider == "openai"
         # task 13: budget, the case cap and the mint cap checked, and the estimate held,
         # before the paid call; booked only if a session comes back
-        if gw().reserve_voice("realtime", paid=paid):
+        if gw().reserve_voice("realtime", paid=paid, public=not ceo):
             raise APIError(503, "voice_unavailable", "voice is resting; use typed chat")
         session = None
         try:
-            session = voice.create_session(instructions)
+            if ceo:
+                from app.ceo_tools import realtime_tools
+
+                session = voice.create_session(instructions, tools=realtime_tools())
+            else:
+                session = voice.create_session(instructions)
         except NotConfigured as exc:
             raise APIError(503, "voice_unavailable", "no voice key; use typed chat") from exc
         except PortError as exc:  # provider detail stays in the server log
@@ -336,10 +357,33 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat") from exc
         finally:
             if paid:
-                gw().settle_voice("realtime", session.model if session else "",
+                model = session.model if session else ""
+                gw().settle_voice("realtime", f"ceo/{model}" if ceo else model,
                                   ok=session is not None)
         return {"client_secret": session.client_secret, "model": session.model,
                 "expires_at": session.expires_at, "realtime_url": session.realtime_url}
+
+    # ------------------------------------------------------------------ §5b CEO console
+
+    def _console(name: str, args: dict) -> dict:
+        data = result_or_raise(gw().perform(name, args))
+        data.pop("ok", None)
+        return data
+
+    @router.post("/api/ceo/tool")
+    def ceo_tool(body: dict = Body(...), authorization: str | None = Header(None)):
+        require_admin(authorization)
+        return _console("ceo_tool", _pick(body, "name", "args", "call_id"))
+
+    @router.post("/api/ceo/confirm")
+    def ceo_confirm(body: dict = Body(...), authorization: str | None = Header(None)):
+        require_admin(authorization)
+        return _console("ceo_confirm", _pick(body, "proposal_id", "decision", "via", "heard"))
+
+    @router.post("/api/ceo/command")
+    def ceo_command(body: dict = Body(...), authorization: str | None = Header(None)):
+        require_admin(authorization)
+        return _console("ceo_command", _pick(body, "text"))
 
     @router.get("/api/brief/audio")
     def brief_audio(request: Request, event_id: int = Query(..., ge=1),
