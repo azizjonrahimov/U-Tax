@@ -112,3 +112,10 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-07 12:28 local: OWNER pasted the utax-gateway key in chat and gave permission to save it. Saved to backend/.env (never printed); a read-only GET /v1/agents returned 200. Recommend rotating it after the event because it is in the chat transcript. Frontend status: in /review, a CRITICAL echo fix in progress, READY in ~1.5-2 h. Not stuck.
 - 2026-11-07 12:31 local: MAIN RED (my fault): the fixture change dabc9d7 updated contracts/events.sample.jsonl, but not frontend/public/fixtures/events.sample.jsonl, which a frontend test pins to it (CI run 42411250893, 1 failed / 272). Fixed forward by re-copying the file (the frontend lane never touched it). Lesson: the fixture has two copies; a contracts/ fixture change re-copies frontend/public/fixtures in the same merge, and the merged-tree check includes frontend tests.
 - 2026-11-07 12:33 local: The gateway runs on this laptop (127.0.0.1:8000, backend/.env, background job b052ukjbq; health ok). The tunnel start was DENIED by the auto-mode classifier [External Ingress Tunnel]; the owner runs it (not worked around). Added crew/scripts/naive-up.ps1: loads the seat tokens from backend/.env without printing them, checks /api/health at the URL, and runs npm check + naive up --dry-run (or -Apply) on the owner's own CLI profile.
+- 2026-11-07 12:40 local: READY lane/backend c3c09674a24a task 18b (backend/ only; secret scan clean; merged tree 1090 passed). MERGED. DECISIONS (auto) on its open items:
+  - social_post approvals by voice read back the FULL post text (≤255 chars) instead of being refused; this keeps the owner's "manage everything by voice" (an override of the lane's rec, as 18c).
+  - The N waiting approvals run by an approve/AUTO flip: accepted (the readback names the count; the same as the click path).
+  - Agent text that can trigger an unconfirmed pause: accepted (fail-safe).
+  - heard and order text move to private, and the public ceo.* payload keeps heard_len (18c).
+  - Housekeeping items: skipped.
+  Contract v1.8.5.

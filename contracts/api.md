@@ -299,7 +299,13 @@ the tool names, kinds and args are fixed here:
       `{kind: "confirm", proposal_id, readback}`; otherwise it proposes "approve the latest".
     - A stop sent through it writes channel `typed`.
   - **`/api/ceo/tool`** takes an optional `channel: "voice"|"click"` (default `voice`), so the
-    STOP button logs `click` (backend 18b).
+    STOP button logs `click` (backend 18b). Any other value answers `400 bad_input`.
+  - v1.8.5: an utterance with any letter outside a-z, or a question mark in any script, is
+    `not_a_confirm` (fails closed; the CEO clicks). A pause on an already-PAUSED type still
+    cancels open proposals.
+  - v1.8.5 (18c): the readback of a voice `approve` for a `social_post` reads the **full post
+    text** (≤ 255 chars), not the summary. `heard` and order text move to the event's private
+    part; the public `ceo.*` payload carries `heard_len` only.
   - **Proposals:**
     - `ceo.proposed` carries `case_id`.
     - The order text and `heard` are masked like a CEO order.
@@ -509,6 +515,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.8.5 (2026-11-07, backend 18b/18c): `channel` on /api/ceo/tool; confirm fails closed on non a-z or any `?`; full-text social readback; `heard` private.
 
 - v1.8.4 (2026-11-07, backend task 18): strict spoken-confirm grammar; 409 flagged; ceo/command confirm shape; optional channel on /api/ceo/tool.
 
