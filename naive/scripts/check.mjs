@@ -165,6 +165,11 @@ const TEMPLATE_RULES = {
   "hr-questionnaire.md": { body: true, applicant: true, noAmounts: true, placeholders: [] },
   "hr-hired.md": { body: true, noAmounts: true, placeholders: [] },
   "hr-declined.md": { body: true, noAmounts: true, placeholders: [] },
+  // v1.11 (design D31): the gateway's Spec in backend/app/gateway/templates.py names these placeholders
+  "hr-outreach.md": { body: true, applicant: true, noAmounts: true, placeholders: ["slot_time", "minutes"] },
+  "follow-up-memo_check.md": { body: true, client: true, placeholders: ["greeting_name"] },
+  "follow-up-missing_facts.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list"] },
+  "follow-up-call_reminder.md": { body: true, client: true, placeholders: ["greeting_name", "call_time"] },
   "ceo-update-email.md": { body: true, placeholders: ["headline", "lead", "summary", "action_line", "console_url"] },
   "ceo-digest-email.md": {
     body: true, spend: true,

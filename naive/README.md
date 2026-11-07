@@ -33,6 +33,10 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
 | `hr-hired.md` / `hr-declined.md` | the CEO's decision in `/ceo` | none |
+| `hr-outreach.md` | `hr_outreach` (v1.11) | `slot_time`, `minutes`; carries the AI-screen line |
+| `follow-up-memo_check.md` | `follow_up` kind `memo_check` | `greeting_name` |
+| `follow-up-missing_facts.md` | `follow_up` kind `missing_facts` | `greeting_name`, `missing_list` |
+| `follow-up-call_reminder.md` | `follow_up` kind `call_reminder` | `greeting_name`, `call_time` |
 | `ceo-update-email.md` | approval needed, BLOCKED, flagged, shortlisted, paused | `headline`, `lead`, `summary`, `action_line` (per reason: "Approve or Deny it in the console", "Unblock or skip it", …), `console_url` |
 | `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `touches_engineering`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |
 | `login-brief.md` | `/ceo` login brief (spoken + shown) | `greeting`, `clients_new`, `memos_sent`, `tax_saved`, `agent_spend`, `approvals_line`, `blocked_line`, `hiring_line` |
