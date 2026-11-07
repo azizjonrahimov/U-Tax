@@ -54,6 +54,9 @@ const HOLD_MS = 350;
 const MAX_LINES = 6;
 /** The browser's ear reopens this long after its own voice stops (the room's echo dies down). */
 const EAR_REOPEN_MS = 600;
+/** A spoken line that hasn't ended after ~this per word (plus 2 s, at most 30 s) is treated as stalled. */
+const SPEECH_MS_PER_WORD = 450;
+const SPEECH_MAX_MS = 30000;
 /** A response.create with no response.created after this long is treated as lost. */
 const RESPONSE_STALE_MS = 15000;
 
@@ -272,6 +275,14 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       };
       u.onend = done;
       u.onerror = done;
+      // Browser speech can stall without ever ending (seen headless; Chrome does it too). Past a
+      // generous length-based limit, silence it (so no echo follows) and carry on as if it ended.
+      const limit = Math.min(SPEECH_MAX_MS, 2000 + text.split(/\s+/).length * SPEECH_MS_PER_WORD);
+      setTimeout(() => {
+        if (ended) return;
+        if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
+        done();
+      }, limit);
       window.speechSynthesis.speak(u);
     },
     [applyMic, stopListening],
