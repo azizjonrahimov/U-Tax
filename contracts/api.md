@@ -453,12 +453,23 @@ falls back to a built-in template if the file is missing.
     own `input_audio_transcription.completed` text, matched by the same grammar in the
     console, then `POST /api/ceo/confirm` with `via: "voice"` and `heard`. A click works
     too. Model output never confirms.
+  - Echo guard (v1.8.1): the mic is opened with `echoCancellation: true`. A transcript
+    counts as a confirm only if its speech started after the agent's audio for the
+    proposal finished (`output_audio_buffer.stopped`, or `response.done` when no audio
+    event comes), and only if it doesn't contain the readback's own words ("say
+    confirm"). Any earlier transcript is ignored for confirming, but can still cancel.
+  - Result back to the model (v1.8.1): after `/api/ceo/confirm` (or a cancel or expiry),
+    the console sends `conversation.item.create` with a system message `Action result:
+    <summary>` and then `response.create`, so the agent says what actually happened.
+    The model never receives a proposal_id it could act on.
   - Hands-free speaks each new `approval.requested` and `case.blocked` from the stream.
   - Fallback without a session: browser `SpeechRecognition` (or typing) →
     `POST /api/ceo/command`, with answers spoken by `speechSynthesis`.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.8.1 (2026-11-07, agents task 5 review): `/ceo` echo guard for voice confirms; the action result goes back to the model as a system item.
 
 - v1.8 (2026-11-07, design D28): the CEO runs the firm by voice. §5b CEO tool registry; `/api/ceo/tool`,
   `/api/ceo/confirm`, `/api/ceo/command`; `/api/voice/session` `mode: "ceo"`; `trust` `"*"` pause;
