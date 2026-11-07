@@ -135,7 +135,7 @@ def test_a_key_can_go_unsure_again_after_a_not_charged_resolution(h):
     r = buy(h.gw)
     assert r.status == "refused" and "may already be charged" in r.error["message"]
     assert len(unsure_events(h, "k1")) == 2
-    h.ok("resolve_purchase", key="k1", cost_usd="0.0400")
+    h.ok("resolve_purchase", key="k1", cost_usd="0.0400", episode=1)  # 17b: named
     assert h.gw.state.spent_by_provider["monid"] == Decimal("0.0400")
     assert buy(h.gw).data["duplicate"] is True
 
@@ -647,7 +647,8 @@ def test_a_second_episode_charged_after_a_day_change_and_restart(make_harness):
     gw = h.restart()
     assert "buy:k1" not in fresh._unsure
     assert buy(gw).status == "refused" and fresh.calls == []
-    assert gw.perform("resolve_purchase", {"key": "k1", "cost_usd": "0.0400"}).status == "done"
+    assert gw.perform("resolve_purchase", {"key": "k1", "cost_usd": "0.0400",
+                                           "episode": 1}).status == "done"
     assert buy(gw).data["duplicate"] is True and fresh.calls == []
     assert gw.perform("resolve_purchase", {"key": "k1", "cost_usd": None}).status == "refused"
     assert len([e for e in h.events("cost.booked") if e.provider == "monid"]) == 1
@@ -662,7 +663,8 @@ def test_a_boot_leftover_after_a_not_charged_episode(make_harness):
     h.ports.toolbuy = monid()
     gw = h.restart()
     assert len(unsure_events(h, "c1")) == 2
-    assert gw.perform("resolve_purchase", {"key": "c1", "cost_usd": None}).status == "done"
+    assert gw.perform("resolve_purchase", {"key": "c1", "cost_usd": None,
+                                           "episode": 1}).status == "done"
     assert buy(gw, key="c1").status == "done"
 
 

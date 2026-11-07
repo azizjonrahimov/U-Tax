@@ -2014,6 +2014,7 @@ class Gateway:
             raise Refused("bad_input", "key must be the agent's buy_tool key "
                                        "(1-120 of A-Z a-z 0-9 _ . : -)")
         port_key = f"buy:{key}"  # the agent's key, exactly as buy_tool's refusal names it
+        wanted = _int(args, "episode") or 0  # 17b: the episode the CEO checked in Monid
         if port_key in self._buy_inflight:  # its intent is live, not a leftover
             raise Refused("wrong_status", f"purchase {key} is in flight; resolve it after "
                                           "it returns")
@@ -2029,6 +2030,7 @@ class Gateway:
             self._record_leftover(port_key, left)
             episode, unsure, resolved = self._buy_episode(port_key)
         if resolved is not None:  # once only: a second answer used to book its cost too
+            self._catch_up_cost(self._done_from(f"cost:tool:{port_key}"))
             self._resolve_port(port_key, resolved.cost_usd)  # a lost commit ack: catch up
             raise Refused("wrong_status", f"purchase {key} is already resolved as charged")
         if unsure is None:
@@ -2038,6 +2040,10 @@ class Gateway:
             hint = " (use the agent's key, without the buy: prefix)" \
                 if key.startswith("buy:") else ""
             raise Refused("not_found", f"no unsure purchase {key}{hint}")
+        if wanted != episode:  # a replayed answer for a settled episode, or a new leftover
+            raise Refused("wrong_status", f"purchase {key} has a newer unsure attempt, episode "
+                                          f"{episode}, nobody has checked yet: check it in "
+                                          f"Monid's runs, then resend with episode: {episode}")
         raw = args.get("cost_usd")
         try:
             cost = parse_usd(raw) if raw not in (None, "") else None
@@ -2087,7 +2093,14 @@ class Gateway:
         self._buy_intents.put(port_key, None)
         self._emit(events)
         self._resolve_port(port_key, usd_string(cost) if cost else None)
-        return {"key": key, "charged": bool(cost)}
+        return {"key": key, "charged": bool(cost), "episode": episode}
+
+    def _catch_up_cost(self, booked: Event | None) -> None:
+        """A cost.booked on the log the projection never applied (its commit reply was lost,
+        and newer events landed since): apply it once, or the spend cap undercounts it."""
+        if (booked is not None and booked.idempotency_key
+                and booked.idempotency_key not in self.state.cost_keys):
+            self.state.apply(booked)
 
     def _resolve_port(self, port_key: str, cost_usd: str | None) -> None:
         """The adapter's half of a resolution (its unsure hold and daily spend). Idempotent:
