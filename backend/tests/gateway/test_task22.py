@@ -67,18 +67,19 @@ def test_a_wake_starts_a_chief_of_staff_session_with_the_exact_message(caplog):
     assert post["agent_id"] == "agt_cos" and post["message"] == "New case case_1"
     assert post["key"].startswith("utax-wake:") and post["version"] and post["agent"]
     assert "identity" not in post  # the agent's attached identity (utax-cos) applies
+    assert "metadata" not in post  # the wake text stays out of Naive's metadata
     assert any("WAKE delivered" in r.getMessage() for r in caplog.records)
     assert "nk_test" not in repr(waker)
 
 
 def test_a_retry_reuses_its_key_and_a_new_wake_gets_a_new_one():
     fake = FakeNaive()
-    fake.fail = [503]
+    fake.fail = [429]  # a 5xx would open the outage breaker; this is about the key
     waker = waker_for(fake)
     with pytest.raises(WakeFailed):
-        waker("New case case_1")
-    waker("New case case_1")  # the gateway's retry
-    waker("New case case_1")  # a later identical wake (a restart's boot wake)
+        waker("Client replied case_1")
+    waker("Client replied case_1")  # the gateway's retry
+    waker("Client replied case_1")  # a later, real second reply
     keys = [p["key"] for p in fake.posts]
     assert keys[0] == keys[1] != keys[2]
 
@@ -144,3 +145,66 @@ def test_the_server_registers_the_waker_only_for_the_real_crew(make_harness, mon
             registered = any(isinstance(w, Waker) for w in h.gw._wakers)
         assert registered is expected, (key, driver)
         assert not any(isinstance(w, Waker) for w in h.gw._wakers)  # unregistered at shutdown
+
+
+# ---------------------------------------------------------------- review 1
+
+
+def test_a_restarts_boot_wake_reuses_the_first_key_so_naive_starts_no_second_session():
+    fake = FakeNaive()
+    waker_for(fake)("New case case_7")
+    waker_for(fake)("New case case_7")  # a new process: the boot wake for the same open case
+    assert fake.posts[0]["key"] == fake.posts[1]["key"]  # Naive dedupes it
+
+
+def test_a_recreated_agent_gets_a_new_key_never_a_409_loop():
+    fake = FakeNaive()
+    waker = waker_for(fake)
+    waker.resolve()
+    fake.fail = [404]
+    with pytest.raises(WakeFailed):
+        waker("New case case_1")  # the old agent is gone
+    fake.agents = [{"id": "agt_cos2", "name": "chief-of-staff",
+                    "metadata": {"utax_actor": "cos"}}]
+    waker("New case case_1")
+    first, second = fake.posts
+    assert second["agent_id"] == "agt_cos2" and second["key"] != first["key"]
+
+
+def test_an_idempotency_conflict_rotates_the_key():
+    fake = FakeNaive()
+    fake.fail = [409]
+    waker = waker_for(fake)
+    with pytest.raises(WakeFailed):
+        waker("CEO: post the hiring ad")
+    waker("CEO: post the hiring ad")
+    assert fake.posts[0]["key"] != fake.posts[1]["key"]
+
+
+def test_after_an_outage_wakes_fail_fast_for_a_while():
+    now = {"t": 0.0}
+    calls = {"n": 0}
+
+    def down(request):
+        calls["n"] += 1
+        raise httpx.ConnectError("refused", request=request)
+
+    waker = NaiveWaker("nk_test", transport=httpx.MockTransport(down), clock=lambda: now["t"])
+    for _ in range(5):
+        with pytest.raises(WakeFailed):
+            waker("New case case_1")
+    assert calls["n"] == 1  # one network try, then fast failures straight to the backoff
+    now["t"] = 31.0
+    with pytest.raises(WakeFailed):
+        waker("New case case_1")
+    assert calls["n"] == 2
+
+
+def test_the_stamped_chief_of_staff_wins_and_an_archived_one_is_skipped():
+    agents = [{"id": "agt_old", "name": "chief-of-staff"},
+              {"id": "agt_arch", "name": "chief-of-staff", "archived": True,
+               "metadata": {"utax_actor": "cos"}},
+              {"id": "agt_ours", "name": "chief-of-staff", "metadata": {"utax_actor": "cos"}}]
+    fake = FakeNaive(agents=agents)
+    waker_for(fake)("New case case_1")
+    assert fake.posts[0]["agent_id"] == "agt_ours"
