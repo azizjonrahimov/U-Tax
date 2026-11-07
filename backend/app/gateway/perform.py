@@ -1840,6 +1840,7 @@ class Gateway:
                 "message": f"purchase {key} may already be charged (an earlier call did not "
                            "finish); the CEO resolves it (resolve_purchase) before it can run again",
                 "fingerprint": left_fp, "port_key": port_key, "ceiling": left.get("ceiling"),
+                "intent_ts": left.get("ts"),
                 "episode": episode}
 
     def _buy_fetch(self, args: dict) -> dict:
@@ -1869,7 +1870,7 @@ class Gateway:
             return {"refused": f"purchase {key} may already be charged; the CEO resolves it "
                                "(resolve_purchase) before it can run again"}
         left = self._buy_intents.get(port_key)
-        if left and self.ports.toolbuy.provider == "local":  # log-only: it never charged
+        if left and left.get("provider") == "local":  # written by the log-only toolbuy
             self._buy_intents.put(port_key, None)
             left = None
         if left:  # never overwrite, never clear what an unsettled earlier call wrote
@@ -1881,7 +1882,8 @@ class Gateway:
         spec = getattr(self.ports.toolbuy, "tools", {}).get(tool) or {}
         ceiling = str(spec.get("max_usd")) if spec.get("max_usd") is not None else None
         self._buy_intents.put(port_key, {"tool": tool, "fingerprint": fp, "ceiling": ceiling,
-                                         "ts": iso_ts(self._now())})
+                                         "ts": iso_ts(self._now()),
+                                         "provider": self.ports.toolbuy.provider})
         try:
             purchase = self.ports.toolbuy.buy(tool, data, port_key)
         except PortError as err:
@@ -1910,12 +1912,15 @@ class Gateway:
         private = {"key": fetched.get("port_key"), "fingerprint": fetched.get("fingerprint")}
         if "error" in fetched:
             if fetched.get("unsure"):  # it may be charged: remembered across restarts
+                # the episode open now (under the lock), never one closed while Monid answered
+                episode = self._buy_episode(fetched["port_key"])[0]
                 self._emit([NewEvent(type="tool.bought", actor="mkt", provider=provider,
                                      status="failed", payload={"tool": tool, "provider": provider},
                                      idempotency_key=f"tool:unsure:{fetched['port_key']}"
-                                                     f"{_episode(fetched.get('episode', 0))}",
+                                                     f"{_episode(episode)}",
                                      private={**private, "unsure": True,
-                                              "ceiling": fetched.get("ceiling")})])
+                                              "ceiling": fetched.get("ceiling"),
+                                              "intent_ts": fetched.get("intent_ts")})])
                 self._buy_intents.put(fetched["port_key"], None)
             raise (ToolError if fetched.get("retryable") and not fetched.get("unsure")
                    else Refused)(fetched["error"], f"buy_tool: {fetched['message']}")
@@ -1976,6 +1981,9 @@ class Gateway:
             raise Refused("bad_input", "key must be the agent's buy_tool key "
                                        "(1-120 of A-Z a-z 0-9 _ . : -)")
         port_key = f"buy:{key}"  # the agent's key, exactly as buy_tool's refusal names it
+        if port_key in self._buy_inflight:  # its intent is live, not a leftover
+            raise Refused("wrong_status", f"purchase {key} is in flight; resolve it after "
+                                          "it returns")
         episode, unsure, resolved = self._buy_episode(port_key)
         left = self._buy_intents.get(port_key) if unsure is None and resolved is None else None
         if isinstance(left, dict):  # unsettled, not on the log yet: record it first
@@ -2057,8 +2065,9 @@ class Gateway:
 
     def _record_leftover(self, port_key: str, left: dict) -> None:
         """One unsettled intent onto the log as an unsure record (unless the key is settled
-        or already unsure), then cleared. The local toolbuy never charges: just cleared."""
-        if self.ports.toolbuy.provider == "local":
+        or already unsure), then cleared. One the local toolbuy wrote never charged: just
+        cleared (whatever toolbuy runs now: a local boot keeps what Monid may have charged)."""
+        if left.get("provider") == "local":
             self._buy_intents.put(port_key, None)
             return
         episode, unsure, resolved = self._buy_episode(port_key)
@@ -2072,7 +2081,8 @@ class Gateway:
                     payload={"tool": left.get("tool") or "?", "provider": provider},
                     idempotency_key=f"tool:unsure:{port_key}{_episode(episode)}",
                     private={"key": port_key, "fingerprint": left.get("fingerprint"),
-                             "unsure": True, "ceiling": left.get("ceiling")})])
+                             "unsure": True, "ceiling": left.get("ceiling"),
+                             "intent_ts": left.get("ts")})])
         self._buy_intents.put(port_key, None)
 
     @staticmethod
@@ -2126,7 +2136,7 @@ class Gateway:
                         if e.ts[:10] == today and e.cost_usd:
                             port._spent_today()
                             port._book(Decimal(e.cost_usd))
-                    elif private.get("unsure") and key not in done and e.ts[:10] == today:
+                    elif private.get("unsure") and key not in done and                             str(private.get("intent_ts") or e.ts)[:10] == today:  # its own day
                         port._unsure[key] = (fp, Decimal(private.get("ceiling") or "0"))
                 for key, intent in (self._buy_intents.load() or {}).items():
                     if not intent or key in done or key in port._unsure:

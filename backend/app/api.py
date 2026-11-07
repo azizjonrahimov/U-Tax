@@ -389,9 +389,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     @router.post("/api/dev/resolve-purchase")
     def resolve_purchase(body: dict = Body(...), authorization: str | None = Header(None)):
         """Admin: an unsure Monid purchase checked in Monid's runs list. `key` is the agent's
-        buy_tool key (no "buy:" prefix). cost_usd null (or charged: false) = never charged
-        (frees the key); a decimal (charged: true) = charged, booked. A purchase resolves
-        once; a cost over its ceiling (max_usd) needs over_ceiling: true, never over $1000."""
+        buy_tool key (no "buy:" prefix); `charged` (true/false) is required: false = never
+        charged (no cost_usd; frees the key), true = charged with the cost_usd Monid shows.
+        A purchase resolves once, never while in flight; a cost over its ceiling (max_usd)
+        needs over_ceiling: true, never over monid.MAX_PLAUSIBLE_USD."""
         require_admin(authorization)
         picked = _pick(body, "key", "charged", "cost_usd", "over_ceiling")
         if not isinstance(picked.get("charged"), bool):  # "not charged" frees the key: say so

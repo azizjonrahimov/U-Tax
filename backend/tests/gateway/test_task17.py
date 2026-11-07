@@ -37,12 +37,12 @@ def failing_once(h, event_type="tool.bought"):
     h.gw._emit = emit
 
 
-def crash_left_intent(h, key="c1", query="delaware startups", days_ago=0):
+def crash_left_intent(h, key="c1", query="delaware startups", days_ago=0, provider="monid"):
     """What a crash between the intent and Monid's answer leaves on disk."""
     fp = h.gw._buy_fingerprint("enrichment", {"query": query})
     ts = (h.clock.now - timedelta(days=days_ago)).isoformat().replace("+00:00", "Z")
     h.gw._buy_intents.put(f"buy:{key}", {"tool": "enrichment", "fingerprint": fp,
-                                        "ceiling": "0.05", "ts": ts})
+                                        "ceiling": "0.05", "ts": ts, "provider": provider})
 
 
 def unsure_events(h, key):
@@ -689,10 +689,135 @@ def test_the_local_toolbuy_never_turns_a_leftover_into_an_unsure(make_harness):
 
     h = make_harness()
     h.gw.ports.toolbuy = LocalToolBuy()
-    crash_left_intent(h)
+    crash_left_intent(h, provider="local")
     r = buy(h.gw, key="c1")
     assert r.status == "done" and r.data["bought"] is False and not unsure_events(h, "c1")
-    crash_left_intent(h, key="c2")
+    crash_left_intent(h, key="c2", provider="local")
     h.ports.toolbuy = LocalToolBuy()
     gw = h.restart()
     assert not unsure_events(h, "c2") and gw._buy_intents.get("buy:c2") is None
+
+
+# ---------------------------------------------------------------- review 3
+
+
+def test_a_local_boot_keeps_what_monid_may_have_charged(make_harness):
+    # switching to the local toolbuy (a kill switch) used to clear Monid's intents unrecorded
+    from app.gateway.adapters.local import LocalToolBuy
+
+    h = make_harness()
+    crash_left_intent(h)  # written by Monid
+    h.ports.toolbuy = LocalToolBuy()
+    h.restart()
+    assert len(unsure_events(h, "c1")) == 1
+
+
+def test_intents_name_their_provider(h):
+    inside, release = threading.Event(), threading.Event()
+
+    def slow(request):
+        inside.set()
+        assert release.wait(5)
+        return httpx.Response(200, json=completed())
+
+    h.gw.ports.toolbuy = monid(slow)
+    first = threading.Thread(target=lambda: buy(h.gw))
+    first.start()
+    try:
+        assert inside.wait(5)
+        assert h.gw._buy_intents.get("buy:k1")["provider"] == "monid"
+    finally:
+        release.set()
+        first.join(5)
+
+
+def test_a_purchase_in_flight_cannot_be_resolved(make_harness):
+    # a resolve during the Monid call took the live intent for a leftover and closed the
+    # episode; the call's late unsure then deduped into it, and a restart freed the key
+    h = make_harness()
+    inside, release = threading.Event(), threading.Event()
+
+    def slow_then_lost(request):
+        inside.set()
+        assert release.wait(5)
+        raise httpx.ReadTimeout("gone", request=request)
+
+    h.gw.ports.toolbuy = monid(slow_then_lost)
+    first = threading.Thread(target=lambda: buy(h.gw))
+    first.start()
+    try:
+        assert inside.wait(5)
+        for cost in (None, "0.0400"):
+            r = h.gw.perform("resolve_purchase", {"key": "k1", "cost_usd": cost})
+            assert r.status == "refused" and r.error["code"] == "wrong_status"
+            assert "in flight" in r.error["message"]
+    finally:
+        release.set()
+        first.join(5)
+    assert len(unsure_events(h, "k1")) == 1 and not h.events("cost.booked")
+    fresh = monid()
+    h.ports.toolbuy = fresh
+    gw = h.restart()
+    assert "buy:k1" in fresh._unsure and buy(gw).status == "refused" and fresh.calls == []
+
+
+def test_over_ceiling_reaches_the_gateway_over_http(make_harness):
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    h = make_harness(admin_token="admin-" + "a" * 30, theater_token="theater-" + "b" * 30)
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw)
+    auth = {"Authorization": "Bearer admin-" + "a" * 30}
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        r = client.post("/api/dev/resolve-purchase", headers=auth, json={
+            "key": "k1", "charged": True, "cost_usd": "0.5000", "over_ceiling": True})
+    assert r.status_code == 200 and h.gw.state.spent_by_provider["monid"] == Decimal("0.5000")
+
+
+def test_a_retry_records_the_first_calls_fingerprint_and_ceiling(h):
+    h.gw.ports.toolbuy = monid(lost)
+    failing_once(h)
+    assert buy(h.gw).error["code"] == "store_unavailable"
+    assert buy(h.gw, query="another input").status == "refused"
+    [record] = unsure_events(h, "k1")
+    assert record.private["ceiling"] == "0.05"
+    assert record.private["fingerprint"] == h.gw._buy_fingerprint(
+        "enrichment", {"query": "delaware startups"})
+    r = h.gw.perform("resolve_purchase", {"key": "k1", "cost_usd": "0.5000"})
+    assert r.status == "refused" and "ceiling" in r.error["message"]
+
+
+def test_resolve_cells(h):
+    h.gw.ports.toolbuy = monid()
+    buy(h.gw, key="b1")  # bought: nothing to resolve
+    for cost in (None, "0.0400"):
+        assert h.gw.perform("resolve_purchase", {"key": "b1", "cost_usd": cost}
+                            ).error["code"] == "not_found"
+    crash_left_intent(h, key="c1")  # a leftover resolved as charged: recorded, then booked once
+    h.ok("resolve_purchase", key="c1", cost_usd="0.0400")
+    assert len(unsure_events(h, "c1")) == 1
+    assert h.gw.perform("resolve_purchase", {"key": "c1", "cost_usd": None}
+                        ).error["code"] == "wrong_status"  # charged stays charged
+    h.gw.ports.toolbuy = monid(lost)
+    buy(h.gw, key="n1")
+    h.ok("resolve_purchase", key="n1", cost_usd=None)
+    assert h.gw.perform("resolve_purchase", {"key": "n1", "cost_usd": None}
+                        ).error["code"] == "wrong_status"
+    booked = [e.cost_usd for e in h.events("cost.booked") if e.provider == "monid"]
+    assert booked == ["0.0013", "0.0400"]
+
+
+def test_a_leftover_recorded_later_counts_on_its_own_day(make_harness):
+    # recorded at boot, it used to carry the boot's date: a second restart that day
+    # reserved yesterday's ceiling against today's Monid cap
+    h = make_harness()
+    crash_left_intent(h, days_ago=1)
+    h.ports.toolbuy = monid()
+    h.restart()
+    assert unsure_events(h, "c1")[0].private["intent_ts"][:10] != h.clock.now.date().isoformat()
+    again = monid()
+    h.ports.toolbuy = again
+    h.restart()
+    assert "buy:c1" not in again._unsure
