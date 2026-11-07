@@ -221,38 +221,50 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     speaking.current = 0;
   }, []);
 
+  /** The browser can't listen (no recognition, mic blocked, or it keeps failing): hands-free still reads alerts. */
+  const deaf = useRef(false);
+  const earErrors = useRef(0);
+  const goDeaf = useCallback((why: string | null) => {
+    deaf.current = true;
+    setCanListen(false);
+    micRef.current = false;
+    setMicOn(false);
+    if (why) setNotice(why);
+  }, []);
+
   const listen = useCallback(() => {
-    if (recRef.current || speaking.current > 0 || linkRef.current !== "fallback") return;
+    if (recRef.current || speaking.current > 0 || linkRef.current !== "fallback" || deaf.current) return;
     const Ctor = recognitionCtor();
-    if (!Ctor) {
-      setCanListen(false);
-      micRef.current = false;
-      setMicOn(false);
-      return;
-    }
+    if (!Ctor) return goDeaf(null);
     const r = new Ctor();
     r.lang = "en-US";
     r.continuous = handsRef.current;
     r.interimResults = false;
     r.onresult = (e) => {
+      earErrors.current = 0;
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
         if (res.isFinal && res[0]?.transcript.trim()) spokenRef.current(res[0].transcript);
       }
     };
+    let failed = false;
     r.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-        setNotice("The microphone is blocked for this page. Type a command below instead.");
-        setCanListen(false);
-        handsRef.current = false;
-        setHandsFree(false);
+        goDeaf("The microphone is blocked for this page. Type commands below; hands-free still reads alerts aloud.");
+      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+        failed = true;
+        earErrors.current += 1;
+        if (earErrors.current >= 3) goDeaf("The browser's speech recognition keeps failing. Type commands below; hands-free still reads alerts aloud.");
       }
     };
     r.onend = () => {
       if (recRef.current !== r) return;
       recRef.current = null;
-      if (alive.current && handsRef.current && speaking.current === 0 && linkRef.current === "fallback") listenRef.current();
-      else {
+      if (alive.current && handsRef.current && speaking.current === 0 && linkRef.current === "fallback" && !deaf.current) {
+        // A failing recognizer (offline, no device) restarts after a pause, never in a tight loop.
+        if (failed) setTimeout(() => alive.current && handsRef.current && listenRef.current(), 2000);
+        else listenRef.current();
+      } else {
         micRef.current = false;
         setMicOn(false);
       }
@@ -263,7 +275,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     } catch {
       recRef.current = null;
     }
-  }, []);
+  }, [goDeaf]);
   useEffect(() => {
     listenRef.current = listen;
   }, [listen]);
@@ -462,7 +474,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       go("fallback");
       setFlow("idle");
       const ear = recognitionCtor() !== null;
-      setCanListen(ear);
+      if (!ear) deaf.current = true;
+      setCanListen(ear && !deaf.current);
       setNotice(`${why} ${ear ? "The browser listens instead; answers are read aloud." : "Type commands below; answers are read aloud."}`);
       if (ear && (micRef.current || handsRef.current)) listenRef.current();
       else if (!ear) {
@@ -759,7 +772,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
               : "Listening…"
             : canListen
               ? "Microphone off (browser speech)"
-              : "Typing only"
+              : handsFree
+                ? "Hands-free: alerts read aloud · type to answer"
+                : "Typing only"
           : "Voice off";
   const left = card ? secondsLeft(card.expiresAt, now) : 0;
 
@@ -803,7 +818,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           {micOn ? "Talking… tap to finish" : "Talk"}
         </button>
         <label className="hf">
-          <input type="checkbox" role="switch" checked={handsFree} onChange={toggleHandsFree} disabled={link === "connecting" || (link === "fallback" && !canListen)} />
+          <input type="checkbox" role="switch" checked={handsFree} onChange={toggleHandsFree} disabled={link === "connecting"} />
           Hands-free
         </label>
         <span className={`vstate${listening ? " live" : ""}`} role="status" aria-live="polite">
