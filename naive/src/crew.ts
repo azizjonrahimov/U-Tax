@@ -30,6 +30,7 @@ export const GATEWAY_TOOLS = [
   "source_candidates",
   "hr_outreach",
   "follow_up",
+  "list_candidates",
 ] as const;
 
 export type GatewayTool = (typeof GATEWAY_TOOLS)[number];
@@ -104,8 +105,8 @@ export const CREW: Record<AgentKey, Seat> = {
     actor: "hr",
     tokenEnv: "UTAX_TOOL_TOKEN_HR",
     prompt: "hr.md",
-    description: "Runs the paid gig hire: posts the job, finds public leads, writes to candidates with a consented address, screens and shortlists. The CEO hires or declines.",
-    tools: ["get_candidate", "hr_record", "source_candidates", "hr_outreach"],
+    description: "Runs the paid gig hire: finds public leads, writes to candidates who gave the firm their address, screens and shortlists. The CEO hires or declines.",
+    tools: ["get_candidate", "hr_record", "source_candidates", "hr_outreach", "list_candidates"],
   },
 };
 

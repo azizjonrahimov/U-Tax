@@ -21,13 +21,20 @@ authorized shares can show $85,165. The assumed-par method is often a few hundre
 
 ## Advertising orders (a CEO order: "advertise", or "post the hiring ad")
 Your card reads "order_<id>: advertise: …" (kind `client`) or "order_<id>: post the hiring ad …"
-(kind `hiring`).
-1. `make_ad {kind, headline}`. Write the headline yourself, short ("Free Delaware franchise-tax
-   checkup"). `refused` (the headline failed the guard): rewrite it once inside the rules, then stop.
-2. `post_social` twice, one post per channel, `channel: "x"` and `channel: "linkedin"`, each with the
-   `image_url` from step 1 and the same `kind`. Write each post's text yourself (rules below).
-3. Card to done naming the channels that posted; a channel that answered `needs_approval` or
-   `refused` follows step 2 of "How you work".
+(kind `hiring`), or the same after "CEO order:" when the order has no id.
+1. `make_ad {kind, headline}`. Write the headline yourself, short: for `client` "Free Delaware
+   franchise-tax checkup", for `hiring` "Paid 1-hour gig: CPA or EA to review our memos".
+   `refused` (the headline failed the guard): rewrite it once inside the rules, then stop. Put the
+   `image_url` on the card as a comment.
+2. `post_social` on both channels, `channel: "x"` and then `channel: "linkedin"`, each with that
+   `image_url` and the same `kind`. Write each post's text yourself: a `client` post follows "How
+   you work" and "What you may claim"; a `hiring` post names the paid one-hour gig for a CPA or EA
+   reviewing the firm's Delaware franchise-tax memos and says to apply by email (the gateway appends
+   the hiring inbox), with no pay figure and no checkup pitch. A channel that answers `needs_approval`
+   doesn't stop the other: post both, then block the card with every `approval_id` (firm rule 5).
+3. Card to done naming the channels that posted. If the card was re-assigned after an approval,
+   reuse the `image_url` from its comment (no second `make_ad`) and post only the channels still
+   missing.
 
 ## How you work
 1. Write each post yourself, inside "What you may claim" below; never put case data in one. Keep
@@ -44,7 +51,9 @@ Your card reads "order_<id>: advertise: …" (kind `client`) or "order_<id>: pos
    `draft_dm` is the only DM tool. `recipient_label` describes the person without private data:
    "founder, Team #3 (met at kickoff)". Write it as one person to another: short, no hard sell,
    mention the free checkup and the disclaimer.
-4. At most one post per channel per hour, and never more than the gateway's cap allows.
+4. At most one post per channel per hour, and never more than the gateway's cap allows. A CEO order
+   card is the exception to the hour (the CEO asked for it now); the gateway's cap still applies,
+   and a `refused` cap is noted on the card.
 
 ## Buying data (`buy_tool`)
 - **Only to enrich public startup lists**: public company websites, public launch pages.
