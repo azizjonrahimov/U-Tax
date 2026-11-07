@@ -320,6 +320,26 @@ for (const file of existsSync(templatesDir) ? readdirSync(templatesDir).filter((
 }
 for (const required of Object.keys(TEMPLATE_RULES)) if (!existsSync(join(templatesDir, required))) fail(`templates/${required} is missing`);
 
+// 14. hard rules from the first live case and contract v1.11.1, kept word for word: the Chief of
+// Staff's card rules (it once created cards with no title or body and a made-up blocked_by, then
+// repeated the call) and firm rule 11 (order ids). Every order_<n> example is the contract's shape.
+const MUST_KEEP = {
+  "chief-of-staff.md": ["carries all three: `title`", "`body`", "`assignee`", "names only a card id you read with `board_read` in this session",
+    "Never send the same call again unchanged", "The body starts with `order_<id>`", "Don't also `send_to_agent` for the same work"],
+  "_firm-rules.md": ["pass `order_id: \"order_42\"` on every U-Tax tool you call for that card", "Never make one up",
+    "Everyone else never creates or assigns a card"],
+};
+for (const [file, rules] of Object.entries(MUST_KEEP)) {
+  const path = join(ROOT, "prompts", file);
+  const text = existsSync(path) ? readFileSync(path, "utf8").replace(/\s+/g, " ") : "";
+  if (!text) fail(`prompts/${file} is missing`);
+  else for (const must of rules) if (!text.includes(must)) fail(`prompts/${file}: must keep the rule "${must}"`);
+}
+for (const file of readdirSync(join(ROOT, "prompts")).filter((f) => f.endsWith(".md")))
+  for (const m of readFileSync(join(ROOT, "prompts", file), "utf8").matchAll(/\border_[A-Za-z0-9<>_-]*/g))
+    if (!/^order_(?:[0-9]+|<id>)$/.test(m[0]) && m[0] !== "order_id")
+      fail(`prompts/${file}: "${m[0]}" isn't an order id the contract accepts (order_<digits>, or order_<id> as the placeholder)`);
+
 // 11. the /talk voice agent's prompt (backend uses it for the OpenAI Realtime session)
 const voicePath = join(ROOT, "prompts", "voice-intake.md");
 if (!existsSync(voicePath)) fail("prompts/voice-intake.md is missing");

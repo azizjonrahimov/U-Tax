@@ -43,6 +43,18 @@ def tick(gw: Gateway) -> None:
             log.exception("tick job failed")
 
 
+def _show_utax_logs() -> None:
+    """uvicorn configures only its own loggers: give "utax" an INFO handler so WAKE lines
+    (and the other gateway notes) show in the server log."""
+    utax = logging.getLogger("utax")
+    if not any(getattr(h, "_utax", False) for h in utax.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s:     %(name)s %(message)s"))
+        handler._utax = True  # type: ignore[attr-defined]
+        utax.addHandler(handler)
+    utax.setLevel(logging.INFO)
+
+
 def create_app(gateway: Gateway | None = None, *, start_background: bool = True) -> FastAPI:
     state: dict[str, object] = {}
 
@@ -60,6 +72,16 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
 
             crew = LocalCrew(gw, pace=gw.settings.driver_pace_seconds).start()
         state["crew"] = crew
+        waker = unwake = None
+        if start_background and gw.settings.naive_api_key and not gw.settings.driver:
+            # §6b: the real Chief of Staff in Naïve gets every wake (before the boot wakes)
+            from app.naive_waker import NaiveWaker
+
+            _show_utax_logs()
+            waker = NaiveWaker(gw.settings.naive_api_key, gw.settings.naive_api_base)
+            unwake = gw.on_wake(waker)
+            log.info("WAKE: the Naïve Chief of Staff receives the gateway's wakes")
+        state["waker"] = waker
         task = None
         if start_background:
             await asyncio.to_thread(gw.boot_wakes)  # wakes live in memory: re-derive them
@@ -93,6 +115,10 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
                         await running
             if confirmer:
                 await confirmer.aclose()
+            if unwake:
+                unwake()
+            if waker:
+                waker.close()
             if crew:
                 crew.stop()
 

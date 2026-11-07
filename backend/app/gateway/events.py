@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system"}
-PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "hubspot", "mobilerun",
+PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "elevenlabs", "hubspot", "mobilerun",
              "apify", "monid", "google", "stripe", None}
 STATUSES = {"ok", "failed", "skipped"}
 
@@ -57,6 +57,11 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "voice.command": ("text", "channel", "speaker", "case_id", "masked_name"),  # v1.6.4
     "ceo.notified": ("channel", "subject", "summary", "reason"),
     "naive.confirm": ("session_id", "agent", "tool", "decision", "read_people"),  # v1.9 §6b-bis
+    # v1.11.1 (D31): the live CEO orders
+    "ad.created": ("kind", "headline", "image_url"),
+    "hr.sourced": ("count", "source"),
+    "hr.outreach": ("candidate_id", "label", "slot"),
+    "client.followed_up": ("kind",),
     "approval.requested": ("approval_id", "action_type", "summary"),
     "touch.training": _TOUCH,
     "touch.operating": _TOUCH,
@@ -76,6 +81,7 @@ FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "sta
              "gross_assets_cents", "foreign_owner_25")
 # keys a payload may leave out: v1.6.4 masked_name is set on customer voice.command only
 OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"}),
+                         "call.booked": frozenset({"kind"}),  # v1.11.1: "candidate"
                          **{t: frozenset({"channel"})
                             for t in ("touch.training", "touch.operating", "touch.engineering")}}
 OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only
@@ -101,7 +107,9 @@ def validate(type_: str, actor: str, provider: str | None, status: str, payload:
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}")
     expected = set(PAYLOAD_KEYS[type_])
-    optional = OPTIONAL_PAYLOAD_KEYS.get(type_, frozenset())
+    # v1.11.1: any event of an agent's tool call may carry the CEO order it serves
+    optional = OPTIONAL_PAYLOAD_KEYS.get(type_, frozenset()) | {"order_id"}
+    expected = set(expected) | optional  # an optional key is allowed, never required
     if not (expected - optional <= set(payload) <= expected):
         raise ValueError(
             f"{type_} payload keys {sorted(payload)} != contract {sorted(expected)}"

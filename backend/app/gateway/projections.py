@@ -6,7 +6,7 @@ the whole log) and after every append. So a restart rebuilds exactly the same st
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any
 
@@ -162,10 +162,13 @@ class State:
     cost_keys: set[str] = field(default_factory=set)  # applied cost.booked keys (17b)
     public_cases_by_day: dict[str, int] = field(default_factory=dict)  # task 13: UTC date -> n
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
+    tts_talk_chars_by_day: dict[str, int] = field(default_factory=dict)  # v1.10 §5c budget
+    ads_created: int = 0  # v1.11: make_ad numbers its PNGs
+    candidate_call_starts: set[str] = field(default_factory=set)  # v1.11: held like case calls
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
                                                            "shortlisted": 0, "hired": 0,
-                                                           "declined": 0})
+                                                           "declined": 0, "sourced": 0, "contacted": 0})
     cap_log: dict[str, list[str]] = field(default_factory=lambda: {t: [] for t in TRUST_TYPES})
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
     last_login_brief: dict | None = None
@@ -230,6 +233,9 @@ class State:
     # ---------------------------------------------------------------- apply
 
     def apply(self, e: Event) -> None:
+        if "order_id" in e.payload:  # v1.11.1: a copied payload (a tax result QA re-checks,
+            # a call, a proposal) must stay exactly the action's own data
+            e = replace(e, payload={k: v for k, v in e.payload.items() if k != "order_id"})
         self.last_event_id = max(self.last_event_id, e.id)
         if e.cost_usd is not None and e.type == "cost.booked":
             if e.idempotency_key:  # 17b: a booking whose commit ack was lost is caught up once
@@ -244,6 +250,10 @@ class State:
             if model.startswith("realtime:") and not model.startswith(f"realtime:{CEO_MINT}"):
                 day = e.ts[:10]
                 self.voice_mints_by_day[day] = self.voice_mints_by_day.get(day, 0) + 1
+            if model.startswith("tts:talk:"):  # v1.10 §5c: /talk's daily character budget
+                day = e.ts[:10]
+                self.tts_talk_chars_by_day[day] = (self.tts_talk_chars_by_day.get(day, 0)
+                                                   + int(e.tokens_in or 0))
         for action_type, types in CAP_EVENTS.items():
             if e.type in types and e.status == "ok":
                 # sends for anonymous /talk cases have their own bucket (never pause the firm)
@@ -399,9 +409,26 @@ class State:
                 case.memo_result = dict(case.result)
 
     def _on_call_booked(self, e: Event) -> None:
+        if e.payload.get("kind") == "candidate":  # v1.11.1: no case; the slot is held
+            if e.status == "ok":
+                self.candidate_call_starts.add(e.payload["start"])
+            return
         case = self._case(e)
         if case is not None and e.status == "ok":
             case.call = dict(e.payload)
+
+    def _on_ad_created(self, e: Event) -> None:
+        self.ads_created += 1
+
+    def _on_hr_sourced(self, e: Event) -> None:
+        self.hiring["sourced"] = self.hiring.get("sourced", 0) + int(e.payload["count"])
+
+    def _on_hr_outreach(self, e: Event) -> None:
+        self.hiring["contacted"] = self.hiring.get("contacted", 0) + 1
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is not None:
+            cand["contacted"] = e.payload["slot"]
+        self.candidate_call_starts.add(e.payload["slot"])
 
     def _on_phone_checked(self, e: Event) -> None:
         case = self._case(e)
@@ -516,6 +543,8 @@ class State:
         if private.get("sender_key"):  # applicant mail: gateway-only contact details
             cand["sender_key"] = private["sender_key"]
             cand["reply_to"] = private.get("reply_to")
+        if private.get("listed"):  # v1.11: from the CEO's HR_CANDIDATES (no questionnaire)
+            cand["listed"] = True
         if stage == "applicant" and private.get("text"):
             if cand.get("texts"):  # every mail after the first is an answer
                 cand["answers"] = cand.get("answers", 0) + 1

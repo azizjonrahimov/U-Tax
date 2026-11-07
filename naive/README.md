@@ -72,5 +72,5 @@ naive up
 The same goes for a new tunnel URL: the credential is keyed by `UTAX_MCP_URL`, so `naive up` adds a
 new one, and the old one can be removed the same way.
 
-Models are marked `// UNVERIFIED: check GET /v1/models` until checked against the live catalogue
-(`naive models get z-ai/glm-5.3-flash`).
+Every agent runs `anthropic/claude-haiku-5.5` (design D31; the live `GET /v1/models` lists it,
+window `immediate`). Its per-token price on Naïve is still unverified: the daily caps are ceilings.

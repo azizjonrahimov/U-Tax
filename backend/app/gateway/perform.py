@@ -99,6 +99,9 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "draft_dm": ("mkt",), "hr_record": ("hr",), "firm_brief": ("cos",),
     "get_candidate": ("hr",), "flag_case": ("qa",),  # v1.4
     "buy_tool": ("mkt",),  # v1.7.3: Monid data calls, allowlisted and capped
+    # v1.11 (D31): the live CEO orders
+    "make_ad": ("mkt",), "source_candidates": ("hr",), "hr_outreach": ("hr",),
+    "follow_up": ("intake",), "list_candidates": ("hr",),  # v1.11.2
 }
 POST_MAX_CHARS = 255
 X_MAX_CHARS = 280
@@ -244,6 +247,14 @@ def _fit_labels(labels: list[str], room: int) -> str:
     return ""
 
 
+def _when(iso: str) -> str:
+    """A slot for a person: "Saturday, November 8 at 10:00 AM Pacific". The slots live in
+    9:00-16:00 PST (SLOT_DAY_UTC), so a fixed -8 offset (no tz database needed on Windows)."""
+    local = parse_ts(iso).astimezone(timezone(timedelta(hours=-8)))
+    hour = local.strftime("%I:%M %p").lstrip("0")
+    return f"{local.strftime('%A, %B')} {local.day} at {hour} Pacific"
+
+
 def _cap(text: str) -> str:
     """Uppercase the first letter only ("first memo..." -> "First memo...")."""
     return text[:1].upper() + text[1:]
@@ -346,6 +357,11 @@ class Gateway:
             "get_candidate": self._get_candidate,
             "flag_case": self._flag_case,
             "buy_tool": self._buy_tool,
+            "make_ad": self._make_ad,
+            "source_candidates": self._source_candidates,
+            "hr_outreach": self._hr_outreach,
+            "follow_up": self._follow_up,
+            "list_candidates": self._list_candidates,
             "resolve_purchase": self._resolve_purchase,  # control: the CEO, not an agent
             "firm_brief": self._firm_brief,
             # gateway / control actions (contract §5, §6a-c): never callable by an agent token
@@ -377,24 +393,30 @@ class Gateway:
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
         # reads that touch a slow port run before the lock is taken (contract §6f)
-        self._slow_reads: dict[str, Callable[[dict], dict]] = {"law_search": self._law_fetch,
-                                                               "buy_tool": self._buy_fetch}
+        self._slow_reads: dict[str, Callable[[dict], dict]] = {
+            "law_search": self._law_fetch, "buy_tool": self._buy_fetch,
+            "source_candidates": self._source_fetch}  # v1.11: Monid search before the lock
+        self._order_ctx = threading.local()  # v1.11.1: the CEO order a tool call serves
         from app.gateway.adapters.local import _KeyedJson
 
         self._buy_intents = _KeyedJson(settings.data_dir / "toolbuy-intents.json")
+        # v1.11: an outreach's slot, written before its email: a retry can't pick another
+        self._outreach_intents = _KeyedJson(settings.data_dir / "outreach-intents.json")
         self._restore_toolbuy()
         self._record_leftovers()
         self._expire_proposals()
+        self._seed_hr_candidates()
         self._outbox_tries: dict[str, tuple[int, float]] = {}
         self._outbox_inflight: set[str] = set()
         self._digest_backoff_until = 0.0
         self._public_cap_retry_at = 0.0  # task 13: next try of a failed at-capacity notice
         self._voice_pending: dict[str, int] = {}  # task 13: paid voice calls in flight
         self._voice_pending_usd = Decimal(0)
+        self._tts_talk_pending = 0  # v1.10 §5c: /talk TTS characters in flight
         # failed wake deliveries: (message, waker, attempt, due monotonic time)
         self._wake_retries: list[tuple[str, Callable[[str], None], int, float]] = []
 
-    READ_ONLY = frozenset({"list_open_cases", "get_case"})
+    READ_ONLY = frozenset({"list_open_cases", "get_case", "list_candidates"})
 
     # ------------------------------------------------------------ plumbing
 
@@ -449,7 +471,7 @@ class Gateway:
         with self._lock:
             todo = [cid for cid, c in self.state.candidates.items()
                     if c.get("reply_to") and not c.get("questionnaire_sent")
-                    and c.get("stage") == "applicant"
+                    and c.get("stage") == "applicant" and not c.get("listed")
                     and self._mail_may_go(f"questionnaire:{cid}")]
             return [cid for cid in todo if self._send_questionnaire(cid) == "sent"]
 
@@ -600,6 +622,60 @@ class Gateway:
         if result.status != "done":
             log.error("voice %s spend not booked after the call: %s", kind, result.error)
 
+    @staticmethod
+    def _tts_usd(provider: str | None, chars: int) -> Decimal:
+        """The estimate a TTS call holds while in flight and books once it answered."""
+        from app.gateway.pricing import ELEVENLABS_USD_PER_1K_CHARS, VOICE_USD
+
+        cost = (ELEVENLABS_USD_PER_1K_CHARS * chars / 1000 if provider == "elevenlabs"
+                else VOICE_USD["tts"])
+        return max(cost, Decimal("0.0001")).quantize(Decimal("0.0001"))
+
+    def reserve_tts(self, purpose: str, chars: int, provider: str | None = "elevenlabs"
+                    ) -> str | None:
+        """v1.10 §5c: hold a /api/tts call before the paid request, under the lock, so
+        concurrent calls can't all pass the same check. The hold is the call's own estimate
+        (per character on ElevenLabs). "budget" at SPEND_CAP_USD, "unbooked" when the log
+        can't be written, "talk_budget" when /talk's TTS_PUBLIC_CHARS_PER_DAY would be passed
+        (in-flight characters count). A None must be settled (settle_tts)."""
+        hold = self._tts_usd(provider, chars)
+        cap = self.settings.spend_cap_usd
+        with self._lock:
+            if cap is not None and self.state.spent_usd() + self._voice_pending_usd + hold > cap:
+                return "budget"
+            try:
+                self.store.ensure_writable()
+            except EventWriteError as err:
+                log.warning("tts refused, spend can't be booked: %s", err)
+                return "unbooked"
+            if purpose == "talk":
+                day = iso_ts(self._now())[:10]
+                used = self.state.tts_talk_chars_by_day.get(day, 0) + self._tts_talk_pending
+                if used + chars > self.settings.tts_public_chars_per_day:
+                    return "talk_budget"
+                self._tts_talk_pending += chars
+            self._voice_pending["tts"] = self._voice_pending.get("tts", 0) + 1
+            self._voice_pending_usd += hold
+        return None
+
+    def settle_tts(self, purpose: str, chars: int, provider: str, model: str, *,
+                   ok: bool) -> None:
+        """Release a reserve_tts hold (the same estimate); book it as cost.booked (chars in
+        tokens_in) only when the provider answered with audio."""
+        cost = self._tts_usd(provider, chars)
+        with self._lock:
+            if purpose == "talk":
+                self._tts_talk_pending = max(0, self._tts_talk_pending - chars)
+            self._voice_pending["tts"] = max(0, self._voice_pending.get("tts", 0) - 1)
+            self._voice_pending_usd = max(Decimal(0), self._voice_pending_usd - cost)
+            if not ok:
+                return
+            result = self.perform("book_spend", {
+                "provider": provider, "model": f"tts:{purpose}:{model}"[:120],
+                "tokens_in": chars, "cost_usd": str(cost), "estimated": True})
+        if result.status != "done":
+            log.error("tts spend not booked after the call: %s", result.error)
+
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The
         per-candidate list is admin-only (v1.6.1); the theater gets counts."""
@@ -620,10 +696,14 @@ class Gateway:
             return ToolResult("refused", error={"code": "tool_not_allowed",
                                                 "message": f"{actor} may not call {name}"})
         args = dict(args or {})
-        for private in ("_actor", "_prefetch", "_law_reserved", "_buy_reserved"):
+        for private in ("_actor", "_prefetch", "_law_reserved", "_buy_reserved",
+                        "_order_id"):
             args.pop(private, None)  # never caller-supplied
         if actor is not None:
             args["_actor"] = actor
+            order = self._valid_order(args.pop("order_id", None))  # v1.11.1, else ignored
+            if order:
+                args["_order_id"] = order
         slow = self._slow_reads.get(name)
         if slow is not None:
             try:
@@ -639,9 +719,12 @@ class Gateway:
                 self._release(args)
                 return ToolResult("error", error={"code": "internal_error",
                                                   "message": f"{name} failed unexpectedly"})
+        prev_order = getattr(self._order_ctx, "value", None)
+        self._order_ctx.value = args.get("_order_id") or prev_order
         try:
             result, wakes = self._perform_locked(name, handler, args)
         finally:
+            self._order_ctx.value = prev_order
             self._release(args)
         if name == "phone_check" and result.status == "done" and result.data.get("pending"):
             try:
@@ -703,6 +786,10 @@ class Gateway:
         events = [replace(e, payload={**e.payload, "channel": channel})
                   if e.type.startswith("touch.") and "channel" not in e.payload else e
                   for e in events]  # v1.8: every touch says how the CEO touched
+        order = getattr(self._order_ctx, "value", None)
+        if order:  # v1.11.1: the theater groups a CEO order's steps by it
+            events = [e if "order_id" in e.payload
+                      else replace(e, payload={**e.payload, "order_id": order}) for e in events]
         base = self._now()
         last = self.store.since(self.state.last_event_id - 1) if self.state.last_event_id else ()
         last_ts = max((parse_ts(e.ts) for e in last), default=None)
@@ -1248,7 +1335,7 @@ class Gateway:
         text = mask_spoken_emails(text)
         if speaker == "ceo":
             text = mask_text(text, masked_name="", company=None)
-            self._emit([
+            written = self._emit([
                 NewEvent(type="voice.command", actor="ceo", provider="local",
                          payload={"text": text, "channel": channel, "speaker": "ceo",
                                   "case_id": None}),
@@ -1256,7 +1343,8 @@ class Gateway:
                          payload={"note": f'order: "{clip(text, 120)}"', "approval_id": None,
                                   "channel": self._touch_channel or channel}),
             ])
-            self._wake(f"CEO: {text}")
+            # v1.11.1: the order's own id rides the wake, so each card can carry it
+            self._wake(f"CEO order_{written[0].id}: {text}")
             return {"forwarded": True}
         # Public, unauthenticated page: always a fresh case. Never join (or reveal) a case
         # by the email typed in, or anyone could read or redirect someone else's case.
@@ -1497,6 +1585,11 @@ class Gateway:
         time (2 h after it), so the list an agent saw, and the CEO approved, stays the same
         until those slots pass; never earlier than 30 min from now."""
         booked = {c.call["start"] for c in self.state.cases.values() if c.call}
+        booked |= self.state.candidate_call_starts  # v1.11: one calendar for both
+        try:  # an outreach under way holds its slot before its event is written
+            booked |= {v for v in self._outreach_intents.load().values() if isinstance(v, str)}
+        except (OSError, ValueError, AttributeError):
+            log.exception("outreach intents unreadable; their slots are not held")
         # e2e finding: a time another case is waiting on the CEO for (or was approved for,
         # not yet booked) is held, so two cases are never offered and approved the same slot
         for approval in self.state.approvals.values():
@@ -2733,8 +2826,260 @@ class Gateway:
             host = (parts.hostname or "").lower()
         except ValueError:
             return False
+        own = (urlsplit(self.settings.public_url).hostname or "").lower() \
+            if self.settings.public_url else ""
+        ours = bool(own) and host == own and not parts.query \
+            and re.fullmatch(r"/assets/ad_[0-9]{1,6}\.png", parts.path or "") is not None
         return parts.scheme == "https" and not parts.username and not parts.password \
-            and host in self.settings.public_asset_hosts
+            and (host in self.settings.public_asset_hosts or ours)
+
+    # ------------------------------------------------------------ v1.11 (D31) CEO orders
+
+    def _valid_order(self, raw: Any) -> str | None:
+        """`order_<id>` naming an existing CEO voice.command, else None (ignored)."""
+        if not isinstance(raw, str) or not re.fullmatch(r"order_[0-9]{1,12}", raw):
+            return None
+        event_id = int(raw.split("_", 1)[1])
+        try:  # an order id is a hint: a store hiccup ignores it, never fails the tool
+            found = next(iter(self.store.since(event_id - 1, limit=1)), None)
+        except Exception:  # noqa: BLE001 - see above
+            log.exception("order id %s not checked", raw)
+            return None
+        if (found is None or found.id != event_id or found.type != "voice.command"
+                or found.payload.get("speaker") != "ceo"):
+            return None
+        return f"order_{event_id}"  # "order_07" groups with order_7
+
+    def _seed_hr_candidates(self) -> None:
+        """HR_CANDIDATES (the CEO's own list) become candidates once, with their address
+        private like an applicant's, and never sent the applicant questionnaire."""
+        from email.utils import getaddresses
+
+        for _, address in getaddresses([self.settings.hr_candidates or ""]):
+            sender_key = address.strip().lower()
+            if not has_email(sender_key) or "@" not in sender_key:
+                continue
+            if any(c.get("sender_key") == sender_key for c in self.state.candidates.values()):
+                continue
+            candidate_id, name_masked, _ = self._candidate_for(sender_key)
+            digest = hashlib.sha256(sender_key.encode()).hexdigest()[:16]
+            try:
+                with self._lock:
+                    self._emit([NewEvent(
+                        type="hr.applicant", actor="hr", provider=None,
+                        payload={"candidate_id": candidate_id, "name_masked": name_masked,
+                                 "note": "on the CEO's list"},
+                        idempotency_key=f"hrlist:{digest}",
+                        private={"reply_to": address.strip(), "sender_key": sender_key,
+                                 "listed": True})])
+            except EventWriteError:
+                log.exception("HR_CANDIDATES entry not recorded; retried at the next boot")
+                return
+
+    def _list_candidates(self, args: dict) -> dict:
+        """v1.11.2 (hr): every candidate, masked: the applicants and the CEO's
+        HR_CANDIDATES entries (stable ids). No names, no addresses."""
+        slots = self.offered_slots(None)
+        rows = [{"candidate_id": cid, "label": c["name_masked"], "stage": c.get("stage"),
+                 "has_address": bool(c.get("reply_to")), "contacted": c.get("contacted"),
+                 "offered_slots": slots}
+                for cid, c in sorted(self.state.candidates.items(),
+                                     key=lambda item: int(item[0].rsplit("_", 1)[1])
+                                     if item[0].rsplit("_", 1)[1].isdigit() else 0)]
+        return {"candidates": rows}
+
+    AD_HEADLINE_MAX = 80
+
+    def _make_ad(self, args: dict) -> dict:
+        """v1.11 (mkt): render the firm's ad PNG; nothing leaves the firm until post_social."""
+        from app.gateway import ad_image
+
+        kind = _one_of(args, "kind", ("client", "hiring"))
+        headline = " ".join(_str(args, "headline", max_len=400).split())
+        if not headline or len(headline) > self.AD_HEADLINE_MAX:
+            raise Refused("bad_input", f"headline must be 1-{self.AD_HEADLINE_MAX} characters")
+        problem = post_problem(headline, allowed_url=self.settings.public_talk_url) \
+            or self._names_a_client(headline)
+        if problem:
+            raise Refused("content_guard", f"headline refused: {problem}")
+        if not self.settings.public_url.startswith("https://"):
+            raise Refused("no_public_url", "make_ad needs UTAX_PUBLIC_URL (the gateway's https "
+                                           "address) to serve the image")
+        key = f"ad:{_digest([kind, headline])}"
+        done = self._done_from(key)
+        if done is not None:
+            # the same ad on today's host (a quick tunnel's host changes on restart)
+            name = done.payload["image_url"].rsplit("/", 1)[-1]
+            path = self.settings.data_dir / "assets" / name
+            if not path.is_file():
+                ad_image.render(kind, headline, path)
+            return {"image_url": f"{self.settings.public_url}/assets/{name}",
+                    "duplicate": True}
+        number = self.state.ads_created + 1
+        name = f"ad_{number}.png"
+        ad_image.render(kind, headline, self.settings.data_dir / "assets" / name)
+        image_url = f"{self.settings.public_url}/assets/{name}"
+        self._emit([NewEvent(type="ad.created", actor="mkt",
+                             payload={"kind": kind, "headline": headline,
+                                      "image_url": image_url},
+                             idempotency_key=key)])
+        return {"image_url": image_url}
+
+    SOURCE_TOOL = "candidate_search"  # the MONID_TOOLS entry source_candidates buys
+    SOURCE_ROLE = "CPA or enrolled agent, Delaware franchise tax, freelance"
+
+    def _source_fetch(self, args: dict) -> dict:
+        """v1.11 (hr), before the lock: a Monid public search through buy_tool's money-safe
+        path (intent, ceilings, caps); off (no Monid, or no candidate_search tool) = none."""
+        count = args.get("count")
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 5:
+            return {"refused": "count must be 1-5"}
+        tools = getattr(self.ports.toolbuy, "tools", {}) or {}
+        if self.ports.toolbuy.provider == "local" or self.SOURCE_TOOL not in tools:
+            return {"off": True}
+        # its own namespace (never an mkt buy_tool key); a new key each minute, so a
+        # refused or unsure one never blocks every later search
+        sub = {"tool": self.SOURCE_TOOL, "input": {"query": self.SOURCE_ROLE},
+               "key": f"hr_source_{iso_ts(self._now())[:16].replace(':', '')}"}
+        fetched = self._buy_fetch(sub)
+        if sub.get("_buy_reserved"):
+            args["_buy_reserved"] = sub["_buy_reserved"]
+        return {"buy": sub, "fetched": fetched}
+
+    def _source_candidates(self, args: dict) -> dict:
+        fetched = args.get("_prefetch") or {}
+        if fetched.get("refused"):
+            raise Refused("bad_input", fetched["refused"])
+        count = args["count"]
+        if fetched.get("off"):
+            self._emit([NewEvent(type="hr.sourced", actor="hr",
+                                 payload={"count": 0, "source": "none"})])
+            return {"leads": [], "source": "none",
+                    "note": "Monid search is off (no candidate_search tool): no leads"}
+        sub = dict(fetched["buy"], _prefetch=fetched["fetched"])
+        bought = self._buy_tool(sub)
+        leads = self._public_leads(bought.get("result"), count)
+        self._emit([NewEvent(type="hr.sourced", actor="hr",
+                             payload={"count": len(leads), "source": "monid"})])
+        return {"leads": leads, "source": "monid",
+                "note": "public leads only: no address, so hr_outreach can't email them"}
+
+    @staticmethod
+    def _public_leads(result: Any, count: int) -> list[dict]:
+        """Masked public leads from a Monid result: a headline and a public https URL,
+        never an email, a phone or a name."""
+        rows = result.get("results") if isinstance(result, dict) else result
+        leads: list[dict] = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            url = str(row.get("url") or row.get("public_url") or "")
+            headline = strip_contacts(str(row.get("title") or row.get("headline") or ""))
+            headline = " ".join(redact_ids(headline)[0].split())[:120]
+            if not url.startswith("https://") or has_email(url) or not headline:
+                continue
+            n, letters = len(leads) + 1, ""
+            while n:
+                n, rem = divmod(n - 1, 26)
+                letters = chr(65 + rem) + letters
+            leads.append({"lead_id": f"lead_{len(leads) + 1}", "label": f"Lead {letters}",
+                          "headline": headline, "public_url": url[:300]})
+            if len(leads) == count:
+                break
+        return leads
+
+    def _hr_outreach(self, args: dict) -> dict:
+        """v1.11 (hr): email one candidate whose address the firm holds with consent (an
+        applicant, or the CEO's HR_CANDIDATES), with the gig and a calendar invite."""
+        candidate_id = _str(args, "candidate_id", max_len=64)
+        cand = self.state.candidates.get(candidate_id)
+        if cand is None:
+            raise Refused("no_consented_address", f"{candidate_id} is not a candidate with an "
+                                                  "address (a sourced lead has none)")
+        if not cand.get("reply_to"):
+            raise Refused("no_consented_address", f"{candidate_id} has no consented address")
+        if cand.get("stage") in ("declined", "hired"):
+            raise Refused("wrong_status", f"{candidate_id} is already {cand['stage']}")
+        key = f"hr_outreach:{candidate_id}"
+        done = self._done_from(key)
+        if done is not None:
+            return {**done.payload, "duplicate": True}
+        slot = _str(args, "slot", max_len=40)
+        try:
+            start = iso_ts(parse_ts(slot))
+        except ValueError as err:
+            raise Refused("bad_input", "slot must be ISO 8601 with a timezone") from err
+        bound = self._outreach_intents.get(candidate_id)
+        if bound and bound != start:  # an earlier try may have mailed that time already
+            raise Refused("slot_bound", f"{candidate_id}'s outreach is for {bound}; retry with "
+                                        "that slot", {"slot": bound})
+        offered = self.offered_slots(None)
+        if start not in offered and start != bound:
+            raise Refused("slot_not_offered", "slot must be one of get_candidate's "
+                                              "offered_slots", {"offered_slots": offered})
+        label = cand["name_masked"]
+        # the approval names the time (like book_call): an OK for X never sends Y
+        self._gate("email", f"{key}:{start}", _cap(
+            f"{self._first('email')}outreach email + call invite: {label} at {start}"), None)
+        self._outreach_intents.put(candidate_id, start)  # before anything leaves
+        body = self.templates.render("hr-outreach", {"slot_time": _when(start),
+                                                     "minutes": str(SLOT_MINUTES)})
+        # the invite first: the email says it was sent
+        self._with_retry("candidate call", lambda: self.ports.calendar.book(
+            Slot(start=start, minutes=SLOT_MINUTES), cand["reply_to"],
+            "U-Tax: intro call for the memo review gig", f"{key}:call"))
+        self._with_retry("outreach email", lambda: self.ports.mail.send(
+            OutMail(to=cand["reply_to"], subject="U-Tax: a paid 1-hour review gig", body=body,
+                    inbox="hiring"), key))
+        self._emit([
+            NewEvent(type="hr.outreach", actor="hr", provider=self.ports.mail.provider,
+                     payload={"candidate_id": candidate_id, "label": label, "slot": start},
+                     idempotency_key=key),
+            NewEvent(type="call.booked", actor="hr", provider=self.ports.calendar.provider,
+                     payload={"start": start, "minutes": SLOT_MINUTES,
+                              "invitee_masked": label, "kind": "candidate"},
+                     idempotency_key=f"{key}:call"),
+        ])
+        return {"candidate_id": candidate_id, "label": label, "slot": start}
+
+    FOLLOW_UP_STATUSES = {"memo_check": ("SENT", "CALL_BOOKED"),
+                          "missing_facts": ("INTAKE_PENDING", "STALLED"),
+                          "call_reminder": ("CALL_BOOKED",)}
+
+    def _follow_up(self, args: dict) -> dict:
+        """v1.11 (intake): a templated follow-up in the client's own thread, 1 a day a case."""
+        case = self._case(args)
+        kind = _one_of(args, "kind", tuple(self.FOLLOW_UP_STATUSES))
+        if case.status not in self.FOLLOW_UP_STATUSES[kind]:
+            raise Refused("wrong_status", f"{kind} needs the case in "
+                                          f"{' or '.join(self.FOLLOW_UP_STATUSES[kind])}")
+        if kind == "call_reminder" and not case.call:
+            raise Refused("wrong_status", "no review call is booked")
+        if not case.reply_to:
+            raise Refused("no_address", "the client's address isn't known")
+        day = iso_ts(self._now())[:10]
+        key = f"follow_up:{case.case_id}:{day}"
+        done = self._done_from(key)
+        if done is not None:
+            if done.payload.get("kind") == kind:
+                return {"kind": kind, "duplicate": True}
+            raise Refused("too_soon", "one follow-up a day per case; this one had "
+                                      f"{done.payload.get('kind')} today")
+        values = ask_values(case.masked_name, case.missing, [],
+                            greeting_name=self._greeting(case))
+        values["call_time"] = _when(case.call["start"]) if case.call else ""
+        self._gate("email", f"{key}:{kind}", _cap(
+            f"{self._first('email')}follow-up ({kind.replace('_', ' ')}): {case.masked_name}"),
+            case.case_id, public=case.priority)
+        body = self.templates.render(f"follow-up-{kind}", values)
+        thread = case.message_ids[-1] if case.message_ids else None
+        self._with_retry("follow-up email", lambda: self.ports.mail.send(
+            OutMail(to=case.reply_to, subject=f"Re: {case.subject}".strip(), body=body,
+                    in_reply_to=thread), key))
+        self._emit([NewEvent(type="client.followed_up", actor="intake", case_id=case.case_id,
+                             provider=self.ports.mail.provider, payload={"kind": kind},
+                             idempotency_key=key)])
+        return {"kind": kind}
 
     def _names_a_client(self, text: str) -> str | None:
         lowered = text.lower()
@@ -2802,7 +3147,11 @@ class Gateway:
         return {"candidate_id": candidate_id, "name_masked": cand["name_masked"],
                 "stage": cand.get("stage"), "credentials": cand.get("credentials"),
                 "answers": list(cand.get("texts", [])),
-                "questionnaire_sent": bool(cand.get("questionnaire_sent"))}
+                "questionnaire_sent": bool(cand.get("questionnaire_sent")),
+                # v1.11: hr_outreach books one of these; consented = an address with consent
+                "offered_slots": self.offered_slots(None),
+                "consented": bool(cand.get("reply_to")),
+                "contacted": cand.get("contacted")}
 
     FLAG_KINDS = ("possible_injection", "unrealistic_inputs")
 
@@ -2992,8 +3341,10 @@ class Gateway:
         the CEO about a deny (at most once per agent and tool every 10 minutes)."""
         session_id = _str(args, "session_id", max_len=80)
         call_id = _str(args, "tool_call_id", max_len=120)
-        # per session: a provider's call ids ("call_0") may repeat across sessions
-        key = f"naive.confirm:{session_id}:{call_id}"
+        # per session: a provider's call ids ("call_0") may repeat across sessions; per
+        # attempt (19b): Naive re-asks with the same call id, and each ask is its own event
+        attempt = str(args.get("attempt") or 1)[:40]
+        key = f"naive.confirm:{session_id}:{call_id}" + (f":{attempt}" if attempt != "1" else "")
         if self._done_from(key) is not None:
             return {"duplicate": True}
         agent = _one_of(args, "agent", AGENTS)
@@ -3009,7 +3360,7 @@ class Gateway:
                 self._naive_noticed[(agent, tool)] = self._now()
                 self._notify_ceo("flagged", clip(f"Naïve tool denied: {tool}", 120),
                                  f"Naïve asked to run {tool}; denied",
-                                 key=f"ceo:naive-deny:{session_id}:{call_id}")
+                                 key=f"ceo:naive-deny:{session_id}:{call_id}:{attempt}")
         return {"decision": decision}
 
     def _naive_question(self, args: dict) -> dict:

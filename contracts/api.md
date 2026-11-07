@@ -1,4 +1,4 @@
-# API contract (v1.10): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.11): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -408,6 +408,35 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `firm_brief` | cos | `{}` | counts, blocked cards, touches; `brief.generated` |
 | `buy_tool` | mkt | `{tool, input, key}` | ToolBuyPort (Monid): refused unless `tool` is in `MONID_TOOLS`; the per-tool `max_usd` ceiling and `MONID_DAILY_CAP_USD` apply; the purchase runs outside the gateway lock; `tool.bought` with `cost_usd` in the envelope plus `cost.booked`; key, input fingerprint and unsure flag are private. Never input containing an email or a client's details (design: public startup lists only) |
 
+**v1.11 (design D31, the live CEO orders):**
+
+| Tool | Agent | Input | Effect |
+|---|---|---|---|
+| `make_ad` | mkt | `{kind: "client"\|"hiring", headline}` (headline ≤ 80 chars, passes the `post_social` content guard) | The gateway renders a branded 1200×628 PNG: firm name, headline, and for `client` the real example "$85,165 → $450". It's served at `<public-host>/assets/ad_<n>.png` (the gateway's own host is always in `PUBLIC_ASSET_HOSTS`). Returns `{image_url}`; event `ad.created`. No trust gate (nothing leaves the firm until `post_social`). |
+| `source_candidates` | hr | `{count}` (1–5) | ToolBuyPort (Monid) public search for the gig's role. Returns masked public leads `{lead_id, label, headline, public_url}`, never an email or phone; event `hr.sourced`. With Monid off it returns `[]` and says so. |
+| `hr_outreach` | hr | `{candidate_id, slot}` | Emails one candidate whose address the firm already holds with consent: an applicant from the hiring inbox, or an entry in `HR_CANDIDATES` (the CEO's own list: `name <email>`, comma-separated). The email carries the gig details (template `hr-outreach`) plus a calendar invite for `slot`, which must be one of `get_candidate.offered_slots`. Trust type `email`; event `hr.outreach` + `call.booked` (kind `candidate`). A lead from `source_candidates` has no address and is refused (`no_consented_address`). |
+| `list_candidates` | hr | `{}` | v1.11.2: masked rows `{candidate_id, label, stage, has_address, contacted, offered_slots}`, covering the applicants and the `HR_CANDIDATES` entries (stable ids). No name, email or phone. `has_address` is true only for a consented address. `offered_slots` is per row. |
+| `follow_up` | intake | `{case_id, kind: "memo_check"\|"missing_facts"\|"call_reminder"}` | A templated follow-up (template `follow-up-<kind>`) in the client's own thread. Trust type `email`; event `client.followed_up`. At most 1 a day per case. |
+
+`get_candidate` adds `offered_slots`, and `/api/state` hiring counts `sourced` and `contacted`.
+
+v1.11.1, event payloads (the frontend's proposal, adopted):
+- `ad.created` (mkt): `{kind: "client"|"hiring", headline, image_url}`. `image_url` is https on the gateway's own host.
+- `hr.sourced` (hr): `{count, source: "monid"|"none"}`. Counts only: no lead labels or URLs on the public log.
+- `hr.outreach` (hr): `{candidate_id, label, slot}`. `label` is the gateway's letter, "Candidate A"; never a name or email.
+- `client.followed_up` (intake): `{kind}`, with `case_id` in the envelope.
+- `call.booked` gains an optional `kind: "client"|"candidate"` (absent = client). A candidate call has
+  `case_id` null and `invitee_masked` set to the label.
+- **Order linking:**
+  - The CEO-order wake becomes `CEO order_<id>: <text>`, where `<id>` is the order's
+    `voice.command` event id.
+  - The Chief of Staff copies `order_<id>` into each card's body, and agents pass
+    `order_id: "order_<id>"` on the tools they call for that card.
+  - Every §6 tool accepts an optional `order_id`, matching `^order_[0-9]+$` and referring to an
+    existing CEO `voice.command`, else it's ignored. The gateway stamps it into the event payload.
+  - The theater groups steps by `order_id`, and falls back to matching by department when it's
+    absent.
+
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
 `gross_assets`, `foreign_owner_25`. Optional (never required to finish a case, asked once
 at most): `gross_receipts` (cents) and `years_with_receipts` (int), used only for the R&D
@@ -587,6 +616,12 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.11.2 (2026-11-07, D31 agents + backend): `list_candidates` (hr); refusal codes slot_bound, no_public_url, too_soon, no_consented_address; every MCP schema offers order_id.
+
+- v1.11.1 (2026-11-07, frontend D31 proposal): payloads for ad.created, hr.sourced, hr.outreach, client.followed_up; call.booked kind; order_id linking (wake `CEO order_<id>: <text>`).
+
+- v1.11 (2026-11-07, design D31): tools make_ad, source_candidates, hr_outreach, follow_up; HR_CANDIDATES; events ad.created, hr.sourced, hr.outreach, client.followed_up.
 
 - v1.10.3 (2026-11-07, owner "allow handoffs"): the confirm resolver also allows the CoS's coordinator tools.
 

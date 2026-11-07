@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
+import re
 import logging
 import threading
 import time
@@ -19,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Header, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
+from starlette.background import BackgroundTask
 
 from app.errors import APIError
 from app.gateway.events import Event
@@ -169,6 +171,9 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     free_limiter = RateLimiter(limit=FREE_LIMITS[False][0])
     audio_limiter = RateLimiter(limit=30, global_limit=120)
     ceo_mint_limiter = RateLimiter(limit=10, window=3600.0)  # v1.8: the CEO's 10 an hour
+    # v1.10 §5c: /talk's TTS has the per-IP limits of a /talk Send, in its own bucket
+    tts_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
+    phrases_cache: dict[str, Any] = {"stamp": None, "phrases": None}
     audio_cache: dict[int, bytes] = {}  # brief text never changes: one TTS call per brief
 
     def gw() -> Gateway:
@@ -392,6 +397,18 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         require_admin(authorization)
         return _console("ceo_command", _pick(body, "text"))
 
+    @router.get("/assets/{name}")
+    def asset(name: str):
+        """v1.11 make_ad: the firm's ad PNGs, public (X and LinkedIn fetch them). Only
+        ad_<n>.png from the gateway's own assets folder: no other file can be named."""
+        if not re.fullmatch(r"ad_[0-9]{1,6}\.png", name):
+            raise APIError(404, "not_found", "no such asset")
+        path = gw().settings.data_dir / "assets" / name
+        if not path.is_file():
+            raise APIError(404, "not_found", "no such asset")
+        return Response(content=path.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
+
     @router.get("/api/brief/audio")
     def brief_audio(request: Request, event_id: int = Query(..., ge=1),
                     token: str | None = Query(None), authorization: str | None = Header(None)):
@@ -404,12 +421,30 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if event is None or event.type != "brief.generated":
             raise APIError(404, "not_found", f"no brief.generated event {event_id}")
         voice = gw().ports.voice
+        text = event.payload["text"]
+        if voice.provider == "elevenlabs":  # v1.10 §5c: booked per character
+            if gw().reserve_tts("brief", len(text), "elevenlabs"):
+                raise APIError(503, "voice_unavailable", "audio is resting; use speechSynthesis")
+            try:
+                audio = voice.speak(text)
+            except Exception as exc:  # any failure releases the hold
+                gw().settle_tts("brief", len(text), "elevenlabs", voice.tts_model, ok=False)
+                if not isinstance(exc, PortError):
+                    raise
+                log.warning("brief audio failed: %s", exc)
+                raise APIError(503, "voice_unavailable",
+                               "audio is unavailable; use speechSynthesis") from exc
+            gw().settle_tts("brief", len(text), "elevenlabs", voice.tts_model, ok=True)
+            if len(audio_cache) > 200:
+                audio_cache.pop(next(iter(audio_cache)))
+            audio_cache[event_id] = audio
+            return Response(content=audio, media_type="audio/mpeg")
         paid = voice.provider == "openai"
         if gw().reserve_voice("tts", paid=paid):  # task 13: SPEND_CAP_USD covers TTS too
             raise APIError(503, "voice_unavailable", "audio is resting; use speechSynthesis")
         audio = None
         try:
-            audio = voice.speak(event.payload["text"])
+            audio = voice.speak(text)
         except NotConfigured as exc:
             raise APIError(503, "voice_unavailable", "no voice key; use speechSynthesis") from exc
         except PortError as exc:
@@ -423,6 +458,100 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             audio_cache.pop(next(iter(audio_cache)))
         audio_cache[event_id] = audio
         return Response(content=audio, media_type="audio/mpeg")
+
+    TTS_CEO_MAX = 1500
+
+    def talk_phrases() -> dict[str, str] | None:
+        """naive/prompts/talk-phrases.json, loaded strictly, re-read when it changes."""
+        from app.gateway.talk_phrases import PhraseError, load
+
+        path = gw().settings.talk_phrases_path
+        try:
+            stat = path.stat()
+            stamp: Any = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            stamp = None
+        if stamp is None or phrases_cache["stamp"] != stamp:
+            try:
+                phrases_cache["phrases"] = load(path)
+            except PhraseError as err:  # retried on the next call (a file held by a scanner)
+                log.error("talk phrases refused: %s", err)
+                phrases_cache["phrases"] = None
+                return None
+            phrases_cache["stamp"] = stamp
+        return phrases_cache["phrases"]
+
+    @router.post("/api/tts")
+    def tts(request: Request, body: dict = Body(...), authorization: str | None = Header(None)):
+        """v1.10 §5c: speech through the voice adapter, streamed as audio/mpeg.
+        purpose "ceo" (admin): the text as given, unmasked, at most 1500 characters.
+        purpose "talk" (public): only a registry line {phrase, args}, masked, with /talk's
+        per-IP limits and its own daily character budget."""
+        purpose = body.get("purpose")
+        if purpose == "ceo":
+            require_admin(authorization)
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip() or len(text) > TTS_CEO_MAX:
+                raise APIError(400, "bad_input", f"text must be 1-{TTS_CEO_MAX} characters")
+        elif purpose == "talk":
+            if "text" in body:
+                raise APIError(400, "bad_input", "purpose talk takes {phrase, args}, no text")
+            _talk_limit(tts_limiter, SEND_LIMITS)
+            tts_limiter.check(_client_ip(request))
+            from app.ceo_tools import mask_words
+            from app.gateway.talk_phrases import PhraseError, render
+
+            phrases = talk_phrases()
+            if phrases is None:
+                raise APIError(503, "voice_unavailable", "no phrase registry; use speechSynthesis")
+            try:
+                text = mask_words(render(phrases, body.get("phrase"), body.get("args")))
+            except PhraseError as err:
+                raise APIError(400, "bad_input", str(err)) from err
+            if len(text) > 600:  # §5c: a talk line is at most 600 characters, as spoken
+                raise APIError(400, "bad_input", "that line is over 600 characters")
+        else:
+            raise APIError(400, "bad_input", 'purpose must be "ceo" or "talk"')
+        voice = gw().ports.voice
+        if voice.provider is None:
+            raise APIError(503, "voice_unavailable", "no voice key; use speechSynthesis")
+        refusal = gw().reserve_tts(purpose, len(text), voice.provider)
+        if refusal == "talk_budget":
+            raise APIError(429, "rate_limited", "today's /talk voice is spent; use speechSynthesis")
+        if refusal:
+            raise APIError(503, "voice_unavailable", "voice is resting; use speechSynthesis")
+        model = getattr(voice, "tts_model", "tts")
+        try:
+            opener = getattr(voice, "open_stream", None)
+            if callable(opener):
+                chunks, close = opener(text)
+            else:
+                audio = voice.speak(text)
+                chunks, close = iter([audio]), (lambda: None)
+        except Exception as exc:  # any failure releases the hold (never leaks the budget)
+            gw().settle_tts(purpose, len(text), voice.provider, model, ok=False)
+            if not isinstance(exc, PortError):
+                raise
+            log.warning("tts (%s) failed: %s", purpose, exc)
+            raise APIError(503, "voice_unavailable", "audio is unavailable; use speechSynthesis") \
+                from exc
+        try:
+            gw().settle_tts(purpose, len(text), voice.provider, model, ok=True)  # it bills now
+        except Exception:
+            close()  # never leave the upstream connection checked out of the pool
+            raise
+
+        def stream():
+            try:
+                yield from chunks
+            finally:
+                close()
+
+        # the background task closes the upstream even when the browser leaves before the
+        # first chunk (a generator that never started never runs its finally)
+        return StreamingResponse(stream(), media_type="audio/mpeg",
+                                 headers={"Cache-Control": "no-store"},
+                                 background=BackgroundTask(close))
 
     @router.get("/api/ceo/brief")
     def ceo_brief(since_id: int = Query(0, ge=0), authorization: str | None = Header(None)):
