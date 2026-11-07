@@ -5,8 +5,9 @@
 #   .\crew\scripts\naive-up.ps1 -Url https://<words>.trycloudflare.com           # dry run
 #   .\crew\scripts\naive-up.ps1 -Url https://<words>.trycloudflare.com -Apply    # for real
 #
-# Uses your own `naive login` profile (the full-access key). It never reads NAIVE_API_KEY
-# from backend/.env: that is the gateway's narrow key, and it would override your profile.
+# Copy your full-access key (sk_live_...) to the clipboard just before running: `naive up`
+# reads NAIVE_API_KEY only. It never uses NAIVE_API_KEY from backend/.env, which is the
+# gateway's narrow key.
 param(
     [Parameter(Mandatory = $true)][string]$Url,
     [switch]$Apply
@@ -31,7 +32,17 @@ foreach ($line in Get-Content $envFile) {
 }
 $missing = $seats | Where-Object { -not $found[$_] }
 if ($missing) { throw "backend/.env has no token for: $($missing -join ', ')" }
-Remove-Item Env:NAIVE_API_KEY -ErrorAction SilentlyContinue
+# `naive up` reads NAIVE_API_KEY, not the CLI profile. Take the owner's full-access key from
+# the clipboard (copy it just before running), for this process only, then clear the clipboard.
+$key = ""
+try { $key = (Get-Clipboard -Raw).Trim() } catch {}
+if ($key -notmatch "^sk_live_[A-Za-z0-9]{20,}$") {
+    throw "copy your full-access Naive key (sk_live_...) to the clipboard first, then run this again"
+}
+$env:NAIVE_API_KEY = $key
+Remove-Variable key
+Set-Clipboard -Value " "
+Write-Host "Naive key taken from the clipboard (not shown); clipboard cleared"
 $env:UTAX_MCP_URL = "$base/mcp"
 Write-Host "7 seat tokens loaded; UTAX_MCP_URL=$env:UTAX_MCP_URL"
 
