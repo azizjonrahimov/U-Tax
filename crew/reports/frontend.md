@@ -77,6 +77,26 @@ Unverified:
   - Echo levels in the venue.
   - Browser `SpeechRecognition` on real audio.
 
+## Theater `naive.confirm` and the ElevenLabs voice (contract v1.9 §6b-bis, v1.10 to v1.10.2 §5c, D30)
+
+- **Theater:** each `naive.confirm` shows on the rail as "Naïve check: board_write allowed for Chief of Staff · N auto, 0 clicks", red for a deny.
+- **Speaking:** `src/lib/tts.ts`, one line at a time.
+  - It sends `POST /api/tts` and falls back to the browser's voice on a 503 or 429 (resting the gateway voice 60 s), on any failure, or on an autoplay refusal.
+  - Pieces are at most 600 chars. A stalled piece is silenced and counts as not heard.
+- **/ceo:** speaks through the gateway with the token in a header, unmasked (v1.10.2). Listening stays off while anything plays, plus 800 ms.
+- **/talk:**
+  - Speaks registry keys only: `question.1`–`question.5`, `estimate.authorized` and `estimate.assumed_par` with `{total_cents}`, and `memo.on_its_way`. Other lines use the browser's voice.
+  - Listens through browser SpeechRecognition ("Speak answers"). A phrase counts as an answer only while a question waits and the page is silent.
+  - Listening stops before the email prompt, on focus of the email field, and on Start over.
+- **Checks:** `/review` ran one pass (7 specialists, the adversarial pass and Red Team), timeboxed by the controller. All 13 fixes are applied, including the room-speech CRITICAL on /talk. 413 tests pass.
+- **Open:**
+  - The next TTS piece isn't fetched while the current one plays, so there is a short gap between lines.
+  - A burst of `naive.confirm` events can speed up the projector.
+  - The /talk listening rules live in the component, so they have no unit test.
+- **Unverified:**
+  - A real mic and recognizer in Chrome (the owner checks this at the venue).
+  - The real `/api/tts` (backend task 21) and the phrase registry (agents lane). My keys are a proposal until the registry lands.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.

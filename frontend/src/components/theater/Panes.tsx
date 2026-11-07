@@ -375,6 +375,17 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
               </div>
             ))}
           </div>
+          {screen.rail.naive && (
+            // No click behind these: the gateway answered Naïve's tool confirm itself (v1.9 §6b-bis).
+            <div className={`naive${screen.rail.naive.allowed ? "" : " denied"}`} data-target="rail.naive">
+              <span aria-hidden="true">{screen.rail.naive.allowed ? "✓ " : "✕ "}</span>
+              {screen.rail.naive.text}
+              <span className="n">
+                {" "}
+                · {screen.rail.naive.allowedCount + screen.rail.naive.deniedCount} auto, 0 clicks
+              </span>
+            </div>
+          )}
           {screen.rail.pending.map((p) => (
             <div key={p.approvalId} className="pending">
               ⏳ {p.text} · waiting on CEO

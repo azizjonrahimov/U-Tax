@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+
 import type { UTaxEvent } from "@/theater/events";
 import {
   addTurn,
@@ -22,6 +23,9 @@ import {
   realtimeSignal,
   REALTIME_SDP_URL,
   TYPED_SCRIPT,
+  awaitingAnswer,
+  progressSpeech,
+  questionPhrase,
   voiceBody,
   type Turn,
 } from "./talk";
@@ -243,5 +247,31 @@ describe("errors read as sentences", () => {
     expect(friendlyError(429, "at_capacity", "")).toMatch(/fully booked/);
     expect(friendlyError(429, "at_capacity", msg)).not.toMatch(/try again/);
     expect(friendlyError(413, "too_large")).toMatch(/too much to send/);
+  });
+});
+
+describe("D30 / v1.10.2: what /talk says through the firm's voice", () => {
+  it("script questions are registry keys question.1-5", () => {
+    expect(TYPED_SCRIPT.map((q) => questionPhrase(q)?.phrase)).toEqual(["question.1", "question.2", "question.3", "question.4", "question.5"]);
+    expect(questionPhrase("anything else")).toBeUndefined();
+  });
+
+  it("the estimate goes as numbers only; other progress lines stay with the browser's voice", () => {
+    const base = { ...emptyProgress("case_1"), totalCents: 45000, method: "authorized" as const };
+    expect(progressSpeech({ ...base, stage: "computed" })).toEqual([
+      { text: "Your estimated Delaware franchise tax is $450, using the authorized shares method.", phrase: { phrase: "estimate.authorized", args: { total_cents: 45000 } } },
+    ]);
+    expect(progressSpeech({ ...base, stage: "sent", method: "assumed_par" }).map((x) => x.phrase?.phrase)).toEqual(["estimate.assumed_par", "memo.on_its_way"]);
+    const blocked = progressSpeech({ ...emptyProgress("case_1"), blocked: true });
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].phrase).toBeUndefined();
+    for (const part of [...progressSpeech({ ...base, stage: "sent" }), ...blocked])
+      for (const v of Object.values(part.phrase?.args ?? {})) expect(typeof v).toBe("number");
+  });
+
+  it("a heard phrase is an answer only while a scripted question waits", () => {
+    expect(awaitingAnswer([])).toBe(false);
+    expect(awaitingAnswer([{ speaker: "agent", text: TYPED_SCRIPT[0] }])).toBe(true);
+    expect(awaitingAnswer([{ speaker: "agent", text: TYPED_SCRIPT[0] }, { speaker: "customer", text: "yes" }])).toBe(false);
   });
 });

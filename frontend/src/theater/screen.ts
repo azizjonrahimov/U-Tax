@@ -80,6 +80,8 @@ export interface ScreenState {
     trust: Record<string, string>;
     pending: { approvalId: string; text: string }[];
     crm?: string;
+    /** v1.9: the gateway's own answers to Naïve tool confirms (the latest, and how many). */
+    naive?: { text: string; allowed: boolean; allowedCount: number; deniedCount: number };
   };
   /** Last event that failed (status "failed"), shown as a red note on its pane. */
   failure?: { pane: Pane; text: string; eventId: number };
@@ -295,6 +297,20 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
     case "crm":
       s.rail = { ...s.rail, crm: text };
       break;
+    case "naive": {
+      const allowed = meta.decision === "allow";
+      const prev = s.rail.naive;
+      s.rail = {
+        ...s.rail,
+        naive: {
+          text,
+          allowed,
+          allowedCount: (prev?.allowedCount ?? 0) + (allowed ? 1 : 0),
+          deniedCount: (prev?.deniedCount ?? 0) + (allowed ? 0 : 1),
+        },
+      };
+      break;
+    }
     // voice / brief / notify are captions (spoken words), drawn by the player from the step;
     // hiring numbers come from the rail projection (counts only, never names).
   }

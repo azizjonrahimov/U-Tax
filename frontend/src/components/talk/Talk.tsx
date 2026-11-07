@@ -1,19 +1,23 @@
 "use client";
 
-// "Talk to U-Tax" (/talk, contract §8): a customer or the finale judge talks with the firm's
-// AI intake agent. Consent first; the microphone is requested only after "I agree, start
-// talking". Voice runs on an OpenAI Realtime session the gateway mints (the key never
-// reaches the browser); without one the page types, and speaks with browser speech.
-// After sending, the page follows the case live on the public theater stream.
+// "Talk to U-Tax" (/talk, contract §8, v1.10 §5c): a customer or the finale judge talks with the
+// firm's AI intake agent. Consent first; the microphone is requested only after "I agree, start
+// talking". With a Realtime session from the gateway the call runs on it; without one (D30: the
+// main path) the browser's speech recognition takes the answers and the firm speaks through
+// POST /api/tts (ElevenLabs), or the browser's own voice when that is off. Listening pauses
+// while the page speaks, plus an echo tail. After sending, the page follows the case live.
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, apiFetch, API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
 import { formatCents } from "@/theater/format";
+import { ECHO_TAIL_MS, Speaker, type TalkPhrase } from "@/lib/tts";
+import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition } from "@/lib/recognition";
 import { stateUrl, streamUrl, seedFromState, type Endpoints } from "@/theater/live";
 import {
   addTurn,
+  awaitingAnswer,
   canSend,
   caseDone,
   customerChars,
@@ -29,9 +33,12 @@ import {
   parseVoiceSession,
   pendingTurns,
   progressLine,
+  progressSpeech,
+  questionPhrase,
   realtimeSignal,
   reserveTurn,
   STAGES,
+  TYPED_SCRIPT,
   voiceBody,
   type CaseProgress,
   type Turn,
@@ -65,15 +72,24 @@ const VOICE_LABEL: Record<VoiceState, string> = {
   idle: "Your turn. Just talk.",
 };
 
-const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
-function say(text: string) {
-  if (!hasSpeech()) return;
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+/** The firm's voice (v1.10 §5c, purpose "talk"): the gateway's TTS, the browser's voice on a 503. */
+let talkSpeaker: Speaker | null = null;
+const speakingListeners = new Set<(on: boolean) => void>();
+const speaker = () =>
+  (talkSpeaker ??= new Speaker({ purpose: "talk", api: `${API_URL}/api`, onAudio: (on) => speakingListeners.forEach((l) => l(on)) }));
+/** Say a line now (the newest line wins, as before). With a registry key it is the firm's voice; without, the browser's. */
+function say(text: string, phrase?: TalkPhrase) {
+  speaker().stop();
+  speaker().say(text, undefined, phrase);
 }
-const hush = () => {
-  if (hasSpeech()) window.speechSynthesis.cancel();
-};
+const hush = () => talkSpeaker?.stop();
+
+/** Listening comes back this long after the page stops speaking (the room's echo dies down; §5c). */
+const EAR_TAIL_MS = ECHO_TAIL_MS;
+/** Finals heard within this pause are one answer ("We're a Delaware C corp ... with 10 million shares"). */
+const ANSWER_GAP_MS = 1200;
+/** The last script line asks for the email, which is typed, never spoken: listening stops before it. */
+const TYPED_SCRIPT_LAST = TYPED_SCRIPT[TYPED_SCRIPT.length - 1];
 
 const newRequestId = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `talk-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -106,6 +122,8 @@ export function Talk() {
   const [lostAnswer, setLostAnswer] = useState(false);
   /** The firm is full for today (v1.7.6): the gateway's sentence (it names the inbox); Send stays off. */
   const [atCapacity, setAtCapacity] = useState<string | null>(null);
+  /** Speaking answers through the browser's speech recognition (D30's main path): off, on, or not possible here. */
+  const [ear, setEar] = useState<"off" | "on" | "paused" | "unsupported" | "blocked" | "failing">("off");
   /** Stream start: the last event id before our case opened (so we don't replay the night). */
   const [followFrom, setFollowFrom] = useState(0);
   /** The turns as of the last change: handlers read this, never a state updater with side effects. */
@@ -129,6 +147,14 @@ export function Talk() {
   const usedVoice = useRef(false);
   const spoken = useRef<string>("");
   const listRef = useRef<HTMLOListElement | null>(null);
+  const earWanted = useRef(false);
+  const recRef = useRef<Recognition | null>(null);
+  const pageSpeaking = useRef(false);
+  const heardRef = useRef<(text: string) => void>(() => {});
+  const earStartRef = useRef<() => void>(() => {});
+  const earFailures = useRef(0);
+  const heardBuffer = useRef("");
+  const heardTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const focusRef = useRef<HTMLElement | null>(null);
 
   const go = useCallback((p: Phase) => {
@@ -169,6 +195,107 @@ export function Talk() {
     },
     [setAll],
   );
+
+  /** Stop listening now (the page speaks, the caller turned it off, or the call moved on). */
+  const earStop = useCallback(() => {
+    const r = recRef.current;
+    recRef.current = null;
+    if (r) {
+      r.onend = r.onresult = r.onerror = null;
+      try {
+        r.abort();
+      } catch {
+        /* already stopped */
+      }
+    }
+  }, []);
+  /** Listen (continuous) while wanted, never while the page speaks. */
+  const earStart = useCallback(() => {
+    if (!earWanted.current || recRef.current) return;
+    if (pageSpeaking.current) return setEar("paused");
+    const Ctor = recognitionCtor();
+    if (!Ctor) {
+      earWanted.current = false;
+      return setEar("unsupported");
+    }
+    const r = new Ctor();
+    r.lang = "en-US";
+    r.continuous = true;
+    r.interimResults = false;
+    let failed = false;
+    r.onresult = (e) => {
+      earFailures.current = 0;
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const res = e.results[i];
+        const t = res.isFinal ? res[0]?.transcript.trim() : "";
+        if (t) heardRef.current(t);
+      }
+    };
+    r.onerror = (e) => {
+      if (isBlockedError(e.error)) {
+        earWanted.current = false;
+        setEar("blocked");
+      } else if (!isQuietError(e.error)) {
+        // Offline, no mic, a browser without the speech service: back off, then give up.
+        failed = true;
+        earFailures.current += 1;
+        if (earFailures.current >= MAX_EAR_FAILURES) {
+          earWanted.current = false;
+          setEar("failing");
+        }
+      }
+    };
+    r.onend = () => {
+      if (recRef.current !== r) return;
+      recRef.current = null;
+      if (earWanted.current && !pageSpeaking.current) setTimeout(() => earWanted.current && earStartRef.current(), failed ? 2000 : 300);
+    };
+    recRef.current = r;
+    try {
+      r.start();
+      setEar("on");
+    } catch {
+      recRef.current = null;
+    }
+  }, []);
+  useEffect(() => {
+    earStartRef.current = earStart;
+  }, [earStart]);
+  /** Stop listening for good (until the caller turns it on again). */
+  const earOff = useCallback(() => {
+    earWanted.current = false;
+    clearTimeout(heardTimer.current);
+    heardBuffer.current = "";
+    earStop();
+    setEar("off");
+  }, [earStop]);
+  const earToggle = useCallback(() => {
+    if (earWanted.current) return earOff();
+    earWanted.current = true;
+    earFailures.current = 0;
+    earStart();
+  }, [earOff, earStart]);
+  // The page's own voice must never be taken as the caller: stop listening while it speaks, plus a tail.
+  useEffect(() => {
+    let tail: ReturnType<typeof setTimeout> | undefined;
+    const onSpeaking = (on: boolean) => {
+      pageSpeaking.current = on;
+      clearTimeout(tail);
+      if (on) {
+        if (recRef.current) {
+          earStop();
+          setEar("paused");
+        }
+      } else if (earWanted.current) tail = setTimeout(() => !pageSpeaking.current && earStartRef.current(), EAR_TAIL_MS);
+    };
+    speakingListeners.add(onSpeaking);
+    return () => {
+      speakingListeners.delete(onSpeaking);
+      clearTimeout(tail);
+      earWanted.current = false;
+      earStop();
+    };
+  }, [earStop]);
 
   const later = useCallback((fn: () => void, ms: number) => {
     const t = setTimeout(() => {
@@ -218,7 +345,7 @@ export function Talk() {
       if (phaseRef.current !== "talk" || scriptFrom.current === null) return;
       if (nextTypedQuestion(turnsRef.current.slice(scriptFrom.current)) !== q) return; // asked already
       push("agent", q);
-      if (soundRef.current) say(q);
+      if (soundRef.current) say(q, questionPhrase(q));
     }, QUESTION_DELAY_MS);
   }, [later, push]);
 
@@ -258,7 +385,14 @@ export function Talk() {
     } catch (e) {
       const status = e instanceof ApiError ? e.status : 0;
       const code = e instanceof ApiError ? e.code : "network_error";
-      return fail(status === 503 ? "Voice isn't available right now, so let's type. Same questions, same estimate." : friendlyError(status, code));
+      if (status === 503 && !stale()) {
+        // D30: no Realtime voice. The browser listens, U-Tax speaks; typing works too.
+        startTyped(recognitionCtor() ? "U-Tax listens through your browser: speak your answers, or type them." : "This browser can't listen, so let's type. U-Tax still reads the questions aloud.");
+        earWanted.current = recognitionCtor() !== null;
+        if (earWanted.current) earStart();
+        return;
+      }
+      return fail(friendlyError(status, code));
     }
     if (stale()) return;
     if (!session) return fail("Voice isn't available right now, so let's type.");
@@ -358,7 +492,7 @@ export function Talk() {
       console.warn("[talk] voice connect failed", e);
       fail("Voice couldn't connect, so let's type. Same questions, same estimate.");
     }
-  }, [go, hangUp, later, push, setAll, startTyped]);
+  }, [earStart, go, hangUp, later, push, setAll, startTyped]);
 
   const sendLine = () => {
     const text = draft;
@@ -367,6 +501,26 @@ export function Talk() {
     push("customer", text);
     if (mode === "typed") askNext();
   };
+  // A phrase the browser heard is an answer, exactly like a typed one, but only while a scripted
+  // question waits for it: room speech, the projector or a neighbour never becomes a turn.
+  useEffect(() => {
+    const open = () => phaseRef.current === "talk" && mode === "typed" && !full && !mayHaveLanded && !pageSpeaking.current;
+    heardRef.current = (text) => {
+      if (!open() || !awaitingAnswer(turnsRef.current)) return;
+      heardBuffer.current = `${heardBuffer.current} ${text}`.trim();
+      clearTimeout(heardTimer.current);
+      heardTimer.current = setTimeout(() => {
+        const answer = heardBuffer.current;
+        heardBuffer.current = "";
+        if (!answer || !open() || !awaitingAnswer(turnsRef.current)) return;
+        push("customer", answer);
+        // The script is done (only the email is left) or the transcript is full: stop listening.
+        const next = scriptFrom.current === null ? null : nextTypedQuestion(turnsRef.current.slice(scriptFrom.current));
+        if (next === null || next === TYPED_SCRIPT_LAST) earOff();
+        askNext();
+      }, ANSWER_GAP_MS);
+    };
+  }, [askNext, earOff, full, mayHaveLanded, mode, push]);
 
   /** Send the conversation: the gateway opens a fast-path case and returns its id. */
   const submit = async () => {
@@ -379,6 +533,7 @@ export function Talk() {
     const wasVoice = mode === "voice";
     const lost = hangUp() > 0;
     hush();
+    earOff();
     if (wasVoice) {
       setMode("typed"); // the call is over either way; a failed send continues by typing
       scriptFrom.current = null; // ...without the scripted questions
@@ -472,12 +627,16 @@ export function Talk() {
     if (!progress || !line || line === spoken.current) return;
     if (progress.totalCents === null && !progress.notEligible && !progress.blocked && !progress.askedFor.length) return;
     spoken.current = line;
-    if (soundRef.current) say(line);
+    if (!soundRef.current) return;
+    const parts = progressSpeech(progress);
+    speaker().stop();
+    for (const part of parts) speaker().say(part.text, undefined, part.phrase);
   }, [progress, line]);
 
   const startOver = () => {
     hangUp();
     clearTimers();
+    earOff(); // back at consent: nothing listens until the caller agrees again
     hush();
     requestId.current = null;
     requestAfter.current = null;
@@ -537,7 +696,7 @@ export function Talk() {
               emails you a memo.
             </p>
             <ul className="terms">
-              <li>The chat is transcribed by U-Tax, with OpenAI&rsquo;s help, and parts may show on the screen here.</li>
+              <li>Your answers are transcribed by a speech service (your browser&rsquo;s, or OpenAI&rsquo;s when a live voice line is available), U-Tax answers in an AI voice (ElevenLabs, or your browser&rsquo;s), and parts may show on the screen here.</li>
               <li>It&rsquo;s an educational estimate, not tax advice.</li>
               <li>Don&rsquo;t say names, emails or phone numbers. The email goes in a box, not out loud.</li>
             </ul>
@@ -598,7 +757,35 @@ export function Talk() {
               <button className="secondary" type="submit" disabled={!draft.trim() || full || phase === "sending" || mayHaveLanded}>
                 Answer
               </button>
+              {mode === "typed" && ear !== "unsupported" && (
+                <button
+                  type="button"
+                  className={`secondary ear${ear === "on" || ear === "paused" ? " on" : ""}`}
+                  aria-pressed={ear === "on" || ear === "paused"}
+                  onClick={earToggle}
+                  disabled={full || phase === "sending" || mayHaveLanded || ear === "blocked" || ear === "failing"}
+                >
+                  Speak answers
+                </button>
+              )}
             </form>
+            {mode === "typed" && (ear === "on" || ear === "paused") && (
+              <p className="hint" aria-hidden="true">
+                {ear === "on" ? "Listening. Answer out loud, or tap Speak answers to stop." : "U-Tax is speaking. Listening resumes after."}
+              </p>
+            )}
+            {mode === "typed" && (ear === "blocked" || ear === "unsupported" || ear === "failing") && (
+              <p className="hint" role="status">
+                {ear === "blocked"
+                  ? "The microphone is blocked for this page, so type your answers."
+                  : ear === "failing"
+                    ? "Listening isn't working on this network or device. Type your answers."
+                    : "This browser can't listen. Type your answers."}
+              </p>
+            )}
+            <p className="sr-only" role="status" aria-live="polite">
+              {ear === "on" ? "Listening" : ear === "paused" ? "Paused while U-Tax speaks" : ""}
+            </p>
             {full && <p className="hint">That&rsquo;s all the detail U-Tax needs. Add your email and send.</p>}
 
             <form
@@ -613,6 +800,7 @@ export function Talk() {
                 <input
                   id="email"
                   type="email"
+                  onFocus={earOff}
                   inputMode="email"
                   autoComplete="email"
                   value={email}

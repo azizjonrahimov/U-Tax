@@ -137,6 +137,22 @@ describe("review pass: rail and screen hardening", () => {
     expect(skipped).toEqual([]); // the proposal events are known: no console noise, no steps
   });
 
+  it("v1.9: naive.confirm draws a rail line (the firm vetting its own tools, no click) and counts them", () => {
+    const skipped: string[] = [];
+    const evs = [
+      ev(1, "naive.confirm", { session_id: "s1", agent: "cos", tool: "board_write", decision: "allow", read_people: false }),
+      ev(2, "naive.confirm", { session_id: "s2", agent: "mkt", tool: "utax.post_social", decision: "allow", read_people: false }),
+      ev(3, "naive.confirm", { session_id: "s3", agent: "agt_unknown", tool: "web_fetch<script>", decision: "deny", read_people: true }),
+      ev(4, "naive.confirm", { session_id: "s4", agent: "cos", tool: "x", decision: "maybe" }), // malformed: skipped, never drawn
+    ];
+    const s = applySteps(emptyScreen(), buildScript(evs, { ...quiet, log: (k) => skipped.push(`${k.eventId}:${k.reason}`) }).steps);
+    expect(s.rail.naive).toEqual({ text: "Naïve check: web_fetchscript denied for an agent", allowed: false, allowedCount: 2, deniedCount: 1 });
+    expect(skipped).toEqual(["4:bad_payload"]);
+    const first = applySteps(emptyScreen(), buildScript(evs.slice(0, 1), quiet).steps);
+    expect(first.rail.naive?.text).toBe("Naïve check: board_write allowed for Chief of Staff");
+    expect(first.rail.log).toEqual([]); // not a human touch: it never moves the touches count
+  });
+
   it("a repeated approval request replaces its row instead of duplicating it", () => {
     const req = (id: number) => ev(id, "approval.requested", { approval_id: "apr_1", action_type: "email", summary: `v${id}` });
     expect(fold([req(1), req(2)]).rail.pending).toEqual([{ approvalId: "apr_1", text: "email approval" }]);

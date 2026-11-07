@@ -59,6 +59,9 @@
 .talk input::placeholder { color: #7d7c95; }
 .talk input:disabled { opacity: .6; }
 .talk .line, .talk .row { display: flex; gap: 10px; }
+.talk .line .ear { white-space: nowrap; }
+.talk .line .ear.on { border-color: var(--green); color: var(--green); }
+@media (max-width: 640px) { .talk .line { flex-wrap: wrap; } .talk .line .ear { flex: 1 1 100%; } }
 .talk .send { display: flex; flex-direction: column; gap: 8px; padding-top: 18px; border-top: 1px solid var(--line); }
 .talk .send label { font-size: 18px; font-weight: 700; }
 .talk .hint { margin: 0; color: var(--dim); font-size: 16px; }

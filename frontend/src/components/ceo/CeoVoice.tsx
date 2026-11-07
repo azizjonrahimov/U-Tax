@@ -25,6 +25,7 @@ import {
   CEO_TOOLS,
   clearProposal,
   decideTyped,
+  ECHO_TAIL_MS,
   describeRead,
   emptyVoice,
   functionOutputItem,
@@ -45,6 +46,8 @@ import {
   type VoiceState,
 } from "@/ceo/voice";
 import { MicIcon } from "@/components/MicIcon";
+import { Speaker } from "@/lib/tts";
+import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition } from "@/lib/recognition";
 import { API, authJson } from "./gateway";
 
 const MINT_MS = 8000;
@@ -55,10 +58,7 @@ const DISCONNECT_GRACE_MS = 4000;
 const HOLD_MS = 350;
 const MAX_LINES = 6;
 /** The browser's ear reopens this long after its own voice stops (the room's echo dies down). */
-const EAR_REOPEN_MS = 600;
-/** A spoken line that hasn't ended after ~this per word (plus 2 s, at most 30 s) is treated as stalled. */
-const SPEECH_MS_PER_WORD = 450;
-const SPEECH_MAX_MS = 30000;
+const EAR_REOPEN_MS = ECHO_TAIL_MS; // the contract's tail after TTS audio (v1.10 §5c)
 /** After STOP, function calls from the response it cut off may still arrive: they are fenced this long. */
 const STOP_FENCE_MS = 2000;
 /** While a confirm lands (and this long after), a model start call is answered locally: no duplicate proposal. */
@@ -92,26 +92,7 @@ export const announceAgentAudio = (source: string, on: boolean) => {
   if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent(AGENT_AUDIO_EVENT, { detail: { source, on } }));
 };
 
-// Browser speech recognition (Chrome ships it prefixed); feature-detected, typed minimally.
-interface Recognition {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
-  onend: (() => void) | null;
-  onerror: ((e: { error: string }) => void) | null;
-  start(): void;
-  stop(): void;
-  abort(): void;
-}
-type RecognitionCtor = new () => Recognition;
-const recognitionCtor = (): RecognitionCtor | null => {
-  if (typeof window === "undefined") return null;
-  const w = window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor };
-  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
-};
 
-const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
 
 interface Call {
   pc: RTCPeerConnection;
@@ -210,8 +191,6 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const stoppedAt = useRef(0);
   /** When a confirm was last sent (ms), and while one is in flight. */
   const confirmingAt = useRef(0);
-  /** Words queued for the browser's voice: each line's stall limit counts everything ahead of it. */
-  const queuedWords = useRef(0);
   /** Agent audio from elsewhere on the console (the brief) playing now. */
   const otherAudio = useRef(0);
   /** Cards whose confirm got no answer (it may have run): their expiry never says "nothing was done". */
@@ -287,18 +266,33 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const spokenRef = useRef<(text: string) => void>(() => {});
   const speakRef = useRef<(text: string, onDone?: (played: boolean) => void) => void>(() => {});
 
+  /** The firm's voice (v1.10 §5c): POST /api/tts (ElevenLabs), the browser's voice on a 503. */
+  const speakerRef = useRef<Speaker | null>(null);
+  const tokenRef = useRef(token);
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+  const speaker = useCallback(() => {
+    speakerRef.current ??= new Speaker({ purpose: "ceo", api: API, token: () => tokenRef.current });
+    return speakerRef.current;
+  }, []);
+
   /**
-   * Read a line aloud, queued. While the browser speaks, its own ear is closed and the Realtime
-   * mic is muted (the OS voice bypasses echo cancellation), and the time counts as agent audio.
-   * `onDone` runs when this line has been spoken (or at once when nothing can speak).
+   * Read a line aloud, queued. While anything plays, the browser's own ear is closed and the
+   * Realtime mic is muted (played audio bypasses echo cancellation), and the time counts as agent
+   * audio; listening comes back after the echo tail. `onDone(played)` runs when the line was heard
+   * to the end (false when it was cut off, stopped or stalled).
    */
   const speak = useCallback(
     (text: string, onDone?: (played: boolean) => void) => {
-      if (!hasSpeech() || !text) {
-        onDone?.(true); // nothing can speak: the card on screen is all there is
+      if (!text.trim()) {
+        onDone?.(true);
         return;
       }
-      const u = new SpeechSynthesisUtterance(text);
+      if (!alive.current) {
+        onDone?.(false); // the console is gone: nothing more is said
+        return;
+      }
       if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", true, Date.now());
       speaking.current += 1;
       applyMic();
@@ -307,40 +301,24 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         micRef.current = false; // push-to-talk ended with the answer: the label must not say "Listening"
         setMicOn(false);
       }
-      const words = text.split(/\s+/).length;
-      queuedWords.current += words;
-      let ended = false;
-      const done = (played: boolean) => {
-        if (ended) return;
-        ended = true;
-        queuedWords.current = Math.max(0, queuedWords.current - words);
+      speaker().say(text, (played) => {
         speaking.current = Math.max(0, speaking.current - 1);
         if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", false, Date.now());
         applyMic();
         onDone?.(played);
         if (speaking.current === 0 && alive.current && linkRef.current === "fallback" && handsRef.current) {
           setTimeout(() => {
-            if (alive.current && speaking.current === 0 && handsRef.current) listenRef.current();
+            if (alive.current && speaking.current === 0 && otherAudio.current === 0 && handsRef.current) listenRef.current();
           }, EAR_REOPEN_MS);
         }
-      };
-      u.onend = () => done(true);
-      u.onerror = () => done(false); // cut off (cancelled, interrupted): not heard
-      // Browser speech can stall without ever ending (seen headless; Chrome does it too). Past a
-      // generous limit that counts every word queued ahead of this line, silence it (so no echo
-      // follows) and carry on; a stalled line counts as not heard.
-      const limit = Math.min(SPEECH_MAX_MS * 4, 2000 + queuedWords.current * SPEECH_MS_PER_WORD);
-      setTimeout(() => {
-        if (ended) return;
-        if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
-        done(false);
-      }, limit);
-      window.speechSynthesis.speak(u);
+      });
     },
-    [applyMic, stopListening],
+    [applyMic, speaker, stopListening],
   );
   const hush = useCallback(() => {
-    if (hasSpeech()) window.speechSynthesis.cancel(); // fires each utterance's onerror → done
+    speakerRef.current?.stop(); // every queued line ends as not heard
+    // ...and the brief, when the browser reads it (Ceo.tsx): STOP silences every voice on the console.
+    if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
   }, []);
 
   /** The browser can't listen (no recognition, mic blocked, or it keeps failing): hands-free still reads alerts. */
@@ -371,12 +349,12 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     };
     let failed = false;
     r.onerror = (e) => {
-      if (e.error === "not-allowed" || e.error === "service-not-allowed") {
+      if (isBlockedError(e.error)) {
         goDeaf("The microphone is blocked for this page. Type commands below; hands-free still reads alerts aloud.");
-      } else if (e.error !== "no-speech" && e.error !== "aborted") {
+      } else if (!isQuietError(e.error)) {
         failed = true;
         earErrors.current += 1;
-        if (earErrors.current >= 3) goDeaf("The browser's speech recognition keeps failing. Type commands below; hands-free still reads alerts aloud.");
+        if (earErrors.current >= MAX_EAR_FAILURES) goDeaf("The browser's speech recognition keeps failing. Type commands below; hands-free still reads alerts aloud.");
       }
     };
     r.onend = () => {
@@ -1113,7 +1091,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       alive.current = false;
       hangUp();
       stopListening();
-      if (hasSpeech()) window.speechSynthesis.cancel();
+      speakerRef.current?.stop();
     };
   }, [hangUp, stopListening]);
 

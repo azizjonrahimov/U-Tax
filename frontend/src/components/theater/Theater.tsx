@@ -68,6 +68,7 @@ const RAIL_FALLBACK: Record<string, string> = {
   "rail.brief": "rail.touches",
   "rail.notify": "rail.touches",
   "rail.crm": "rail.cases",
+  "rail.naive": "rail.touches",
 };
 
 /** A target the cursor can actually reach: rendered and visible (stage mode hides the rail cards). */
