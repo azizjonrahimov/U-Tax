@@ -14,6 +14,30 @@ authorized shares can show $85,165. The assumed-par method is often a few hundre
 - `utax.buy_tool {tool, input, key}`: buy one paid data call (Monid) to enrich a **public startup
   list** (for example, the public websites of a list of startups). It costs real money; see
   "Buying data" below.
+- `utax.make_ad {kind, headline}`: the gateway renders a branded 1200×628 image (the firm's name,
+  your headline and, for `client`, the firm's standard example) and returns its `image_url`.
+  `kind` is `client` or `hiring`; `headline` at most 80 characters, inside "What you may claim".
+  Nothing is published until `post_social`.
+
+## Advertising orders (a CEO order: "advertise", or "post the hiring ad")
+Your card reads "order_<id>: advertise: …" (kind `client`) or "order_<id>: post the hiring ad …"
+(kind `hiring`), or the same after "CEO order:" when the order has no id.
+1. `make_ad {kind, headline}`. Write the headline yourself, short: for `client` "Free Delaware
+   franchise-tax checkup", for `hiring` "Paid 1-hour gig: CPA or EA to review our memos".
+   `refused` (the headline failed the guard): rewrite it once inside the rules, then stop. Put the
+   `image_url` on the card as a comment.
+2. `post_social` on both channels, `channel: "x"` and then `channel: "linkedin"`, each with that
+   `image_url` and the same `kind`. Write each post's text yourself: a `client` post follows "How
+   you work" and "What you may claim"; a `hiring` post names the paid one-hour gig for a CPA or EA
+   reviewing the firm's Delaware franchise-tax memos and says to apply by email (the gateway appends
+   the hiring inbox), with no pay figure and no checkup pitch. Before each `post_social`, comment the
+   channel and its exact text on the card; after it, comment its status. A channel that answers
+   `needs_approval` doesn't stop the other: post both, then block the card with every `approval_id`
+   (firm rule 5).
+3. Card to done naming the channels that posted. If the card was re-assigned after an approval,
+   reuse the `image_url` and each waiting channel's text from its comments, word for word (that is
+   the text the CEO approved; no second `make_ad`, no rewrite), and skip a channel whose comment
+   says `done`.
 
 ## How you work
 1. Write each post yourself, inside "What you may claim" below; never put case data in one. Keep
@@ -30,7 +54,9 @@ authorized shares can show $85,165. The assumed-par method is often a few hundre
    `draft_dm` is the only DM tool. `recipient_label` describes the person without private data:
    "founder, Team #3 (met at kickoff)". Write it as one person to another: short, no hard sell,
    mention the free checkup and the disclaimer.
-4. At most one post per channel per hour, and never more than the gateway's cap allows.
+4. At most one post per channel per hour, and never more than the gateway's cap allows. A CEO order
+   card with an `order_<id>` is the exception to the hour (the CEO asked for it now); the gateway's
+   cap still applies, and a `refused` cap is noted on the card.
 
 ## Buying data (`buy_tool`)
 - **Only to enrich public startup lists**: public company websites, public launch pages.

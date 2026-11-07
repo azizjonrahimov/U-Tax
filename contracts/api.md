@@ -415,6 +415,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `make_ad` | mkt | `{kind: "client"\|"hiring", headline}` (headline ≤ 80 chars, passes the `post_social` content guard) | The gateway renders a branded 1200×628 PNG: firm name, headline, and for `client` the real example "$85,165 → $450". It's served at `<public-host>/assets/ad_<n>.png` (the gateway's own host is always in `PUBLIC_ASSET_HOSTS`). Returns `{image_url}`; event `ad.created`. No trust gate (nothing leaves the firm until `post_social`). |
 | `source_candidates` | hr | `{count}` (1–5) | ToolBuyPort (Monid) public search for the gig's role. Returns masked public leads `{lead_id, label, headline, public_url}`, never an email or phone; event `hr.sourced`. With Monid off it returns `[]` and says so. |
 | `hr_outreach` | hr | `{candidate_id, slot}` | Emails one candidate whose address the firm already holds with consent: an applicant from the hiring inbox, or an entry in `HR_CANDIDATES` (the CEO's own list: `name <email>`, comma-separated). The email carries the gig details (template `hr-outreach`) plus a calendar invite for `slot`, which must be one of `get_candidate.offered_slots`. Trust type `email`; event `hr.outreach` + `call.booked` (kind `candidate`). A lead from `source_candidates` has no address and is refused (`no_consented_address`). |
+| `list_candidates` | hr | `{}` | v1.11.2: masked rows `{candidate_id, label, stage, has_address, contacted, offered_slots}`, covering the applicants and the `HR_CANDIDATES` entries (stable ids). No name, email or phone. `has_address` is true only for a consented address. `offered_slots` is per row. |
 | `follow_up` | intake | `{case_id, kind: "memo_check"\|"missing_facts"\|"call_reminder"}` | A templated follow-up (template `follow-up-<kind>`) in the client's own thread. Trust type `email`; event `client.followed_up`. At most 1 a day per case. |
 
 `get_candidate` adds `offered_slots`, and `/api/state` hiring counts `sourced` and `contacted`.
@@ -615,6 +616,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.11.2 (2026-11-07, D31 agents + backend): `list_candidates` (hr); refusal codes slot_bound, no_public_url, too_soon, no_consented_address; every MCP schema offers order_id.
 
 - v1.11.1 (2026-11-07, frontend D31 proposal): payloads for ad.created, hr.sourced, hr.outreach, client.followed_up; call.booked kind; order_id linking (wake `CEO order_<id>: <text>`).
 
