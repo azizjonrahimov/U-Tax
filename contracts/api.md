@@ -159,7 +159,12 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/voice` `{text, channel: "voice"|"typed", speaker: "customer"|"ceo", reply_email}` →
   writes `voice.command`. `speaker: "customer"` (the `/talk` page, design D23): opens a
   **fast-path case** from the transcript (priority, no queue), memo goes to `reply_email`;
-  returns `{case_id}` so the page can follow it. `speaker: "ceo"`: an optional typed order
+  returns `{case_id}` so the page can follow it.
+  Refusals: `429 rate_limited` (per-IP or global window; retry later), `429 at_capacity`
+  (`PUBLIC_CASES_PER_DAY` reached, default 50, or 200 with `PUBLIC_MODE=event`; the message names
+  the clients inbox to email instead; the page must show that message, not a generic retry),
+  `413 too_large` (body over 1 MB), `400 too_long` (customer text over 4000 chars). A retried
+  `request_id` returns the same case and never counts against the cap. `speaker: "ceo"`: an optional typed order
   from `/ceo`, forwarded to the Chief of Staff once Naïve is wired (stand-in: log only).
 - `POST /api/trust` `{action_type, state: "PAUSED"|"AUTO"}` (admin) → the CEO's standing
   order as gateway state ("stop posting" = `social_post` PAUSED); writes `trust.changed`
@@ -374,6 +379,9 @@ falls back to a built-in template if the file is missing.
   `speaker: "ceo"`, `channel: "typed"`).
 
 ## Changelog
+
+- v1.7.6 (2026-11-07, backend task 13): `/api/voice` refusals `429 at_capacity`, `413 too_large`,
+  `400 too_long`; public daily case cap; voice spend booked as estimates with a hold.
 
 - v1.7.5 (2026-11-07, frontend /talk): the voice session is minted with input transcription
   (`OPENAI_TRANSCRIBE_MODEL`, default whisper-1); the mint response carries `realtime_url`.

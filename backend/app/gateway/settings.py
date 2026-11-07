@@ -37,6 +37,8 @@ class Settings:
     theater_origin: str = ""
     openai_api_key: str = ""
     cap_per_hour: int = 10
+    # task 13: /talk cases a UTC day before "at capacity"; None = 50, or 200 in event mode
+    public_cases_per_day: int | None = None
     spend_cap_usd: Decimal | None = None
     max_asks: int = 2
     ceo_email: str = ""
@@ -104,6 +106,8 @@ class Settings:
             theater_origin=_env("THEATER_ORIGIN"),
             openai_api_key=_env("OPENAI_API_KEY"),
             cap_per_hour=int(_env("CAP_PER_HOUR") or 10),
+            public_cases_per_day=(int(_env("PUBLIC_CASES_PER_DAY"))
+                                  if _env("PUBLIC_CASES_PER_DAY") else None),
             spend_cap_usd=Decimal(spend_cap) if spend_cap else None,
             ceo_email=_env("CEO_EMAIL"),
             ceo_digest_hours=int(_env("CEO_DIGEST_HOURS") or 3),

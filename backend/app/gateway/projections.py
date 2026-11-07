@@ -151,6 +151,8 @@ class State:
                                                              "engineering": 0})
     touch_log: list[dict] = field(default_factory=list)
     spent_by_provider: dict[str, Decimal] = field(default_factory=dict)
+    public_cases_by_day: dict[str, int] = field(default_factory=dict)  # task 13: UTC date -> n
+    voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
                                                            "shortlisted": 0, "hired": 0,
@@ -225,6 +227,9 @@ class State:
             provider = e.provider or "unknown"
             self.spent_by_provider[provider] = (self.spent_by_provider.get(provider, Decimal(0))
                                                 + Decimal(e.cost_usd))
+            if str(e.payload.get("model", "")).startswith("realtime:"):  # Gateway.settle_voice
+                day = e.ts[:10]
+                self.voice_mints_by_day[day] = self.voice_mints_by_day.get(day, 0) + 1
         for action_type, types in CAP_EVENTS.items():
             if e.type in types and e.status == "ok":
                 # sends for anonymous /talk cases have their own bucket (never pause the firm)
@@ -242,6 +247,9 @@ class State:
 
     def _on_voice_command(self, e: Event) -> None:
         if e.payload.get("speaker") == "customer" and e.case_id:
+            if e.case_id not in self.cases:  # a new public /talk case (task 13 daily cap)
+                day = e.ts[:10]
+                self.public_cases_by_day[day] = self.public_cases_by_day.get(day, 0) + 1
             self._open_case(e, text=e.payload["text"], subject="Voice case", priority=True)
 
     def _open_case(self, e: Event, *, text: str, subject: str, priority: bool = False) -> None:

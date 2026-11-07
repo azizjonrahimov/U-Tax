@@ -21,7 +21,9 @@ _KEYWORD_ID = re.compile(
     r"(?i)\b(ssn|social security(?: number| no\.?)?|ein|tax id|tin|employer identification"
     r"(?: number)?|itin)\b([^\d\n]{0,20})(\d{9})(?!\d)"
 )
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+# task 13: the lookbehind starts a match only where a run of address characters starts
+# (the same matches), so text with no "@" is scanned once, not once per character
+_EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _FREE_MAIL = {"gmail", "googlemail", "outlook", "hotmail", "yahoo", "icloud", "proton",
               "protonmail", "aol", "live", "me", "mail", "gmx", "fastmail"}
 
@@ -185,6 +187,29 @@ def mail_identity(address: str) -> str:
     return f"{local}@{domain}"
 
 
+_EMAIL_AT = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")  # anchored use
+
+
+def _email_sub(repl, text: str) -> str:
+    """`_EMAIL.sub` that also catches an address glued onto the one before it
+    ("a@x.com+b@y.org"), which the lookbehind alone skips; each anchored retry starts at a
+    match's end, so the scan stays linear."""
+    out, last = [], 0
+    for m in _EMAIL.finditer(text):
+        if m.start() < last:
+            continue
+        spans, end = [m], m.end()
+        while (glued := _EMAIL_AT.match(text, end)) is not None:
+            spans.append(glued)
+            end = glued.end()
+        for span in spans:
+            out.append(text[last:span.start()])
+            out.append(repl if isinstance(repl, str) else repl(span))
+            last = span.end()
+    out.append(text[last:])
+    return "".join(out)
+
+
 def has_email(text: str) -> bool:
     return bool(_EMAIL.search(text))
 
@@ -196,7 +221,7 @@ def has_phone(text: str) -> bool:
 def strip_contacts(text: str) -> str:
     """Remove email addresses and phone numbers entirely (HR: no contact details reach agents)."""
     text, _ = redact_ids(text)
-    text = _EMAIL.sub("[email removed]", text)
+    text = _email_sub("[email removed]", text)
     return _PHONE.sub("[phone removed]", text)
 
 
@@ -208,7 +233,7 @@ def mask_text(text: str, *, masked_name: str, company: str | None,
     with a suffix ("Acme Robotics Inc") and the sender's own name words are replaced too.
     """
     text, _ = redact_ids(text)
-    text = _EMAIL.sub(lambda m: mask_email(m.group(0)), text)
+    text = _email_sub(lambda m: mask_email(m.group(0)), text)
     text = _PHONE.sub("[phone hidden]", text)
     replacement = masked_name or "[company]"
     # "a Delaware C Corp", "our Delaware Corporation" describe the entity type, not a
