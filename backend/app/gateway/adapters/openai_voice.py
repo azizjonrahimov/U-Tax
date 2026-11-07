@@ -69,10 +69,12 @@ class OpenAIVoice:
 
     MAX_OUTPUT_TOKENS = 600  # per response: a short intake turn, not an open assistant
 
-    def create_session(self, instructions: str = "") -> VoiceSession:
-        # Contract §6d: instructions and (no) tools are fixed here, server-side, so the
-        # browser's short-lived secret is only good for this intake conversation.
-        body = {"model": self.realtime_model, "instructions": instructions, "tools": [],
+    def create_session(self, instructions: str = "", tools: list[dict] | None = None) -> VoiceSession:
+        # Contract §6d: instructions and tools are fixed here, server-side, so the browser's
+        # short-lived secret is only good for this conversation (no tools for /talk; the
+        # CEO tool registry for the CEO console, v1.8 §5b).
+        body = {"model": self.realtime_model, "instructions": instructions,
+                "tools": list(tools or []), **({"tool_choice": "auto"} if tools else {}),
                 "max_response_output_tokens": self.MAX_OUTPUT_TOKENS,
                 "input_audio_transcription": {"model": self.transcribe_model}}
         try:

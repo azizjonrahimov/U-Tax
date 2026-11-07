@@ -18,7 +18,7 @@ PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "hubspot", "
 STATUSES = {"ok", "failed", "skipped"}
 
 _HR = ("candidate_id", "name_masked", "note")
-_TOUCH = ("note", "approval_id")
+_TOUCH = ("note", "approval_id", "channel")  # channel v1.8: absent on older events = click
 _CRM = ("object", "stage")
 _DM = ("recipient_label", "text")
 _QA = ("checks",)
@@ -65,12 +65,18 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "tool.bought": ("tool", "provider"),
     "brief.generated": ("text", "counts"),
     "case.flagged": ("kind",),
+    # v1.8 §5b: the CEO voice console's proposals
+    "ceo.proposed": ("proposal_id", "tool", "args", "readback", "expires_at", "source"),
+    "ceo.confirmed": ("proposal_id", "via", "heard"),
+    "ceo.cancelled": ("proposal_id", "via", "heard", "reason"),
 }
 
 FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",
              "gross_assets_cents", "foreign_owner_25")
 # keys a payload may leave out: v1.6.4 masked_name is set on customer voice.command only
-OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"})}
+OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"}),
+                         **{t: frozenset({"channel"})
+                            for t in ("touch.training", "touch.operating", "touch.engineering")}}
 OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only
 
 

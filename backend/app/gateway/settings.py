@@ -26,6 +26,7 @@ class Settings:
     memo_template_path: Path = REPO_ROOT / "naive" / "templates" / "memo.md"
     templates_dir: Path = REPO_ROOT / "naive" / "templates"  # contract §6d
     voice_prompt_path: Path = REPO_ROOT / "naive" / "prompts" / "voice-intake.md"
+    ceo_voice_prompt_path: Path = REPO_ROOT / "naive" / "prompts" / "ceo-voice.md"  # v1.8
     ceo_console_url: str = "http://localhost:3200/ceo"
     public_mode: str = ""  # "event": the finale crowd shares one venue IP (Send 90/min, mint 60/min)
     store: str = "jsonl"
@@ -95,6 +96,8 @@ class Settings:
             templates_dir=Path(_env("UTAX_TEMPLATES_DIR") or REPO_ROOT / "naive" / "templates"),
             voice_prompt_path=Path(_env("UTAX_VOICE_PROMPT")
                                    or REPO_ROOT / "naive" / "prompts" / "voice-intake.md"),
+            ceo_voice_prompt_path=Path(_env("UTAX_CEO_VOICE_PROMPT")
+                                       or REPO_ROOT / "naive" / "prompts" / "ceo-voice.md"),
             ceo_console_url=_env("CEO_CONSOLE_URL") or "http://localhost:3200/ceo",
             public_mode=_env("PUBLIC_MODE").lower(),
             store=(_env("STORE") or "jsonl").lower(),

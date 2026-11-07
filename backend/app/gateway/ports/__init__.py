@@ -213,9 +213,10 @@ class VoiceSession:
 class VoicePort(Protocol):
     provider: str
 
-    def create_session(self, instructions: str) -> VoiceSession:
-        """Ephemeral realtime session for /talk, with the instructions (and no tools) set
-        server-side when minting. NotConfigured without a key."""
+    def create_session(self, instructions: str, tools: list[dict] | None = None) -> VoiceSession:
+        """Ephemeral realtime session with the instructions and tools set server-side when
+        minting (none for /talk; the CEO tool registry for the CEO console, v1.8).
+        NotConfigured without a key."""
 
     def speak(self, text: str) -> bytes:
         """TTS audio (audio/mpeg) for the morning brief. NotConfigured without a key."""
