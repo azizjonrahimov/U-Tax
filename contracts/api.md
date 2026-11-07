@@ -186,8 +186,21 @@ For Replay mode and catch-up. Ordered by `id`.
 - A cap hit (10/hr per action type or `SPEND_CAP_USD`) flips that type to PAUSED, writes
   `trust.changed`, and mails the CEO; further calls get `refused` with code `paused` until
   `POST /api/trust {state: "AUTO"}` (design: PAUSED → human operating touch → AUTO).
-- `POST /api/dev/resolve-purchase` `{key, charged: true|false, cost_usd}` (admin) → clears an
-  "unsure" Monid purchase as not charged, or books it as charged (`cost.booked`).
+- `POST /api/dev/resolve-purchase` `{key, charged: true|false, cost_usd, over_ceiling?}` (admin) → clears an
+  "unsure" Monid purchase as not charged, or books it as charged (`cost.booked`). v1.8.2 (task 17):
+  - `key` is the agent's key exactly, in the agent key charset, else 400. A not_found
+    for a `buy:`-prefixed key carries a hint.
+  - `charged` is required (400).
+  - A cost above the tool's `max_usd` needs `over_ceiling: true`.
+  - A cost over $1000, or a charged cost that rounds to $0.0000, is 400.
+  - 409 `wrong_status` while the buy is in flight, when that episode is already
+    resolved, or while the process still holds the purchase (the agent's retry books it).
+  - Unsure and resolved records are per episode: idempotency keys carry `#n` after the
+    first episode, and private gains `intent_ts` and `provider`.
+  - Records found unsure at boot have actor `system`.
+  - `buy_tool`: a store outage before paying is `error` `store_unavailable`. A purchase
+    that may already be charged is refused until the CEO resolves it.
+  - Known gaps (task 17b): `ADAPTER_TOOLBUY` stays `local` until 17b merges.
 - `POST /api/candidates/{candidate_id}/decision` `{decision: "hire"|"decline"}` (admin) →
   `hr.hired` / `hr.declined` with actor `ceo`, a `touch.operating`, and the `hr-hired` /
   `hr-declined` mail to the candidate (trust type `email`). `/ceo` lists **every screened
@@ -468,6 +481,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.8.2 (2026-11-07, backend task 17): resolve-purchase is per episode, with stricter args and 409s; buy_tool store_unavailable; Monid held local until 17b.
 
 - v1.8.1 (2026-11-07, agents task 5 review): `/ceo` echo guard for voice confirms; the action result goes back to the model as a system item.
 
