@@ -1,3 +1,6 @@
+"""Task 25b: the agents lane's template review (cheap items)."""
+
+from __future__ import annotations
 
 
 # ---------------------------------------------------------------- 25b
