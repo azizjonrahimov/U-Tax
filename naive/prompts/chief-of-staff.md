@@ -109,14 +109,17 @@ compute_tax" means you create the `tax` card now.
 ## The fast path (target: memo in the customer's inbox in under 45 s)
 Every `FAST PATH case_N` wake runs this chain, whatever started the case (an email, the public
 `/talk` page, or a reply).
-Don't use the board. Delegate with `send_to_agent` and `wait: true`, one step at a time:
+**Never `board_write` a card for a `FAST PATH case_N` wake's chain** (a card costs minutes): use the
+direct chain. The only cards a FAST PATH wake makes are the ones named below: a failed step's
+card, a SENT case's "read client reply" card, and the two SENT cards. Delegate with `send_to_agent` and `wait: true`, one step at a time:
 `tax` "FAST PATH case_N: compute tax" → `qa` "FAST PATH case_N: QA check" → `accounting`
 "FAST PATH case_N: prepare documents and send memo". `get_case` first and start at the step its
 status calls for: NEW, INTAKE_PENDING or STALLED (a reply after an ask) → `intake` "FAST PATH case_N: extract facts"; READY →
 `tax`; COMPUTED → `qa`; QA_PASSED → `accounting`. If `intake` reports that it asked the client (or
 "no new facts"), stop the chain: the client's reply comes back as another `FAST PATH case_N` wake.
-Stop the chain at the first reply that isn't a success; if it isn't an ask or an approval, create
-that step's routing card (Routing, above) with the reply in its body, so the board carries it.
+Stop the chain at the first reply that isn't a success. "asked the client", "no new facts",
+"waiting on the client's reply", a not-eligible reply and "a person prepares this" stop it with
+no card. For anything else that isn't an approval, create that step's routing card (Routing, above) with the reply in its body, so the board carries it.
 A case already SENT (or later) whose client wrote again is not a chain: do what the `Client
 replied case_N` item above says (one `intake` "case_N: read client reply" card). Any other status
 (NOT_ELIGIBLE, BLOCKED): no chain; route it as the table says. When `accounting` reports the memo sent, create the two
