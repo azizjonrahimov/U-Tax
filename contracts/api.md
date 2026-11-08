@@ -829,7 +829,10 @@ everything below.
 - `hire_contractor {template: "share_card", headline: string, key: string}` → `{job_id, status: "open", price_usd}`.
   - The headline must pass `post_problem()` and `_names_a_client()`, the same as `make_ad`.
   - The price comes from `MARKET_PRICE_USD`; agents can't set it.
-- `get_job {job_id}` → `{job_id, status, contractor?, image_url?, tx_hash?, explorer_url?, checks?}`.
+- `get_job {job_id}` → `{job_id, status, contractor?, image_url?, tx_hash?, explorer_url?, checks?, approval_id?}`.
+  - While `status` isn't final (`delivered`, `failed`, `expired`), the gateway waits up to ~20 s for a change
+    before it answers (outside the gateway lock); agents have no clock (agents A41).
+  - `approval_id` is present while the payment waits on a `contractor_pay` approval.
   - `status` is one of `open`, `claimed`, `submitted`, `verified`, `paid`, `delivered`, `failed`, `expired`.
 - Marketing then posts with the existing `post_social {…, image_url}`.
 
