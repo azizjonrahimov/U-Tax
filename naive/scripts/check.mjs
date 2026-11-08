@@ -508,6 +508,10 @@ MUST_KEEP["chief-of-staff.md"].push("A case already SENT (or later) whose client
   if (svc.length < 2 || facts.length < 4) fail(`contracts/api.md §11: could not read the services (${svc}) or the new facts (${facts})`);
   for (const t of [...svc, ...facts]) if (!intake.includes(`\`${t}\``)) fail(`prompts/intake.md: never names the §11 ${svc.includes(t) ? "service" : "fact"} \`${t}\``);
 }
+// A44 (rehearsal case_2): a real email with no numbers must get an ask, and FAST PATH never goes through the board
+MUST_KEEP["intake.md"].push("**A client email always gets an answer.**", "and `asks_so_far` is 0, call `ask_client` for the missing facts **now**",
+  "Never treat a case with a client email as a website sign-up", "\"Waiting on the client\" is allowed **only** after an ask went out (`asks_so_far` > 0) or a not-eligible reply");
+MUST_KEEP["chief-of-staff.md"].push("**Never `board_write` a card for a `FAST PATH case_N` wake's chain** (a card costs minutes): use the direct chain");
 // D38: the order the CEO assistant sends is one the Chief of Staff's share card row lists
 const SHARE_ORDER = "get an outside agent to make a share card";
 for (const file of ["chief-of-staff.md", "ceo-assistant.md", "ceo-voice.md"])

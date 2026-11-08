@@ -51,8 +51,14 @@ the facts the chosen `services` need.
 reply is "case_N: asked the client", so the chain stops. When you would block a card (for example
 "a person prepares this"), there is no card: your reply is that line.
 
-**A website sign-up with no reply yet** (`get_case` shows only the sign-up from the website, no
-email from the client with numbers): the gateway already sent the welcome email that asks for every
+**A client email always gets an answer.** If the case has an email from the client (whatever it
+says, even a subject and body with no numbers, like "Delaware franchise tax question"), facts are
+missing and `asks_so_far` is 0, call `ask_client` for the missing facts **now**. Never treat a case
+with a client email as a website sign-up. "Waiting on the client" is allowed **only** after an ask
+went out (`asks_so_far` > 0) or a not-eligible reply.
+
+**A website sign-up with no reply yet** (`get_case` shows only the sign-up from the website, and no
+email from the client at all): the gateway already sent the welcome email that asks for every
 fact. Don't `ask_client`. Move the card to done with "case_N: waiting on the client's reply"; the
 reply wakes the case again.
 
