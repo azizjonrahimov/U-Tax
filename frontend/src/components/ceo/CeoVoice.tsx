@@ -58,7 +58,7 @@ import { parseTalkReply, replyLine, spokenPart, TALK_GIVE_UP_MS, TALK_LATE_MS, T
 import { MicIcon } from "@/components/MicIcon";
 import { Speaker } from "@/lib/tts";
 import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition, type RecognitionCtor } from "@/lib/recognition";
-import { canRecord, serverRecognition, STT_LIMITED, STT_NOISY, STT_UNAVAILABLE, STT_UNREADABLE } from "@/lib/stt";
+import { canRecord, serverRecognition, STT_LIMITED, STT_NOISY, STT_RECORD_FAILED, STT_UNAVAILABLE, STT_UNREADABLE } from "@/lib/stt";
 import { API, authJson } from "./gateway";
 
 const MINT_MS = 8000;
@@ -424,7 +424,20 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     // D33 loop guard (voice.ts earFinals): a final re-delivered in this session or across a
     // restart, or the console's own recent line coming back, is never a new utterance.
     const session = newEarSession(Date.now());
+    // D36: the gateway's STT can deliver after this ear was closed (it finishes uploading what was
+    // said). Never after a STOP that came since, and never after the console is gone.
+    const earEpoch = stopEpoch.current;
+    if ((r as { server?: boolean }).server) {
+      // The mic is released and only uploads remain: a new ear (the next Talk press) may open now.
+      (r as { onmicclosed?: (() => void) | null }).onmicclosed = () => {
+        if (recRef.current !== r || handsRef.current) return;
+        recRef.current = null;
+        micRef.current = false;
+        setMicOn(false);
+      };
+    }
     r.onresult = (e) => {
+      if (!alive.current || stopEpoch.current !== earEpoch) return;
       earErrors.current = 0;
       const results: { index: number; text: string; isFinal: boolean }[] = [];
       for (let i = e.resultIndex; i < e.results.length; i++) results.push({ index: i, text: e.results[i][0]?.transcript ?? "", isFinal: e.results[i].isFinal });
@@ -442,7 +455,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
         setNotice("Didn't catch that. Say it again (STOP or Esc always works).");
         return;
       }
-      if (e.error === STT_UNAVAILABLE || e.error === STT_LIMITED || e.error === STT_NOISY || e.error === "not-allowed-stt") {
+      if (e.error === STT_UNAVAILABLE || e.error === STT_LIMITED || e.error === STT_NOISY || e.error === STT_RECORD_FAILED || e.error === "not-allowed-stt") {
         // The gateway's STT said no: the browser's recognizer takes over (a restart, not a failure).
         const permanent = e.error === STT_UNAVAILABLE;
         sttDown.current = { until: Date.now() + STT_RETRY_MS, permanent };

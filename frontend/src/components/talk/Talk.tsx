@@ -14,7 +14,7 @@ import type { UTaxEvent } from "@/theater/events";
 import { formatCents } from "@/theater/format";
 import { ECHO_TAIL_MS, Speaker, type TalkPhrase } from "@/lib/tts";
 import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition, type RecognitionCtor } from "@/lib/recognition";
-import { canRecord, serverRecognition, STT_LIMITED, STT_NOISY, STT_UNAVAILABLE, STT_UNREADABLE } from "@/lib/stt";
+import { canRecord, serverRecognition, STT_LIMITED, STT_NOISY, STT_RECORD_FAILED, STT_UNAVAILABLE, STT_UNREADABLE } from "@/lib/stt";
 
 /** D36: after passing STT trouble (429, a noisy room), the browser recognizer listens this long. */
 const STT_RETRY_MS = 2 * 60_000;
@@ -254,7 +254,7 @@ export function Talk() {
     };
     r.onerror = (e) => {
       if (e.error === STT_UNREADABLE) return; // that clip only: the next answer goes through
-      if (e.error === STT_LIMITED || e.error === STT_NOISY || e.error === STT_UNAVAILABLE) {
+      if (e.error === STT_LIMITED || e.error === STT_NOISY || e.error === STT_RECORD_FAILED || e.error === STT_UNAVAILABLE) {
         // D36: the gateway's STT said no. The browser's recognizer takes over (onend restarts it);
         // without one, a 503 means type, and a busy minute means type for a minute.
         const permanent = e.error === STT_UNAVAILABLE;

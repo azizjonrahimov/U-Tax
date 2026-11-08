@@ -11,6 +11,8 @@
 // - STT_LIMITED: a 429, or the network failing twice: fall back for a little while.
 // - STT_UNREADABLE: the gateway couldn't read that clip (400/413/415): "say it again", stay here.
 // - STT_NOISY: the room never goes quiet (a TV, music): stop sending it, the caller falls back.
+// - STT_RECORD_FAILED: this browser couldn't record for the STT (an audio context that won't run,
+//   a recorder error): the caller falls back to the browser recognizer (not a dead mic).
 // - "no-speech": a tap with nothing said (the browser recognizer's own quiet error).
 // - "audio-capture" / "not-allowed": the mic is gone or refused.
 
@@ -25,6 +27,7 @@ export const STT_UNAVAILABLE = "stt-unavailable";
 export const STT_LIMITED = "stt-rate-limited";
 export const STT_UNREADABLE = "stt-unreadable";
 export const STT_NOISY = "stt-noisy";
+export const STT_RECORD_FAILED = "stt-record-failed";
 
 export class SttError extends Error {
   constructor(
@@ -81,20 +84,25 @@ export function canRecord(): boolean {
   );
 }
 
+
 /**
  * The utterance detector, pure: fed a level reading (RMS, 0..1) and the time since the last one,
  * it says when speech starts and when a pause ends it. The threshold follows the room's noise
  * floor (slowly, even while speaking, so a TV turned up mid-sentence doesn't hold it open).
- * `voicedMs`: how long the last utterance was above the threshold (a cough isn't words).
+ * - The first 600 ms learn the room from its quietest readings, so speech that starts right
+ *   away is never learned as "the room".
+ * - `voicedMs`: how long the current utterance was above the bar (a cough isn't words);
+ *   `loudMs`: how long anything was above the bar since the last reset (a forced cut sends a
+ *   clip that held speech even if no onset was declared yet).
  */
 export class LevelGate {
-  private floor = 0.005;
-  /** The first moments only learn the room (a fan or a TV is never mistaken for speech). */
+  private floor = Infinity;
   private warm = 0;
   private above = 0;
   private below = 0;
   speaking = false;
   voicedMs = 0;
+  loudMs = 0;
   constructor(
     private readonly onsetMs = 120,
     private readonly pauseMs = 700,
@@ -104,18 +112,28 @@ export class LevelGate {
     this.speaking = false;
     this.above = 0;
     this.below = 0;
+    this.voicedMs = 0;
+    this.loudMs = 0;
+  }
+  private bar() {
+    return Math.max(0.008, (Number.isFinite(this.floor) ? this.floor : 0.003) * 3);
   }
   /** "start", "end" or null for this reading. */
   step(rms: number, dtMs: number): "start" | "end" | null {
     const dt = Math.max(0, Math.min(dtMs, 250));
+    const level = Math.min(rms, 0.08);
     if (this.warm < 600) {
       this.warm += Math.max(0, dtMs);
-      this.floor = this.floor * 0.7 + Math.min(rms, 0.08) * 0.3;
+      this.floor = Math.min(this.floor, level); // the room is its quietest moment, never the voice
+      if (rms > this.bar()) {
+        this.loudMs += dt;
+        this.above += dt; // speech already under way counts toward the onset
+      } else this.above = 0;
       return null;
     }
-    this.floor = this.speaking ? this.floor * 0.998 + Math.min(rms, 0.08) * 0.002 : this.floor * 0.95 + Math.min(rms, 0.08) * 0.05;
-    const threshold = Math.max(0.008, this.floor * 3);
-    const loud = rms > threshold;
+    this.floor = this.speaking ? this.floor * 0.998 + level * 0.002 : this.floor * 0.95 + level * 0.05;
+    const loud = rms > this.bar();
+    if (loud) this.loudMs += dt;
     if (!this.speaking) {
       this.above = loud ? this.above + dt : 0;
       if (this.above >= this.onsetMs) {
@@ -149,23 +167,36 @@ const ROTATE_MS = 1500;
 const CLIP_MAX_MS = 28_000;
 /** Shorter than this voiced is a cough or a click: not sent. */
 const MIN_VOICED_MS = 200;
+/** A forced cut (the CEO let go) sends a clip that was loud at least this long, onset or not. */
+const MIN_LOUD_MS = 150;
 /** A tap with nothing said ends here (the browser recognizer's "no-speech"). */
 const NO_SPEECH_MS = 8000;
 /** This many clips in a row that ran to the cap (or came back empty): the room never goes quiet. */
 const NOISY_IN_A_ROW = 4;
+/** An audio context that won't start within this long won't start (outside a user gesture). */
+const RESUME_MS = 1500;
+
+type Clip = { rec: MediaRecorder; chunks: Blob[]; at: number };
 
 /** A recorder whose audio isn't wanted: its handlers off, stopped. */
-function drop(rec: MediaRecorder) {
-  rec.ondataavailable = null;
-  rec.onstop = null;
-  rec.onerror = null;
-  if (rec.state !== "inactive") rec.stop();
+function drop(c: Clip) {
+  c.rec.ondataavailable = null;
+  c.rec.onstop = null;
+  c.rec.onerror = null;
+  try {
+    if (c.rec.state !== "inactive") c.rec.stop();
+  } catch {
+    /* already gone */
+  }
 }
 
-/** A Recognition (the browser recognizer's shape) backed by the gateway's STT. */
+/**
+ * A Recognition (the browser recognizer's shape) backed by the gateway's STT. Beyond the shape:
+ * `server` (callers close it with stop(), which still delivers what was said) and `onmicclosed`
+ * (the mic is released and only uploads remain: a new ear may open while this one delivers).
+ */
 export function serverRecognition(purpose: SttPurpose, token: () => string | null): RecognitionCtor {
   return class ServerRecognition implements Recognition {
-    /** Callers close this ear with stop() (it still delivers what was said), never abort(). */
     readonly server = true;
     lang = "en-US";
     continuous = false;
@@ -173,26 +204,29 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
     onresult: Recognition["onresult"] = null;
     onend: (() => void) | null = null;
     onerror: ((e: { error: string }) => void) | null = null;
+    onmicclosed: (() => void) | null = null;
     private stream: MediaStream | null = null;
     private ctx: AudioContext | null = null;
     private timer: ReturnType<typeof setInterval> | null = null;
-    private rec: MediaRecorder | null = null;
-    private clipStart = 0;
-    /** The newer of the two overlapping recorders while it's quiet. */
-    private spare: { rec: MediaRecorder; at: number } | null = null;
+    private clip: Clip | null = null;
+    private spare: Clip | null = null;
     private gate = new LevelGate();
     private heardSpeech = false;
     private opened = 0;
     private results: (ArrayLike<{ transcript: string }> & { isFinal: boolean })[] = [];
     private ended = false;
     private closing = false;
+    private micClosed = false;
     private pending = 0;
     private uploads = new AbortController();
     private noisy = 0;
-    private netFails = 0;
+    /** In-order delivery: each sent clip gets a number; results go out in that order. */
+    private nextSeq = 0;
+    private nextOut = 0;
+    private done = new Map<number, string | null>();
 
     start(): void {
-      void this.open();
+      void this.open().catch(() => this.fail(STT_RECORD_FAILED));
     }
     /** Close the mic now; what was already said is still sent and delivered, then end. */
     stop(): void {
@@ -205,7 +239,7 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
     /** Drop everything (recording and uploads) and end now. */
     abort(): void {
       this.uploads.abort();
-      this.detachRecorder();
+      this.dropAll();
       this.end();
     }
 
@@ -221,126 +255,129 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
       for (const t of this.stream.getAudioTracks()) t.onended = () => this.fail("audio-capture");
       const ctx = new AudioContext();
       this.ctx = ctx;
-      try {
-        await ctx.resume();
-      } catch {
-        /* checked below */
-      }
-      if (ctx.state !== "running") return this.fail("audio-capture"); // a suspended context hears nothing
+      // resume() can wait forever outside a user gesture: give it a moment, then fall back.
+      await Promise.race([ctx.resume().catch(() => {}), new Promise((r) => setTimeout(r, RESUME_MS))]);
       if (this.ended || this.closing || !this.stream) return this.releaseMic();
+      if (ctx.state !== "running") return this.fail(STT_RECORD_FAILED);
       const src = ctx.createMediaStreamSource(this.stream);
       const an = ctx.createAnalyser();
       an.fftSize = 1024;
       src.connect(an);
       const buf = new Float32Array(an.fftSize);
       this.opened = performance.now();
-      this.startClip();
+      if (!this.startClip()) return;
       let last = performance.now();
       this.timer = setInterval(() => {
-        const now = performance.now();
-        an.getFloatTimeDomainData(buf);
-        let sum = 0;
-        for (const v of buf) sum += v * v;
-        const t = this.gate.step(Math.sqrt(sum / buf.length), now - last);
-        last = now;
-        if (t === "start") {
-          // The older recorder (with its pre-roll) is this utterance's clip; the newer one goes.
-          this.heardSpeech = true;
-          this.dropSpare();
-        } else if (t === "end") this.cut(false);
-        else if (this.gate.speaking && now - this.clipStart >= CLIP_MAX_MS) this.cut(false, true);
-        else if (!this.gate.speaking) this.rotate(now);
-        if (!this.continuous && !this.heardSpeech && now - this.opened >= NO_SPEECH_MS) this.fail("no-speech");
+        try {
+          const now = performance.now();
+          an.getFloatTimeDomainData(buf);
+          let sum = 0;
+          for (const v of buf) sum += v * v;
+          const t = this.gate.step(Math.sqrt(sum / buf.length), now - last);
+          last = now;
+          if (t === "start") {
+            // The older recorder (with its pre-roll) is this utterance's clip; the newer one goes.
+            this.heardSpeech = true;
+            this.dropSpare();
+          } else if (t === "end") this.cut(false);
+          else if (this.gate.speaking && this.clip && now - this.clip.at >= CLIP_MAX_MS) this.cut(false, true);
+          else if (!this.gate.speaking) this.rotate(now);
+          if (!this.continuous && !this.heardSpeech && this.gate.loudMs < MIN_LOUD_MS && now - this.opened >= NO_SPEECH_MS) this.fail("no-speech");
+        } catch {
+          this.fail(STT_RECORD_FAILED);
+        }
       }, 50);
     }
 
-    private newRecorder(): MediaRecorder | null {
+    private newClip(): Clip | null {
       if (!this.stream || this.ended || this.closing) return null;
-      const type = recordingType((t) => MediaRecorder.isTypeSupported(t)) ?? "";
-      const rec = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined);
-      const chunks: Blob[] = [];
-      rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
-      rec.onerror = () => this.fail("audio-capture");
-      (rec as MediaRecorder & { chunks?: Blob[] }).chunks = chunks;
-      rec.start();
-      return rec;
+      try {
+        const type = recordingType((t) => MediaRecorder.isTypeSupported(t)) ?? "";
+        const rec = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined);
+        const c: Clip = { rec, chunks: [], at: performance.now() };
+        rec.ondataavailable = (e) => e.data.size && c.chunks.push(e.data);
+        rec.onerror = () => this.fail(STT_RECORD_FAILED);
+        rec.start();
+        return c;
+      } catch {
+        this.fail(STT_RECORD_FAILED);
+        return null;
+      }
     }
 
     /** A new clip (whatever was recording, silence only, is dropped). */
-    private startClip() {
-      this.detachRecorder();
-      const rec = this.newRecorder();
-      if (!rec) return;
-      this.rec = rec;
-      this.clipStart = performance.now();
+    private startClip(): boolean {
+      this.dropAll();
+      this.clip = this.newClip();
+      return !!this.clip;
     }
 
     /** While it's quiet: keep the clip's silence short, with a newer recorder always overlapping. */
     private rotate(now: number) {
-      if (!this.rec) return;
+      if (!this.clip) return;
       if (!this.spare) {
-        if (now - this.clipStart >= ROTATE_MS) {
-          const rec = this.newRecorder();
-          if (rec) this.spare = { rec, at: now };
-        }
+        if (now - this.clip.at >= ROTATE_MS) this.spare = this.newClip();
         return;
       }
       if (now - this.spare.at >= ROTATE_MS) {
-        drop(this.rec);
-        this.rec = this.spare.rec;
-        this.clipStart = this.spare.at;
+        drop(this.clip);
+        this.clip = this.spare;
         this.spare = null;
+        this.gate.loudMs = 0; // the loudness tally describes the clip being kept
       }
     }
 
     private dropSpare() {
-      if (this.spare) drop(this.spare.rec);
+      if (this.spare) drop(this.spare);
       this.spare = null;
+    }
+    private dropAll() {
+      this.dropSpare();
+      if (this.clip) drop(this.clip);
+      this.clip = null;
     }
 
     /**
-     * The current clip ends: send it if it holds speech (`force`: the CEO let go, send whatever
-     * was said), then (still listening) start the next one.
+     * The current clip ends: send it if it holds speech (`force`: the CEO let go, so send what was
+     * said even if no onset was declared yet), then (still listening) start the next one.
      */
     private cut(force: boolean, capped = false) {
-      const rec = this.rec;
-      if (!rec) return;
+      const c = this.clip;
+      if (!c) return;
       this.dropSpare();
-      const speech = this.heardSpeech && (force || this.gate.voicedMs >= MIN_VOICED_MS);
-      const chunks = (rec as MediaRecorder & { chunks?: Blob[] }).chunks ?? [];
-      const seconds = (performance.now() - this.clipStart) / 1000;
-      this.rec = null;
+      this.clip = null;
+      const speech = (this.heardSpeech && (force || this.gate.voicedMs >= MIN_VOICED_MS)) || (force && this.gate.loudMs >= MIN_LOUD_MS);
+      const seconds = (performance.now() - c.at) / 1000;
       if (speech) {
         // Counted from now: the ear doesn't end before this clip has been sent.
+        const seq = this.nextSeq++;
         this.pending += 1;
-        rec.onstop = () => {
+        const go = () => {
           this.pending -= 1;
           if (this.ended) return;
-          void this.send(new Blob(chunks, { type: rec.mimeType || "audio/webm" }), seconds, capped);
+          void this.send(new Blob(c.chunks, { type: c.rec.mimeType || "audio/webm" }), seconds, capped, seq);
         };
-      } else {
-        rec.ondataavailable = null;
-        rec.onstop = null;
-      }
-      if (rec.state !== "inactive") rec.stop();
+        if (c.rec.state === "inactive") go(); // it already stopped by itself: its audio is all here
+        else {
+          c.rec.onstop = go;
+          c.rec.stop();
+        }
+      } else drop(c);
       this.gate.reset();
-      const hadSpeech = this.heardSpeech;
       this.heardSpeech = false;
-      if (force && !hadSpeech && !this.continuous) {
-        this.onerror?.({ error: "no-speech" });
-      }
-      // A tap ends with its utterance; hands-free keeps listening.
-      if (!this.continuous && hadSpeech) this.closing = true;
+      if (force && !speech && !this.continuous) this.onerror?.({ error: "no-speech" });
+      // A tap ends with its utterance (one actually sent; a cough keeps it listening); hands-free goes on.
+      if (!this.continuous && speech) this.closing = true;
       if (this.closing) {
         this.releaseMic();
         this.finishIfIdle();
       } else this.startClip();
     }
 
-    private async send(audio: Blob, seconds: number, capped: boolean) {
+    private async send(audio: Blob, seconds: number, capped: boolean, seq: number) {
       this.pending += 1;
+      let text: string | null = null;
       try {
-        let text = "";
         try {
           text = await transcribe(audio, seconds, purpose, token(), fetch, this.uploads.signal);
         } catch (e) {
@@ -348,40 +385,49 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
           if (!(e instanceof SttError) || e.status !== 0 || this.uploads.signal.aborted) throw e;
           text = await transcribe(audio, seconds, purpose, token(), fetch, this.uploads.signal);
         }
-        this.netFails = 0;
         this.noisy = capped || !text ? this.noisy + 1 : 0;
-        if (text && !this.ended) {
+      } catch (e) {
+        if (!this.ended && !this.uploads.signal.aborted) {
+          const status = e instanceof SttError ? e.status : 0;
+          if (status === 400 || status === 413 || status === 415) this.onerror?.({ error: STT_UNREADABLE }); // that clip only
+          else {
+            this.deliver(seq, null);
+            this.pending -= 1;
+            this.fail(status === 503 ? STT_UNAVAILABLE : status === 401 ? "not-allowed-stt" : STT_LIMITED);
+            return;
+          }
+        }
+      }
+      this.deliver(seq, text);
+      this.pending -= 1;
+      if (this.noisy >= NOISY_IN_A_ROW) return this.fail(STT_NOISY);
+      this.finishIfIdle();
+    }
+
+    /** Results go out in the order the clips were spoken (an upload can finish out of order). */
+    private deliver(seq: number, text: string | null) {
+      this.done.set(seq, text);
+      while (this.done.has(this.nextOut)) {
+        const t = this.done.get(this.nextOut) ?? null;
+        this.done.delete(this.nextOut);
+        this.nextOut += 1;
+        if (t && !this.ended) {
           const i = this.results.length;
-          this.results.push(Object.assign([{ transcript: text }], { isFinal: true }));
+          this.results.push(Object.assign([{ transcript: t }], { isFinal: true }));
           this.onresult?.({ resultIndex: i, results: this.results });
         }
-        if (this.noisy >= NOISY_IN_A_ROW) return this.fail(STT_NOISY);
-      } catch (e) {
-        if (this.ended || this.uploads.signal.aborted) return;
-        const status = e instanceof SttError ? e.status : 0;
-        if (status === 400 || status === 413 || status === 415) this.onerror?.({ error: STT_UNREADABLE }); // that clip only
-        else this.fail(status === 503 ? STT_UNAVAILABLE : status === 401 ? "not-allowed-stt" : STT_LIMITED);
-      } finally {
-        this.pending -= 1;
-        this.finishIfIdle();
       }
     }
 
     private finishIfIdle() {
-      if (this.closing && !this.rec && this.pending === 0) this.end();
+      if (this.closing && !this.clip && this.pending === 0) this.end();
     }
     private fail(error: string) {
       if (this.ended) return;
       this.onerror?.({ error });
       this.uploads.abort();
-      this.detachRecorder();
+      this.dropAll();
       this.end();
-    }
-    private detachRecorder() {
-      const rec = this.rec;
-      this.rec = null;
-      this.dropSpare();
-      if (rec) drop(rec);
     }
     private end() {
       if (this.ended) return;
@@ -399,6 +445,10 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
       this.stream = null;
       void this.ctx?.close().catch(() => {});
       this.ctx = null;
+      if (!this.micClosed) {
+        this.micClosed = true;
+        this.onmicclosed?.();
+      }
     }
   };
 }
