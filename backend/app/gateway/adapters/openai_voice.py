@@ -119,6 +119,45 @@ STT_TYPES = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/wav": "wav",
              "audio/x-flac": "flac"}
 STT_FALLBACK = "whisper-1"
 
+# task 45: the LOWEST bitrate a clip of each type plausibly has (bits a second), so
+# bytes * 8 / rate is the longest the audio could be: a caller can't send 30 s of audio
+# and declare 1 s. Opus speech goes down to 6 kbps; AAC and MP3 to about 8; FLAC (lossless)
+# never below 64. WAV is read exactly from its header.
+MIN_BITRATE = {"webm": 6000, "ogg": 6000, "mp4": 8000, "m4a": 8000, "mp3": 8000,
+               "flac": 64000, "wav": 64000}
+
+
+def wav_seconds(audio: bytes) -> float | None:
+    """A RIFF/WAVE clip's exact length (fmt byte rate, data size), else None."""
+    import struct
+
+    if len(audio) < 12 or audio[:4] != b"RIFF" or audio[8:12] != b"WAVE":
+        return None
+    pos, byte_rate = 12, None
+    while pos + 8 <= len(audio):
+        chunk, size = audio[pos:pos + 4], struct.unpack("<I", audio[pos + 4:pos + 8])[0]
+        if chunk == b"fmt " and size >= 12 and pos + 20 <= len(audio):
+            byte_rate = struct.unpack("<I", audio[pos + 16:pos + 20])[0]
+            if not 1000 <= byte_rate <= 384_000:  # past 48 kHz stereo 32-bit: not real
+                return None
+        elif chunk == b"data":
+            if not byte_rate:
+                return None
+            return min(size, len(audio) - pos - 8) / byte_rate
+        pos += 8 + size + (size & 1)
+    return None
+
+
+def audio_seconds_floor(audio: bytes, content_type: str) -> float:
+    """Task 45: the least length to book for this clip, from the bytes alone: a WAV's own
+    header, else bytes at the type's lowest plausible bitrate."""
+    ext = STT_TYPES.get(content_type, "webm")
+    if ext == "wav":
+        exact = wav_seconds(audio)
+        if exact is not None:
+            return exact
+    return len(audio) * 8 / MIN_BITRATE.get(ext, 6000)
+
 
 class OpenAISTT:
     """POST /v1/audio/transcriptions (multipart: file, model, response_format=json) ->

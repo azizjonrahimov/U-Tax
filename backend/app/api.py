@@ -772,9 +772,17 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         port = gw().ports.stt
         if port is None or port.provider is None:
             raise APIError(503, "voice_unavailable", "no speech-to-text; use the browser's")
-        # the hold is the call's most (30 s, or the declared length rounded up); the booking
-        # is the provider's own measure when it gives one
-        held = min(STT_MAX_SECONDS, int(-(-seconds // 1))) if seconds else STT_MAX_SECONDS
+        from app.gateway.adapters.openai_voice import audio_seconds_floor
+
+        # task 45: the hold (and the booking, unless the provider measures the audio itself)
+        # is the larger of the declared length and the server's own floor from the bytes
+        # (a WAV header, else the type's lowest bitrate), rounded up, at most 30 s; no
+        # declared length holds 30 s
+        floor = audio_seconds_floor(audio, content_type)
+        if seconds:
+            held = min(STT_MAX_SECONDS, int(-(-max(seconds, floor) // 1)))
+        else:
+            held = STT_MAX_SECONDS
         refusal = gw().reserve_stt(purpose, held)
         if refusal == "talk_budget":
             raise APIError(429, "rate_limited", "today's /talk listening is spent; type instead")
