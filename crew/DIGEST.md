@@ -1,4 +1,4 @@
-# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 10:18 local · FREEZE 10:30 · hacking ends 11:00
+# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 10:18 local · NO FREEZE until the owner says · hacking ends 11:00
 
 ## Needs you
 
