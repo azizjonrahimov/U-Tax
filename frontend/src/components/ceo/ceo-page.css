@@ -278,3 +278,23 @@
   .cx main{padding-bottom:88px}
 }
 @media (prefers-reduced-motion:reduce){.cx .dot,.cx .wave i,.cx .orb::after{animation:none!important}}
+/* D41 F47: an order's tasks, one row each (badge, one line of text, the department doing it) */
+.cx .order-head{display:flex;align-items:flex-start;gap:12px}
+.cx .order-head .order-text{flex:1;min-width:0}
+.cx .task-chip{flex:none;font:11px var(--mono);color:var(--dim);border:1px solid var(--line-2);border-radius:var(--pill);padding:2px 8px;white-space:nowrap}
+.cx .order-tasks{list-style:none;display:grid;gap:6px;margin:4px 0 10px}
+.cx .tk{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text);min-height:24px}
+.cx .tk-badge{flex:none;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font:500 11px var(--mono);border:1px solid var(--line-2);color:var(--dim)}
+.cx .tk-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cx .tk-av{flex:none}
+.cx .tk-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime);animation:cx-pulse 1.2s infinite}
+.cx .tk-wait{flex:none;font:11px var(--mono);color:var(--warn);background:rgba(255,181,71,.12);border-radius:var(--pill);padding:2px 8px;white-space:nowrap}
+.cx .tk.done .tk-badge{background:var(--lime);border-color:var(--lime);color:var(--on-lime)}
+.cx .tk.running .tk-badge{border-color:var(--lime);color:var(--lime)}
+.cx .tk.waiting_on_you .tk-badge,.cx .tk.blocked .tk-badge{border-color:var(--warn);color:var(--warn)}
+.cx .tk.queued{color:var(--faint)}
+.cx .tk.queued .tk-badge{border-color:var(--line);color:var(--faint)}
+.cx .tk.failed .tk-badge,.cx .tk.timeout .tk-badge{border-color:rgba(255,90,71,.55);color:#ff8c7d}
+.cx .tk.cancelled{color:var(--faint)}
+.cx .tk.cancelled .tk-text{text-decoration:line-through}
+@media (prefers-reduced-motion:reduce){.cx .tk-dot{animation:none!important}}

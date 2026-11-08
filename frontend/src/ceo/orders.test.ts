@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { UTaxEvent } from "@/theater/events";
-import { foldOrders, type OrderCtx } from "./orders";
+import { foldOrders, taskChip, type OrderCtx } from "./orders";
 
 let id = 100;
 const ev = (type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent => ({
@@ -47,5 +47,74 @@ describe("orders the D34 assistant placed", () => {
     const cards = foldOrders([], [order, ev("tool.called", { tool: "make_ad", status: "done", order_id: `order_${order.id}` }, { actor: "mkt" })], ctx);
     expect(cards).toHaveLength(1);
     expect(cards[0].steps).toHaveLength(1);
+  });
+});
+
+describe("D41 F47: an order's tasks", () => {
+  const start = () => {
+    const order = ev("voice.command", { text: "post the ad, pay the designer, email Team #1", speaker: "ceo" }, { actor: "ceo" });
+    const oid = `order_${order.id}`;
+    const queued = ev("order.queued", { order_id: oid, of: 3, tasks: [{ no: 2, text: "pay the designer" }, { no: 1, text: "post the ad" }, { no: 3, text: "email Team #1" }] });
+    return { oid, cards: foldOrders([], [order, queued], ctx) };
+  };
+
+  it("order.queued attaches the tasks, queued and in order; the chip says which one is next", () => {
+    const { cards } = start();
+    expect(cards[0].tasks).toEqual([
+      { no: 1, text: "post the ad", status: "queued", seat: null },
+      { no: 2, text: "pay the designer", status: "queued", seat: null },
+      { no: 3, text: "email Team #1", status: "queued", seat: null },
+    ]);
+    expect(cards[0].steps).toEqual([]);
+    expect(taskChip(cards[0].tasks)).toBe("Task 1 of 3");
+  });
+
+  it("task_started runs it, a task_no-stamped event sets its department, task_done ends it with its status", () => {
+    const { oid, cards: c0 } = start();
+    let cards = foldOrders(c0, [
+      ev("order.task_started", { order_id: oid, task_no: 1, of: 3, text: "post the ad" }),
+      ev("tool.called", { tool: "post_social", status: "done", order_id: oid, task_no: 1 }, { actor: "mkt" }),
+    ], ctx);
+    expect(cards[0].tasks?.[0]).toMatchObject({ status: "running", seat: "mkt" });
+    expect(cards[0].tasks?.[1]).toMatchObject({ status: "queued", seat: null });
+    expect(taskChip(cards[0].tasks)).toBe("Task 1 of 3");
+    cards = foldOrders(cards, [
+      ev("order.task_done", { order_id: oid, task_no: 1, of: 3, status: "done", summary: "posted", by: "mkt" }),
+      ev("order.task_started", { order_id: oid, task_no: 2, of: 3, text: "pay the designer" }),
+    ], ctx);
+    expect(cards[0].tasks?.map((t) => t.status)).toEqual(["done", "running", "queued"]);
+    expect(taskChip(cards[0].tasks)).toBe("Task 2 of 3");
+    cards = foldOrders(cards, [
+      ev("order.task_done", { order_id: oid, task_no: 2, of: 3, status: "waiting_on_you", summary: "", by: "acct" }),
+      ev("order.task_started", { order_id: oid, task_no: 3, of: 3, text: "" }),
+      ev("order.task_done", { order_id: oid, task_no: 3, of: 3, status: "cancelled", summary: "", by: "system" }),
+      ev("order.done", { order_id: oid, of: 3, done: 1, waiting_on_you: 1, other: 1 }),
+    ], ctx);
+    expect(cards[0].tasks?.map((t) => t.status)).toEqual(["done", "waiting_on_you", "cancelled"]);
+    expect(taskChip(cards[0].tasks)).toBe("1 of 3 done");
+  });
+
+  it("an ended task stays ended, a re-delivered queue never resets it, unknown statuses read as done, other orders never move it", () => {
+    const { oid, cards: c0 } = start();
+    const queuedAgain = ev("order.queued", { order_id: oid, of: 1, tasks: [{ no: 1, text: "something else" }] });
+    let cards = foldOrders(c0, [
+      ev("order.task_started", { order_id: oid, task_no: 1, of: 3, text: "" }),
+      ev("order.task_done", { order_id: oid, task_no: 1, of: 3, status: "weird", summary: "", by: "mkt" }),
+      ev("order.task_started", { order_id: oid, task_no: 1, of: 3, text: "" }),
+      queuedAgain,
+      ev("order.task_started", { order_id: "order_1", task_no: 2, of: 3, text: "" }),
+      ev("tool.called", { tool: "send_email", status: "done", order_id: oid }, { actor: "acct" }), // no task_no: no seat
+    ], ctx);
+    expect(cards[0].tasks?.map((t) => [t.status, t.seat])).toEqual([["done", null], ["queued", null], ["queued", null]]);
+    expect(cards[0].tasks?.[0].text).toBe("post the ad");
+    cards = foldOrders(cards, [ev("order.queued", { order_id: oid, tasks: "nope" })], ctx);
+    expect(cards[0].tasks).toHaveLength(3);
+  });
+
+  it("a card with no queued tasks has none, and no chip", () => {
+    const order = ev("voice.command", { text: "one thing", speaker: "ceo" }, { actor: "ceo" });
+    const cards = foldOrders([], [order, ev("order.queued", { order_id: `order_${order.id}`, tasks: [{ no: 0, text: "bad" }] })], ctx);
+    expect(cards[0].tasks).toBeUndefined();
+    expect(taskChip(cards[0].tasks)).toBeNull();
   });
 });
