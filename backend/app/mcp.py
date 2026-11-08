@@ -26,6 +26,7 @@ from app import __version__
 from app.gateway.perform import AGENTS, TOOL_ACTORS, Gateway
 
 log = logging.getLogger("utax.mcp")
+_background: set = set()  # tool.called writes in flight (a reference keeps each task alive)
 
 MIN_TOKEN_CHARS = 32
 MAX_BODY_BYTES = 256_000  # a tool call is small; anything bigger is refused unread
@@ -338,6 +339,11 @@ async def _handle(gw: Gateway, actor: str, message: Any, request: Request) -> di
             return {"jsonrpc": "2.0", "id": id_,
                     "error": {"code": -32602, "message": f"unknown tool {name}"}}
         result = await asyncio.to_thread(gw.perform, name, args, actor=actor)
+        # v1.12 §5a: tool.called, written off the reply's path (the agent never waits)
+        task = asyncio.create_task(asyncio.to_thread(
+            gw.record_tool_call, actor, name, result.status, args.get("order_id")))
+        _background.add(task)
+        task.add_done_callback(_background.discard)
         body = result.as_dict()
         return {"jsonrpc": "2.0", "id": id_, "result": {
             "content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False)}],

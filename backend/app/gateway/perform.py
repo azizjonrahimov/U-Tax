@@ -255,6 +255,15 @@ def _when(iso: str) -> str:
     return f"{local.strftime('%A, %B')} {local.day} at {hour} Pacific"
 
 
+def _form_greeting(name: str) -> str:
+    """v1.12: a sign-up's greeting from the form's name: letters, spaces, ' and - only,
+    whitespace collapsed, at most 40 characters; anything else is "there"."""
+    text = " ".join((name or "").split())
+    if not text or len(text) > 40 or not re.fullmatch(r"[^\W\d_]+(?:[ '\-][^\W\d_]+)*", text):
+        return "there"
+    return text
+
+
 def _cap(text: str) -> str:
     """Uppercase the first letter only ("first memo..." -> "First memo...")."""
     return text[:1].upper() + text[1:]
@@ -387,8 +396,12 @@ class Gateway:
             "naive_confirm": self._naive_confirm,
             "naive_question": self._naive_question,
             "naive_notice": self._naive_notice,
+            # v1.12 §5a (D32): the product shell's public sign-up
+            "signup": self._signup,
+            "naive_recovered": self._naive_recovered,
         }
         self._naive_noticed: dict[tuple[str, str], datetime] = {}
+        self._welcome_failures: dict[str, int] = {}  # v1.12: case -> failed welcome sends
         self._naive_questions: set[str] = set()  # notices tried this process (mailed or not)
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
@@ -1199,6 +1212,123 @@ class Gateway:
                              private={"message_id": sent.message_id})])
         return "sent"
 
+    # ------------------------------------------------------------ v1.12 §5a (D32)
+
+    SIGNUPS_PER_EMAIL_PER_DAY = 3
+    WELCOME_TRIES = 3  # a welcome the provider keeps refusing stops after this many
+    SIGNUP_SUBJECT = "Your free Delaware franchise tax check"
+
+    def _signup(self, args: dict) -> dict:
+        """POST /api/signup: a case opened like an inbound email (source "signup"), the crew
+        woken, and one welcome email asking for the numbers (trust email)."""
+        name = " ".join(_str(args, "name", max_len=120).split())
+        company = " ".join(_str(args, "company", max_len=120).split())  # required, not stored
+        email = _str(args, "email", max_len=320).strip()
+        if not name or not company:
+            raise Refused("bad_input", "name and company are required")
+        if not _EMAIL_RE.match(email):
+            raise Refused("bad_input", "email must be an email address")
+        identity = mail_identity(email)
+        own = {mail_identity(a) for a in (self.settings.ceo_email, self.settings.inbox_clients,
+                                          self.settings.inbox_hiring) if a}
+        if identity in own:  # never a case (or a welcome mail) to the firm itself
+            raise Refused("bad_input", "that address can't sign up")
+        request_id = _str(args, "request_id", required=False, max_len=80)
+        # the address in the key: a replayed or guessed id never returns another's case
+        key = f"signup:{mail_identity(email)}:{request_id}" if request_id else None
+        if key:
+            seen = self._done_from(key)
+            if seen is not None:
+                return {"case_id": seen.case_id, "masked_name": seen.payload["masked_name"],
+                        "duplicate": True}
+        day = iso_ts(self._now())[:10]
+        sender = email.lower()
+        if self.state.signups_by_day.get((day, identity), 0) >= self.SIGNUPS_PER_EMAIL_PER_DAY:
+            raise Refused("rate_limited", "this email has signed up 3 times today; reply to "
+                                          "our welcome email instead")
+        # an address that already belongs to a client: the same generic answer, nothing
+        # created, nothing mailed (never a way to test or re-mail an existing client)
+        if any(mail_identity(k) == identity for k in self.state.case_by_sender):
+            return {"ok": True}
+        self._public_cap()  # the public daily case cap (raises at_capacity)
+        number = self._new_case_number()
+        case_id = f"case_{number}"
+        masked_name = f"Team #{number}"
+        sender_key = sender
+        body = "Signed up on the U-Tax site for a free Delaware franchise tax check."
+        events = [NewEvent(
+            type="email.received", actor="intake", case_id=case_id, provider="local",
+            payload={"masked_name": masked_name, "from_masked": mask_email(sender),
+                     "subject": "Sign-up", "body": body, "source": "signup"},
+            idempotency_key=key,
+            private={"reply_to": email, "sender_key": sender_key, "masked_name": masked_name,
+                     # the company from the address, like any inbound mail: the typed
+                     # one would feed the client-name guard ("startup" blocking posts)
+                     "company": company_label(sender), "greeting_name": _form_greeting(name),
+                     "identity": identity, "message_id": f"signup-{case_id}",
+                     "redactions": 0,
+                     "agent_text": agent_text(f"{body} Waiting for their numbers by email."),
+                     "agent_subject": "Sign-up"},
+        )]
+        events += self._reopen(None, case_id)
+        self._emit(events)
+        self._wake(f"New case {case_id}")
+        self._send_signup_welcome(case_id)
+        return {"case_id": case_id, "masked_name": masked_name}
+
+    def _send_signup_welcome(self, case_id: str) -> str:
+        """The sign-up's one welcome email (trust email). On ASK the CEO's approval sends it
+        later (retry_signup_welcomes, on the tick)."""
+        key = f"signup-welcome:{case_id}"
+        if self._done_from(key) is not None:
+            return "sent"
+        if self._welcome_failures.get(case_id, 0) >= self.WELCOME_TRIES:
+            return "gave_up"  # a provider that keeps refusing: never retried forever
+        case = self.state.cases[case_id]
+        try:
+            self._gate("email", key, _cap(f"{self._first('email')}welcome email: "
+                                          f"{case.masked_name}"), case_id, public=True)
+        except NeedsApproval:
+            return "needs_approval"
+        except Refused as err:  # denied, or email paused
+            return err.code
+        try:
+            sent = self._with_retry("welcome email", lambda: self.ports.mail.send(
+                OutMail(to=case.reply_to, subject=self.SIGNUP_SUBJECT,
+                        body=self.templates.render("signup-welcome", {
+                            "greeting_name": self._greeting(case)})), key))
+        except ToolError as err:
+            failures = self._welcome_failures.get(case_id, 0) + 1
+            self._welcome_failures[case_id] = failures
+            log.warning("welcome email for %s failed (%d/%d): %s", case_id, failures,
+                        self.WELCOME_TRIES, err)
+            return "failed"
+        # public: it counts in /talk's own send bucket, never the firm's
+        self._emit([NewEvent(type="client.followed_up", actor="intake", case_id=case_id,
+                             provider=self.ports.mail.provider,
+                             payload={"kind": "signup_welcome"}, idempotency_key=key,
+                             private={"message_id": sent.message_id, "public": True})])
+        return "sent"
+
+    def retry_signup_welcomes(self) -> list[str]:
+        """Welcome emails that couldn't go out (ASK, paused, failed): the tick retries."""
+        with self._lock:
+            todo = [cid for cid in sorted(self.state.signup_cases)
+                    if self._done_from(f"signup-welcome:{cid}") is None
+                    and self._mail_may_go(f"signup-welcome:{cid}")]
+            return [cid for cid in todo if self._send_signup_welcome(cid) == "sent"]
+
+    def record_tool_call(self, actor: str, tool: str, status: str, order_id: Any) -> None:
+        """v1.12 §5a: tool.called for every MCP tool call (reads too): the seat, the tool,
+        the outcome, the CEO order it served. No args or data. Never raises."""
+        try:
+            order = self._valid_order(order_id)
+            with self._lock:
+                self._emit([NewEvent(type="tool.called", actor=actor, payload={
+                    "tool": tool, "status": status, **({"order_id": order} if order else {})})])
+        except Exception:  # noqa: BLE001 - the animation event never fails a tool call
+            log.exception("tool.called for %s %s not written", actor, tool)
+
     def _new_case_number(self) -> int:
         return max((c.number for c in self.state.cases.values()), default=0) + 1
 
@@ -1561,6 +1691,8 @@ class Gateway:
     def _waiting_reason(self, case: Case) -> str:
         if case.status == "BLOCKED":
             return case.blocked_reason or "blocked: needs a human"
+        if case.case_id in self.state.signup_cases and len(case.message_ids) <= 1:
+            return "waiting on the client's reply"  # v1.12: the welcome asked for the numbers
         if case.status == "INTAKE_PENDING" and case.missing:
             if case.asks and case.asked_after_text == len(case.texts):
                 return "waiting on the client's reply"
@@ -2518,6 +2650,8 @@ class Gateway:
     def _greeting(case: Case) -> str:
         """v1.6 {{greeting_name}}: the client's own company name if known, else "there".
         Only the outgoing mail uses it; every event copy keeps the masked name."""
+        if case.greeting_name:  # v1.12: the sign-up form's name, already cleaned
+            return case.greeting_name
         if case.priority or not case.company:  # /talk and webmail: "there"
             return "there"
         label = re.sub(r"[^A-Za-z0-9 ]+", " ", case.company).strip()
@@ -3452,9 +3586,38 @@ class Gateway:
         if key in self._naive_questions or self._done_from(key) is not None:
             return {"duplicate": True}
         self._naive_questions.add(key)
-        self._notify_ceo("flagged", clip(_str(args, "subject", max_len=200), 120),
+        reason = _one_of(args, "reason", ("flagged", "blocked"), default="flagged")
+        self._notify_ceo(reason, clip(_str(args, "subject", max_len=200), 120),
                          clip(_str(args, "summary", max_len=600), 500), key=key)
         return {"noticed": True}
+
+    def _naive_recovered(self, args: dict) -> dict:
+        """Task 27: app/naive_confirm.py nudged a session that stopped on a platform error."""
+        session_id = _str(args, "session_id", max_len=80)
+        attempt = _int(args, "attempt") or 1
+        self._emit([NewEvent(type="naive.recovered", actor="system", payload={
+            "session_id": session_id, "agent": _one_of(args, "agent", AGENTS),
+            "attempt": attempt}, idempotency_key=f"naive.recovered:{session_id}:{attempt}")])
+        return {"attempt": attempt}
+
+    def agent_done_since(self, actor: str, since: str) -> bool:
+        """Task 27: has this seat finished a tool call after `since` (an ISO time)? Then a
+        session of it that errored earlier is stale: its card moved on without it."""
+        with self._lock:
+            done = self.state.agent_done_at.get(actor)
+        if not done:
+            return False
+        try:
+            return parse_ts(done) > parse_ts(since)
+        except ValueError:
+            return False
+
+    def naive_recovery(self, session_id: str) -> tuple[int, str | None]:
+        """(nudges so far, the last one's timestamp): from the log, so a restart never
+        grants a session more tries."""
+        with self._lock:
+            count, ts = self.state.naive_recoveries.get(session_id, (0, ""))
+        return count, ts or None
 
     def _ceo_confirm(self, args: dict) -> dict:
         """POST /api/ceo/confirm: carry out a proposal's pinned action, once, within 60 s,
@@ -3524,9 +3687,21 @@ class Gateway:
         typing. Confirm and cancel words point at the newest open proposal."""
         from app import ceo_tools
 
-        parsed = ceo_tools.parse(_str(args, "text", max_len=600))
+        raw = _str(args, "text", max_len=600)
+        parsed = ceo_tools.parse(raw)
         if parsed is None:
-            return {"kind": "unknown", "say": ceo_tools.EXAMPLES}
+            # v1.12.3: anything else said as an order goes to the Chief of Staff, read back
+            # whole and confirmed like any order ("advertise our firm", "hire 2 people")
+            order = ceo_tools.free_order(raw)
+            if order is None:
+                return {"kind": "unknown", "say": ceo_tools.EXAMPLES}
+            try:
+                pinned, _ = ceo_tools.pin_order(self, {"text": order})
+            except ceo_tools.ToolRefused as err:
+                raise Refused(err.code, err.message) from err
+            readback = (f'Send this order to the Chief of Staff: "{pinned["text"]}". '
+                        "Say confirm.")
+            return self._propose("order", pinned, readback, "command")
         kind, value = parsed
         live = [p for p in self._open_proposals() if not self._expired(p)]
         if kind == "approve_it":  # confirms an open approve, else proposes the latest

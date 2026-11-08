@@ -326,7 +326,7 @@ def test_the_command_path_answers_like_the_tool_path(make_harness):
             return client.post("/api/ceo/command", headers=AUTH, json={"text": text}).json()
 
         assert say("trust")["kind"] == "read"
-        unknown = say("make it rain")
+        unknown = say("ok")  # pure filler: never an order (v1.12.3)
         assert unknown["kind"] == "unknown" and "status of team 7" in unknown["say"]
         assert say("yes")["kind"] == "unknown"  # nothing to confirm yet
         proposal = say("approve the latest")
@@ -334,6 +334,7 @@ def test_the_command_path_answers_like_the_tool_path(make_harness):
         assert say("yes") == {"kind": "confirm", "proposal_id": proposal["proposal_id"],
                               "readback": proposal["readback"]}
         assert say("cancel")["kind"] == "cancel"
+        assert say("make it rain")["kind"] == "proposal"  # v1.12.3: an order now
     assert h.events("ceo.proposed")[-1].payload["source"] == "command"
 
 

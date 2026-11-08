@@ -514,3 +514,115 @@ def test_an_ask_with_a_seq_uses_it_for_both_keys(h):
     run(h.gw, fake, polls=1)
     [event] = h.events("naive.confirm")
     assert event.idempotency_key.endswith(":tc_9:41")
+
+
+# ---------------------------------------------------------------- task 27: platform errors
+
+
+class RecoveringNaive(FakeNaive):
+    """FakeNaive plus POST /v1/sessions/{id}/messages (the recovery nudge)."""
+
+    def __init__(self, gw, sessions):
+        super().__init__(gw, sessions)
+        self.messages: list[dict] = []
+
+    def __call__(self, request):
+        path = request.url.path.removeprefix("/v1")
+        if request.method == "POST" and path.endswith("/messages"):
+            sid = path.split("/")[2]
+            self.messages.append({"session": sid, "key": request.headers.get("Idempotency-Key"),
+                                  **json.loads(request.content)})
+            return httpx.Response(202, json={"session_id": sid, "status": "running",
+                                             "accepted_seq": 9})
+        return super().__call__(request)
+
+
+def errored(agent, created):
+    return {"agent_id": f"agt_{agent}", "status": "idle", "stop_reason": "error",
+            "created_at": created, "pending_actions": []}
+
+
+def iso(h, seconds_ago):
+    from datetime import timedelta
+
+    return (h.clock.now - timedelta(seconds=seconds_ago)).isoformat().replace("+00:00", "Z")
+
+
+def recover_run(h, fake, steps):
+    """steps: a list of seconds to advance (the gateway clock and the confirmer clock) before
+    each poll."""
+    from datetime import timedelta
+
+    mono = {"t": 0.0}
+
+    async def go():
+        client = NaiveClient("nk_test", transport=httpx.MockTransport(fake))
+        confirmer = NaiveConfirmer(h.gw, client, clock=lambda: mono["t"])
+        try:
+            await confirmer.boot()
+            for dt in steps:
+                mono["t"] += dt
+                h.clock.advance(seconds=dt)
+                confirmer._quiet.clear()
+                await confirmer.poll_once()
+        finally:
+            await client.aclose()
+
+    asyncio.run(go())
+
+
+def test_an_errored_session_is_nudged_twice_then_the_ceo_hears(h):
+    fake = RecoveringNaive(h.gw, {"ses_t": errored("tax", iso(h, 600))})
+    recover_run(h, fake, [0, 10, 25, 60, 70, 10, 10])
+    texts = [m["message"] for m in fake.messages]
+    assert len(texts) == 2 and all("board_read" in t for t in texts)
+    assert fake.messages[0]["key"] != fake.messages[1]["key"]
+    events = [e.payload for e in h.events("naive.recovered")]
+    assert events == [{"session_id": "ses_t", "agent": "tax", "attempt": 1},
+                      {"session_id": "ses_t", "agent": "tax", "attempt": 2}]
+    [notice] = [e.payload for e in h.events("ceo.notified")]
+    assert notice["reason"] == "blocked" and "tax" in notice["summary"]
+
+
+def test_the_first_nudge_waits_30_seconds_and_the_second_two_minutes(h):
+    fake = RecoveringNaive(h.gw, {"ses_t": errored("tax", iso(h, 60))})
+    recover_run(h, fake, [0, 20])  # 20 s after first sight
+    assert fake.messages == []
+    recover_run(h, fake, [0, 31])  # a fresh confirmer: first sight again, then 31 s
+    assert len(fake.messages) == 1
+    recover_run(h, fake, [60])  # one minute after nudge 1
+    assert len(fake.messages) == 1
+
+
+def test_old_or_undated_errored_sessions_are_left_alone(h):
+    old = errored("qa", iso(h, 3 * 3600))
+    undated = errored("hr", None)
+    undated.pop("created_at")
+    fake = RecoveringNaive(h.gw, {"ses_old": old, "ses_x": undated})
+    recover_run(h, fake, [0, 40, 200])
+    assert fake.messages == [] and not h.events("naive.recovered")
+
+
+def test_a_restart_never_grants_more_nudges(h):
+    fake = RecoveringNaive(h.gw, {"ses_t": errored("tax", iso(h, 60))})
+    recover_run(h, fake, [0, 31, 121])
+    assert len(fake.messages) == 2
+    h.restart()
+    recover_run(h, fake, [0, 31, 121])
+    assert len(fake.messages) == 2  # the log remembers both
+
+
+def test_an_errored_session_whose_card_moved_on_is_left_alone(h):
+    # live: "tax is stuck" was mailed after a NEW tax session had finished the card
+    newer = errored("tax", iso(h, 30))
+    newer.update(status="running", stop_reason=None)
+    fake = RecoveringNaive(h.gw, {"ses_old": errored("tax", iso(h, 600)), "ses_new": newer})
+    recover_run(h, fake, [0, 40, 200, 200])
+    assert fake.messages == [] and not h.events("ceo.notified")
+
+
+def test_an_agent_that_got_work_done_since_the_error_is_not_nudged(h):
+    fake = RecoveringNaive(h.gw, {"ses_t": errored("tax", iso(h, 600))})
+    h.gw.record_tool_call("tax", "compute_tax", "done", None)  # the tax seat worked since
+    recover_run(h, fake, [0, 40, 200, 200])
+    assert fake.messages == [] and not h.events("ceo.notified")

@@ -176,6 +176,7 @@ const TEMPLATE_RULES = {
   "follow-up-memo_check.md": { body: true, client: true, placeholders: ["greeting_name"] },
   "follow-up-missing_facts.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list"] },
   "follow-up-call_reminder.md": { body: true, client: true, placeholders: ["greeting_name", "call_time"] },
+  "signup-welcome.md": { body: true, client: true, placeholders: ["greeting_name"] }, // v1.12: the Spec also allows masked_name; a client mail never shows it
   "ceo-update-email.md": { body: true, placeholders: ["headline", "lead", "summary", "action_line", "console_url"] },
   "ceo-digest-email.md": {
     body: true, spend: true,

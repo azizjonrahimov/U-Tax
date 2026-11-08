@@ -583,6 +583,30 @@ def _norm(text: str) -> str:
     return re.sub(r" please$", "", text)
 
 
+# v1.12.3: words that alone are a confirm, a cancel or filler: never an order by themselves
+_PURE_WORDS = frozenset(
+    "yes yeah yep ok okay alright sure confirm confirmed please so um uh go ahead do it "
+    "no nope cancel stop wait hold on never mind nevermind dont don't not thanks thank you"
+    .split())
+_QUESTION_START = re.compile(
+    r"(?:what|what's|whats|why|how|who|whose|when|where|which|is|are|am|do|does|did)\b", re.I)
+FREE_ORDER_MIN, FREE_ORDER_MAX = 3, 300
+
+
+def free_order(text: str) -> str | None:
+    """v1.12.3: text the grammar can't parse, said as an order ("advertise our firm"), of
+    3-300 characters: the order text. None for pure confirm/cancel words or a question."""
+    order = " ".join((text or "").split())
+    if not FREE_ORDER_MIN <= len(order) <= FREE_ORDER_MAX:
+        return None
+    words = _speech(order).split()
+    if not words or all(w in _PURE_WORDS for w in words):
+        return None
+    if "?" in order or _QUESTION_START.match(order):
+        return None
+    return order
+
+
 def parse(text: str) -> tuple[str, Any] | None:
     """Text -> ("tool", (name, args)) | ("confirm", None) | ("cancel", None) | None."""
     raw = (text or "").strip()
