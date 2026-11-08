@@ -12,15 +12,16 @@ import { assetAllowed, eventsUrl, numbersFromState, originOf, parseAssetHosts, r
 import type { FirmNumbers } from "@/theater/rail";
 import { appendEvents, startScript, type ScriptCursor } from "@/theater/script";
 import { writeSession } from "@/ceo/session";
-import { applyStudio, emptyStudio, STUDIO_ONLY, type Studio } from "./artifact";
+import { applyStudio, emptyStudio, STUDIO_ONLY, type Studio, type StudioCtx } from "./artifact";
 import { applyEvent, emptyOffice, type Office, type Seat, type StepCtx } from "./workspace";
 
 const GATEWAY: Endpoints = { base: API_URL, token: process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "" };
 const HAS_GATEWAY = Boolean(process.env.NEXT_PUBLIC_API_URL);
 const HOSTS = parseAssetHosts(process.env.NEXT_PUBLIC_ASSET_HOSTS);
 const GATEWAY_ORIGIN = originOf(process.env.NEXT_PUBLIC_API_URL);
-/** Events folded on open, so every desk shows its latest work at once. */
+/** Events folded on open, so every desk shows its latest work at once (more when signed in: the agents' activity is in the log too). */
 const LOOKBACK = 300;
+const LOOKBACK_SIGNED_IN = 900;
 const STATE_MS = 5000;
 const quiet = { log: () => {}, onGap: () => {} };
 
@@ -103,42 +104,57 @@ export function useFirmFeed(session: string | null = null): Feed {
       flagged: (id) => id !== null && flagged.has(id),
       image: (url) => (typeof url === "string" && assetAllowed(url, HOSTS, GATEWAY_ORIGIN) ? url : undefined),
     };
+    const studioCtx: StudioCtx = {
+      ...ctx,
+      // A desk whose newest step is about a flagged case: its agent's notes may quote that mail.
+      seatFlagged: (seat) => {
+        const c = officeRef.current.desks[seat].steps[0]?.caseId ?? null;
+        return c !== null && flagged.has(c);
+      },
+    };
     // D37: events the theater's script doesn't know (agent.activity, doc.*) go to the studio
-    // directly, once each (a reconnect can deliver them again).
+    // directly, once each (a reconnect can deliver them again). Everything folds in log order.
     const studioSeen = new Set<number>();
+    /** The newest event id seen of any kind: a reconnect resumes after it (activity included). */
+    let maxSeen = 0;
     const wellFormed = (e: unknown): e is UTaxEvent => {
       const v = e as Partial<UTaxEvent> | null;
       return !!v && typeof v.id === "number" && typeof v.type === "string" && typeof v.ts === "string" && typeof v.actor === "string" && typeof v.payload === "object" && v.payload !== null;
     };
     const fold = (events: UTaxEvent[], live = false) => {
-      const own = events.filter((e) => wellFormed(e) && STUDIO_ONLY.has(e.type) && !studioSeen.has(e.id));
-      const res = appendEvents(cursor, events.filter((e) => !(wellFormed(e) && STUDIO_ONLY.has(e.type))), quiet);
-      cursor = res.cursor;
-      let st = studioRef.current;
-      for (const ev of own) {
-        studioSeen.add(ev.id);
-        if (studioSeen.size > 5000) studioSeen.delete(studioSeen.values().next().value as number);
-        st = applyStudio(st, ev, ctx);
+      const st0 = studioRef.current;
+      const o0 = officeRef.current;
+      let st = st0;
+      let o = o0;
+      for (const e of events) {
+        if (wellFormed(e)) maxSeen = Math.max(maxSeen, e.id);
+        if (wellFormed(e) && STUDIO_ONLY.has(e.type)) {
+          if (studioSeen.has(e.id)) continue;
+          studioSeen.add(e.id);
+          if (studioSeen.size > 5000) studioSeen.delete(studioSeen.values().next().value as number);
+          st = applyStudio(st, e, studioCtx);
+          continue;
+        }
+        const res = appendEvents(cursor, [e], quiet);
+        cursor = res.cursor;
+        for (const ev of res.accepted) {
+          if (ev.type === "case.flagged" && ev.case_id && (ev.payload as { kind?: unknown })?.kind === "possible_injection") flagged.add(ev.case_id);
+          o = applyEvent(o, ev, ctx);
+          officeRef.current = o; // seatFlagged reads the newest steps
+          st = applyStudio(st, ev, studioCtx);
+        }
       }
-      let o = officeRef.current;
-      for (const ev of res.accepted) {
-        if (ev.type === "case.flagged" && ev.case_id && (ev.payload as { kind?: unknown })?.kind === "possible_injection") flagged.add(ev.case_id);
-        o = applyEvent(o, ev, ctx);
-        st = applyStudio(st, ev, ctx);
-      }
-      if (live && o.lastSeat && o.lastKey !== officeRef.current.lastKey) setLive({ seat: o.lastSeat, key: o.lastKey });
-      else if (live && st.lastSeat && st.lastKey !== studioRef.current.lastKey) {
+      if (live && o.lastSeat && o.lastKey !== o0.lastKey) setLive({ seat: o.lastSeat, key: o.lastKey });
+      else if (live && st.lastSeat && st.lastKey !== st0.lastKey) {
         const act = st.desks[st.lastSeat].act;
         setLive({ seat: st.lastSeat, key: st.lastKey, ts: act?.ts, activity: true });
       }
-      if (st !== studioRef.current) {
+      if (st !== st0) {
         studioRef.current = st;
         setStudio(st);
       }
-      if (o !== officeRef.current) {
-        officeRef.current = o;
-        setOffice(o);
-      }
+      officeRef.current = o;
+      if (o !== o0) setOffice(o);
     };
 
     /** The session is dead at the gateway: sign this tab out (the effect re-runs with the theater token). */
@@ -171,7 +187,7 @@ export function useFirmFeed(session: string | null = null): Feed {
     const retryLater = () => {
       if (!alive) return;
       setStatus("reconnecting");
-      retry = setTimeout(() => alive && connect(cursor.lastId), reconnectDelayMs(attempt++));
+      retry = setTimeout(() => alive && connect(Math.max(cursor.lastId, maxSeen)), reconnectDelayMs(attempt++));
     };
 
     const wire = (src: EventSource) => {
@@ -225,7 +241,8 @@ export function useFirmFeed(session: string | null = null): Feed {
       const last = seed.lastId ?? 0;
       if (last > 0) {
         try {
-          const page = await fetchJson(eventsUrl(ep, Math.max(0, last - LOOKBACK), LOOKBACK), session);
+          const look = session ? LOOKBACK_SIGNED_IN : LOOKBACK;
+          const page = await fetchJson(eventsUrl(ep, Math.max(0, last - look), look), session);
           const data = (page as { data?: unknown }).data;
           if (alive && Array.isArray(data)) fold((data as UTaxEvent[]).filter((e) => typeof e?.id === "number" && e.id <= last));
         } catch (e) {
@@ -234,7 +251,7 @@ export function useFirmFeed(session: string | null = null): Feed {
         }
       }
       if (!alive) return;
-      connect(Math.max(cursor.lastId, last));
+      connect(Math.max(cursor.lastId, last, maxSeen));
     })();
     const poll = setInterval(() => void pollState(), STATE_MS);
 
@@ -243,6 +260,9 @@ export function useFirmFeed(session: string | null = null): Feed {
       clearInterval(poll);
       clearTimeout(retry);
       es?.close();
+      // Signed out (or in): the admin-only desks go at once, not after the next state fetch.
+      studioRef.current = emptyStudio();
+      setStudio(studioRef.current);
     };
   }, [session]);
 

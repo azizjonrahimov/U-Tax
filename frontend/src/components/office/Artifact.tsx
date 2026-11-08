@@ -1,16 +1,22 @@
 "use client";
 
-// D37: the artifact a department is making, drawn live in its window: an email being written and
-// sent, a post being typed and published, a workpaper filling cell by cell, a memo writing section
-// by section, the tax engine's two methods, a calendar invite. Text only; the parent re-mounts a
-// view (key = the artifact's key) when a new artifact starts, so it types from the beginning.
+// D37: the artifact a department is making, drawn live in its window: the email being written and
+// sent, the post being typed and published, the case's documents being built (the workpaper's
+// cells filling in, the memo writing section by section, the books row), the tax engine's two
+// methods, a calendar invite. Text only. The parent re-mounts a view (key = the artifact's key)
+// when a new artifact starts, so it plays from the beginning; the same artifact growing keeps
+// playing from where it was.
 
 import { useEffect, useState } from "react";
-import type { Activity, Artifact } from "@/office/artifact";
+import { current, type Activity, type Artifact, type Book, type Desk } from "@/office/artifact";
 
-const reduced = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+let reducedMotion: boolean | null = null;
+const reduced = () => {
+  if (reducedMotion === null) reducedMotion = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return reducedMotion;
+};
 
-/** How much of `total` (characters or rows) is shown: it catches up with what arrived, a little at a time. */
+/** How much of `total` (characters, cells, sections) is shown: it catches up with what arrived, a little at a time. */
 function useReveal(total: number, perTick: (left: number) => number, ms: number): number {
   const [shown, setShown] = useState(0);
   useEffect(() => {
@@ -21,12 +27,24 @@ function useReveal(total: number, perTick: (left: number) => number, ms: number)
   return Math.min(shown, total);
 }
 const chars = (left: number) => Math.max(2, Math.ceil(left / 30));
-const oneRow = () => 1;
+/** A workbook plays in a few seconds however many cells it has. */
+const cellsTick = (left: number) => Math.max(1, Math.ceil(left / 10));
 
-export function ActivityPill({ act }: { act: Activity | null }) {
-  if (!act) return null;
+export function ActivityPill({ act, now }: { act: Activity | null; now: number }) {
+  if (!act || !current(act.ts, now)) return null;
   const text = act.kind === "writing" ? "writing…" : act.kind === "tool" && act.tool ? `using ${act.tool}` : "thinking…";
   return <span className={`act ${act.kind}`}>{text}</span>;
+}
+
+/** The agent's own words about the work (its notes), while recent: never shown as an email. */
+export function AgentNotes({ desk, now, who }: { desk: Desk; now: number; who: string }) {
+  const n = desk.notes;
+  if (!n || !current(n.ts, now)) return null;
+  return (
+    <p className="notes" aria-live="polite">
+      <span className="notes-who">{who}&rsquo;s notes</span> {n.text}
+    </p>
+  );
 }
 
 export function ArtifactView({ art }: { art: Artifact }) {
@@ -35,10 +53,8 @@ export function ArtifactView({ art }: { art: Artifact }) {
       return <Mail art={art} />;
     case "post":
       return <Post art={art} />;
-    case "sheet":
-      return <Sheet art={art} />;
-    case "doc":
-      return <Doc art={art} />;
+    case "docs":
+      return <Docs art={art} />;
     case "calc":
       return <Calc art={art} />;
     case "invite":
@@ -49,6 +65,7 @@ export function ArtifactView({ art }: { art: Artifact }) {
 function Mail({ art }: { art: Extract<Artifact, { kind: "mail" }> }) {
   const n = useReveal(art.body.length, chars, 24);
   const typing = n < art.body.length;
+  const composing = art.state === "drafting";
   return (
     <div className="art mail">
       <div className="mail-head">
@@ -56,14 +73,14 @@ function Mail({ art }: { art: Extract<Artifact, { kind: "mail" }> }) {
           <span className="k">To</span> <span className="v">{art.to || "…"}</span>
         </div>
         <div>
-          <span className="k">Subject</span> <span className="v">{art.subject || (art.state === "drafting" ? "Writing…" : "")}</span>
+          <span className="k">Subject</span> <span className="v">{art.subject || (composing ? "Composing…" : "")}</span>
         </div>
       </div>
       <div className="mail-body">
-        {art.body.slice(0, n)}
-        {(typing || art.state === "drafting") && <span className="caret" aria-hidden />}
+        {composing && !art.body ? <span className="faint">Composing from the firm&rsquo;s template…</span> : art.body.slice(0, n)}
+        {(typing || composing) && <span className="caret" aria-hidden />}
       </div>
-      {art.attachments.length > 0 && (
+      {art.attachments.length > 0 && !typing && (
         <div className="attach" aria-label="Attachments">
           {art.attachments.map((f) => (
             <span key={f} className="file">
@@ -95,11 +112,10 @@ function Post({ art }: { art: Extract<Artifact, { kind: "post" }> }) {
         ))}
       </div>
       <div className="post-box">
-        {art.text.slice(0, n)}
+        {art.text ? art.text.slice(0, n) : <span className="faint">Writing the post…</span>}
         {(typing || art.state === "drafting") && <span className="caret" aria-hidden />}
-        {!art.text && art.state === "drafting" && <span className="faint">Writing the post…</span>}
       </div>
-      {art.image && (
+      {art.image && !typing && (
         // eslint-disable-next-line @next/next/no-img-element -- the gateway's own ad image, checked by the feed
         <img className="post-img" src={art.image} alt="The post's image" referrerPolicy="no-referrer" onError={(e) => (e.currentTarget.hidden = true)} />
       )}
@@ -110,81 +126,133 @@ function Post({ art }: { art: Extract<Artifact, { kind: "post" }> }) {
   );
 }
 
-const COLS = "ABCDEFGH";
+const DOC_LABEL = { workpaper: "Workpaper", memo: "Memo", books: "Books" } as const;
+const MAX_GRID_ROWS = 24;
+const MAX_GRID_COLS = 5;
 
-function Sheet({ art }: { art: Extract<Artifact, { kind: "sheet" }> }) {
-  const n = useReveal(art.rows.length, oneRow, 380);
-  const tab = art.rows[Math.max(0, n - 1)]?.tab ?? art.tabs[0] ?? "Sheet1";
-  const rows = art.rows.slice(0, n).filter((r) => r.tab === tab);
+/** The case's documents, played back in the order they were built: cells, then sections, then the books row. */
+function Docs({ art }: { art: Extract<Artifact, { kind: "docs" }> }) {
+  const n = useReveal(art.units.length, cellsTick, 140);
+  const shown = art.units.slice(0, n);
+  const at = shown[shown.length - 1] ?? art.units[0];
+  const doc = at?.doc ?? "workpaper";
+  const done = n >= art.units.length;
+  const present = (["workpaper", "memo", "books"] as const).filter((d) => art[d]);
   return (
-    <div className="art sheet">
-      <div className="sheet-file mono">{art.file}</div>
+    <div className="art docs">
+      <div className="doc-tabs" aria-hidden>
+        {present.map((d) => (
+          <span key={d} className={d === doc ? "on" : ""}>
+            {art[d]?.file ?? DOC_LABEL[d]}
+            {/* ticked once its own playback has finished, not before */}
+            {art[d]?.verified === true && shown.filter((u) => u.doc === d).length === art.units.filter((u) => u.doc === d).length && (done || d !== doc) ? " ✓" : ""}
+          </span>
+        ))}
+      </div>
+      {doc === "memo" ? (
+        <article className="page-doc">
+          {(art.memo?.sections ?? []).slice(0, shown.filter((u) => u.doc === "memo").length).map((s, i, list) => (
+            <section key={i} className={i === list.length - 1 ? "fresh" : undefined}>
+              <h3>{s}</h3>
+            </section>
+          ))}
+          {!done && <span className="caret" aria-hidden />}
+        </article>
+      ) : (
+        <Grid book={art[doc]} sheet={at?.sheet} revealed={shown.filter((u) => u.doc === doc)} last={at} />
+      )}
+      {done && art[doc]?.verified !== null && art[doc]?.verified !== undefined && (
+        <span className={`stamp${art[doc]?.verified ? "" : " bad"}`}>{art[doc]?.verified ? "Verified ✓" : "Check failed"}</span>
+      )}
+    </div>
+  );
+}
+
+const colIndex = (letters: string) => [...letters].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+
+function Grid({ book, sheet, revealed, last }: { book: Book | null; sheet: string | undefined; revealed: { sheet?: string; cell?: string }[]; last: { cell?: string } | undefined }) {
+  if (!book) return null;
+  const tab = sheet ?? book.sheets[0] ?? "Sheet1";
+  const cells = book.cells[tab];
+  const sheetTabs = (
+    <div className="sheet-tabs">
+      {(book.sheets.length ? book.sheets : [tab]).map((t) => (
+        <span key={t} className={t === tab ? "on" : ""}>
+          {t}
+        </span>
+      ))}
+    </div>
+  );
+  if (!cells) {
+    // A public reader: one line per build step on its tab.
+    const lines = book.lines.filter((l) => l.tab === tab).slice(0, revealed.filter((u) => u.sheet === tab).length);
+    return (
+      <div className="sheet">
+        <table>
+          <tbody>
+            {lines.map((l, i) => (
+              <tr key={i} className={i === lines.length - 1 ? "fresh" : undefined}>
+                <th className="mono">{i + 1}</th>
+                <td>{l.text}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {sheetTabs}
+      </div>
+    );
+  }
+  const shown = new Set(revealed.filter((u) => u.sheet === tab && u.cell).map((u) => u.cell as string));
+  let maxRow = 1;
+  let maxCol = 1;
+  for (const ref of Object.keys(cells)) {
+    const m = /^([A-Z]{1,2})([0-9]+)$/.exec(ref);
+    if (!m) continue;
+    maxRow = Math.max(maxRow, Number(m[2]));
+    maxCol = Math.max(maxCol, colIndex(m[1]) + 1);
+  }
+  const rows = Math.min(maxRow, MAX_GRID_ROWS);
+  const cols = Math.min(maxCol, MAX_GRID_COLS);
+  const letters = Array.from({ length: cols }, (_, i) => String.fromCharCode(65 + i));
+  return (
+    <div className="sheet">
       <table>
         <thead>
           <tr>
             <th aria-hidden />
-            <th>{COLS[0]}</th>
-            <th>{COLS[1]}</th>
+            {letters.map((l) => (
+              <th key={l}>{l}</th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className={i === rows.length - 1 ? "fresh" : undefined}>
-              <th className="mono">{i + 1}</th>
-              <td>{r.label}</td>
-              <td className="mono num">{r.value}</td>
-            </tr>
-          ))}
-          {Array.from({ length: Math.max(0, 4 - rows.length) }, (_, i) => (
-            <tr key={`e${i}`} className="empty-row" aria-hidden>
-              <th className="mono">{rows.length + i + 1}</th>
-              <td />
-              <td />
+          {Array.from({ length: rows }, (_, r) => (
+            <tr key={r}>
+              <th className="mono">{r + 1}</th>
+              {letters.map((l) => {
+                const ref = `${l}${r + 1}`;
+                const v = shown.has(ref) ? (cells[ref] ?? "") : "";
+                return (
+                  <td key={ref} className={`${/^[$\d(-]/.test(v) ? "mono num" : ""}${last?.cell === ref ? " fresh" : ""}`}>
+                    {v}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
       </table>
-      <div className="sheet-tabs">
-        {(art.tabs.length ? art.tabs : ["Sheet1"]).map((t) => (
-          <span key={t} className={t === tab ? "on" : ""}>
-            {t}
-          </span>
-        ))}
-      </div>
-      <Stamp verified={art.verified} done={art.state === "done" && n >= art.rows.length} />
+      {sheetTabs}
     </div>
   );
-}
-
-function Doc({ art }: { art: Extract<Artifact, { kind: "doc" }> }) {
-  const n = useReveal(art.sections.length, oneRow, 600);
-  return (
-    <div className="art doc">
-      <div className="sheet-file mono">{art.file}</div>
-      <article className="page-doc">
-        {art.sections.slice(0, n).map((s, i) => (
-          <section key={i} className={i === n - 1 ? "fresh" : undefined}>
-            <h3>{s.title}</h3>
-            {s.text && <p>{s.text}</p>}
-          </section>
-        ))}
-        {art.state === "drafting" && <span className="caret" aria-hidden />}
-      </article>
-      <Stamp verified={art.verified} done={art.state === "done" && n >= art.sections.length} />
-    </div>
-  );
-}
-
-function Stamp({ verified, done }: { verified: boolean | null; done: boolean }) {
-  if (!done || verified === null) return null;
-  return <span className={`stamp${verified ? "" : " bad"}`}>{verified ? "Verified ✓" : "Check failed"}</span>;
 }
 
 function Calc({ art }: { art: Extract<Artifact, { kind: "calc" }> }) {
-  const n = useReveal(art.lines.length, oneRow, 700);
+  const n = useReveal(art.lines.length, () => 1, 700);
   return (
     <div className="art calc">
       <div className="sheet-file mono">utax · tax engine</div>
+      {art.lines.length === 0 && <p className="faint">Running both methods…</p>}
       <dl>
         {art.lines.slice(0, n).map((l) => (
           <div key={l.label} className={l.chosen ? "chosen" : undefined}>

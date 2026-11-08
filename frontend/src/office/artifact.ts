@@ -1,12 +1,14 @@
 // D37 (contract v1.18): what each department is making right now, drawn live in its window. A pure
-// fold over two kinds of event:
-// - `agent.activity` (admin and session readers only; never the public theater): the agent is
-//   thinking, a tool started or finished, or the text it is writing (cumulative: the latest ≤ 600
-//   characters of the draft, masked, at most one event a second);
+// fold over:
+// - `agent.activity` (admin and session readers only; never the public theater): thinking, a tool
+//   started or finished (its name, `utax.`-prefixed), and `writing`: the agent's own message so far
+//   (its narration of the work, masked, ≤ 600 chars). The gateway writes every email from a
+//   template, so narration is shown as the agent's notes, never as an email.
 // - the domain events that carry the finished artifact: for admin readers `payload.sent` (the email
-//   as it actually left) and `payload.cells` (what each doc.step wrote); the post as published; the
-//   tax engine's numbers; the invite. Theater readers get none of that and see the plain steps.
-// Everything renders as text. A case flagged as a possible injection never shows its mail.
+//   as it actually left) and `payload.cells` (each workbook sheet as written); public readers get
+//   the masked public fields. The post as published, the tax engine's numbers, the invite.
+// Everything renders as text. A case flagged as a possible injection never shows its mail, its
+// cells or (as far as the desk can tell) its agent's notes.
 
 import { formatCents } from "@/theater/format";
 import type { UTaxEvent } from "@/theater/events";
@@ -30,21 +32,29 @@ export interface PostArt {
   image: string | null;
   state: ArtifactState;
 }
-export interface SheetArt {
-  kind: "sheet";
+export type DocName = "workpaper" | "memo" | "books";
+/** One workbook: its cells as written (admin readers), else one line per build step. */
+export interface Book {
   file: string;
-  /** Sheet tabs in the order they appeared; each row is one cell the gateway wrote. */
-  tabs: string[];
-  rows: { tab: string; label: string; value: string }[];
-  state: ArtifactState;
+  /** sheet -> cell -> value */
+  cells: Record<string, Record<string, string>>;
+  sheets: string[];
+  lines: { tab: string; text: string }[];
   verified: boolean | null;
 }
-export interface DocArt {
-  kind: "doc";
+export interface Memo {
   file: string;
-  sections: { title: string; text: string }[];
-  state: ArtifactState;
+  sections: string[];
   verified: boolean | null;
+}
+/** The case's documents as they are built; `units` is the order things appeared, for the playback. */
+export interface DocsArt {
+  kind: "docs";
+  workpaper: Book | null;
+  memo: Memo | null;
+  books: Book | null;
+  units: { doc: DocName; sheet?: string; cell?: string }[];
+  state: ArtifactState;
 }
 export interface CalcArt {
   kind: "calc";
@@ -57,37 +67,38 @@ export interface InviteArt {
   minutes: number;
   state: ArtifactState;
 }
-export type Artifact = (MailArt | PostArt | SheetArt | DocArt | CalcArt | InviteArt) & {
-  /** Changes when a new artifact starts (the window re-mounts and types from the start). */
+export type Artifact = (MailArt | PostArt | DocsArt | CalcArt | InviteArt) & {
+  /** Changes when a new artifact starts (the window re-mounts and plays from the start). */
   key: string;
   ts: string;
   caseId: string | null;
 };
 
-/** What the agent is doing this moment (from agent.activity). */
+/** What the agent is doing this moment (agent.activity), shown while it is recent. */
 export interface Activity {
-  key: string;
   ts: string;
-  kind: "thinking" | "tool" | "writing" | "idle";
+  kind: "thinking" | "tool" | "writing";
   tool: string | null;
 }
 
 export interface Desk {
   art: Artifact | null;
   act: Activity | null;
+  /** The agent's own words so far (its notes on the work), shown while recent. */
+  notes: { text: string; ts: string } | null;
 }
 
 export interface Studio {
   desks: Record<Seat, Desk>;
-  /** Files built per case (doc.created), attached to the memo when it is sent. */
-  files: Record<string, string[]>;
-  /** The desk agent.activity moved last (auto-follow), and that event's key. */
+  /** The files a case's memo attaches (the workpaper and the memo, latest version). */
+  files: Record<string, Partial<Record<"workpaper" | "memo", string>>>;
+  /** The desk a live artifact-opening event moved last (auto-follow), and that event's key. */
   lastSeat: Seat | null;
   lastKey: string;
 }
 
 export const emptyStudio = (): Studio => ({
-  desks: Object.fromEntries(SEATS.map((s): [Seat, Desk] => [s, { art: null, act: null }])) as unknown as Record<Seat, Desk>,
+  desks: Object.fromEntries(SEATS.map((s): [Seat, Desk] => [s, { art: null, act: null, notes: null }])) as unknown as Record<Seat, Desk>,
   files: {},
   lastSeat: null,
   lastKey: "",
@@ -95,6 +106,13 @@ export const emptyStudio = (): Studio => ({
 
 /** Event types the office handles itself (the theater's script doesn't know them). */
 export const STUDIO_ONLY: ReadonlySet<string> = new Set(["agent.activity", "doc.step", "doc.created", "doc.verified"]);
+
+/** Activity and notes count as current for this long after their log time. */
+export const ACTIVITY_MS = 20_000;
+/** An artifact stays in the window for this long after its last change (the step page takes over after). */
+export const ARTIFACT_MS = 5 * 60_000;
+/** A composer opened by a tool that never produced anything closes after this long. */
+export const DRAFT_MS = 2 * 60_000;
 
 type P = Record<string, unknown>;
 const isObj = (v: unknown): v is P => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -109,52 +127,42 @@ const block = (t: string, max: number) =>
     t
       .replace(/\r\n?/g, "\n")
       .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
-      .replace(/\n{3,}/g, "\n\n"),
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
     max,
   );
 
 const ALIAS: Readonly<Record<string, Seat>> = {
   chief: "cos", cos: "cos", intake: "intake", tax: "tax", qa: "qa", acct: "acct", accounting: "acct", mkt: "mkt", marketing: "mkt", hr: "hr",
 };
-/** The seat an activity belongs to: the event's actor, else a seat named in `agent` ("utax-intake"). */
+/** The seat an activity belongs to: the event's actor, else the last seat word in `agent` ("u-tax-marketing"). */
 export function seatOf(ev: UTaxEvent): Seat | null {
   if ((SEATS as readonly string[]).includes(ev.actor)) return ev.actor as Seat;
   const agent = isObj(ev.payload) ? str(ev.payload, "agent").toLowerCase() : "";
-  // The last seat word wins ("u-tax-marketing" is Marketing, not Tax).
   let seat: Seat | null = null;
   for (const part of agent.split(/[^a-z]+/)) if (Object.hasOwn(ALIAS, part)) seat = ALIAS[part];
   return seat;
 }
 
+/** A tool's own name: the MCP server prefix ("utax.") off. */
+export const bareTool = (t: string) => t.replace(/^[a-z0-9_-]+\./i, "");
+
 /** Which artifact a tool makes, so the window opens the right app the moment the tool starts. */
 function artFor(tool: string, base: { key: string; ts: string; caseId: string | null }): Artifact | null {
-  if (/^(ask_client|send_memo|follow_up|hr_outreach|send_email|reply_email)$/.test(tool))
+  if (/^(ask_client|send_memo|follow_up|hr_outreach)$/.test(tool))
     return { ...base, kind: "mail", app: tool === "hr_outreach" ? "AgentMail · hiring" : "AgentMail · compose", to: "", subject: "", body: "", attachments: [], state: "drafting" };
-  if (/^(post_social|make_ad)$/.test(tool)) return { ...base, kind: "post", channel: "", text: "", image: null, state: "drafting" };
-  if (tool === "prepare_documents") return { ...base, kind: "sheet", file: "Workpaper.xlsx", tabs: [], rows: [], state: "drafting", verified: null };
+  if (tool === "post_social") return { ...base, kind: "post", channel: "", text: "", image: null, state: "drafting" };
+  if (tool === "prepare_documents") return { ...base, kind: "docs", workpaper: null, memo: null, books: null, units: [], state: "drafting" };
   if (tool === "compute_tax") return { ...base, kind: "calc", lines: [], state: "drafting" };
   if (tool === "book_call") return { ...base, kind: "invite", with: "", minutes: 0, state: "drafting" };
   return null;
 }
 
-const MAX_TEXT = 6000;
-const MAX_ROWS = 60;
-
-/**
- * The text being written replaces the draft (v1.18: each writing event carries the latest ≤ 600
- * characters, so a long draft shows its newest part, led by an ellipsis).
- */
-function setDraft(art: Artifact, text: string): Artifact {
-  if (art.state !== "drafting") return art;
-  const t = block(text, 600);
-  if (art.kind === "mail") return { ...art, body: t };
-  if (art.kind === "post") return { ...art, text: t };
-  return art;
-}
-
 export interface StudioCtx {
-  /** A case flagged as a possible injection: its mail is never shown. */
+  /** A case flagged as a possible injection: its mail and cells are never shown. */
   flagged: (caseId: string | null) => boolean;
+  /** Whether this desk's newest step is about a flagged case (its agent's notes are then hidden). */
+  seatFlagged: (seat: Seat) => boolean;
   /** The masked name for a case (never a raw id). */
   name: (caseId: string | null) => string;
   /** An image URL the feed allows, else undefined. */
@@ -162,14 +170,18 @@ export interface StudioCtx {
 }
 
 const HIDDEN = "Hidden: this client's mail was flagged by QA.";
+const MAX_TEXT = 6000;
+const MAX_UNITS = 400;
 
-/** A finished artifact ends the agent's writing or tool step (the next activity, if any, says what follows). */
-const settled = (act: Activity | null): Activity | null => (act && (act.kind === "writing" || act.kind === "tool") ? null : act);
+/** A finished artifact ends the agent's tool step (the next activity, if any, says what follows). */
+const settled = (act: Activity | null): Activity | null => (act && act.kind === "tool" ? null : act);
 
 function put(st: Studio, seat: Seat, desk: Partial<Desk>, live?: string): Studio {
   const next = { ...st, desks: { ...st.desks, [seat]: { ...st.desks[seat], ...desk } } };
   return live ? { ...next, lastSeat: seat, lastKey: live } : next;
 }
+
+const emptyBook = (file: string): Book => ({ file, cells: {}, sheets: [], lines: [], verified: null });
 
 /** Fold one event into the studio. Unknown or malformed events change nothing. */
 export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
@@ -183,129 +195,180 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
     if (!seat) return st;
     const desk = st.desks[seat];
     const kind = str(p, "kind");
-    const tool = line(str(p, "tool"), 40) || null;
-    if (kind === "thinking") return put(st, seat, { act: { key, ts: ev.ts, kind: "thinking", tool: desk.act?.tool ?? null } }, key);
+    const tool = bareTool(line(str(p, "tool"), 60)).slice(0, 40) || null;
+    if (kind === "thinking") return put(st, seat, { act: { ts: ev.ts, kind: "thinking", tool: null } });
     if (kind === "tool_started" && tool) {
       const art = artFor(tool, base);
-      return put(st, seat, { act: { key, ts: ev.ts, kind: "tool", tool }, ...(art ? { art } : {}) }, key);
+      // Only a tool that makes something moves auto-follow (board reads and chatter don't).
+      return put(st, seat, { act: { ts: ev.ts, kind: "tool", tool }, ...(art ? { art } : {}) }, art ? key : undefined);
     }
     if (kind === "writing") {
-      const text = typeof p.text === "string" ? p.text : "";
-      let art = desk.art;
-      // Text with no artifact open yet: the agent is writing a message (the common case).
-      if (!art || art.state !== "drafting") art = artFor("send_email", base);
-      if (art && !hide) art = setDraft(art, text);
-      return put(st, seat, { act: { key, ts: ev.ts, kind: "writing", tool: desk.act?.tool ?? null }, art }, key);
+      const text = typeof p.text === "string" ? block(p.text, 600) : "";
+      const notes = text && !ctx.seatFlagged(seat) ? { text, ts: ev.ts } : desk.notes;
+      return put(st, seat, { act: { ts: ev.ts, kind: "writing", tool: null }, notes });
     }
-    if (kind === "tool_done") return put(st, seat, { act: { key, ts: ev.ts, kind: "thinking", tool: null } });
-    if (kind === "idle") return put(st, seat, { act: null });
+    if (kind === "tool_done") return put(st, seat, { act: { ts: ev.ts, kind: "thinking", tool: null } });
+    if (kind === "idle") {
+      // A composer that never got anything closes; a finished artifact stays.
+      const art = desk.art && desk.art.state === "drafting" && desk.art.kind !== "docs" ? null : desk.art;
+      return put(st, seat, { act: null, art });
+    }
     return st;
+  }
+
+  if (ev.type === "case.flagged") {
+    if (!ev.case_id || p.kind !== "possible_injection") return st;
+    // Everything already on a desk from that case goes, and agents' notes too (they can't be tied to a case).
+    let next = st;
+    for (const seat of SEATS) {
+      const d = next.desks[seat];
+      const art = d.art && (d.art.caseId === ev.case_id || (d.art.kind === "mail" && d.art.caseId === null)) ? null : d.art;
+      if (art !== d.art || d.notes) next = put(next, seat, { art, notes: null });
+    }
+    return next;
   }
 
   const seat = (SEATS as readonly string[]).includes(ev.actor) ? (ev.actor as Seat) : null;
   if (!seat) return st;
   const who = ctx.name(ev.case_id);
+  const prev = st.desks[seat].art;
+  const act = settled(st.desks[seat].act);
 
   switch (ev.type) {
     case "client.asked":
     case "memo.sent":
     case "client.followed_up":
     case "hr.outreach": {
-      const prev = st.desks[seat].art;
-      // v1.18: admin readers get `sent` (the email as it actually left); theater readers don't.
+      // v1.18: admin readers get `sent` (the email as it actually left); public readers the masked fields.
       const sent: P = isObj(p.sent) ? p.sent : {};
-      const subject = line(str(sent, "subject"), 200);
-      const body = block(str(sent, "body"), MAX_TEXT);
+      const subject = line(str(sent, "subject") || str(p, "subject"), 200);
+      const body = block(str(sent, "body") || str(p, "body"), MAX_TEXT);
+      if (!body && !hide) return put(st, seat, { act, art: prev && prev.kind === "mail" && prev.state === "drafting" ? null : prev }); // nothing to show: the step page says it
       const to = line(str(sent, "to_masked"), 80) || (ev.type === "hr.outreach" ? line(str(p, "label"), 40) || "a candidate" : line(str(p, "to_masked"), 80) || who);
       const fallbackSubject =
         ev.type === "memo.sent" ? `Your tax estimate, ${who}` : ev.type === "client.asked" ? "A few details for your estimate" : ev.type === "hr.outreach" ? "A tax-season gig, and a call" : "Following up";
-      const attachments = ev.type === "memo.sent" && ev.case_id ? (st.files[ev.case_id] ?? []) : [];
-      // The draft typed live stays on screen if the event carries no body (a public reader).
-      const draft = prev?.kind === "mail" && prev.state === "drafting" ? prev.body : "";
+      const files = ev.type === "memo.sent" && ev.case_id ? st.files[ev.case_id] : undefined;
+      const attachments = files ? [files.workpaper, files.memo].filter((f): f is string => !!f) : [];
+      // The composer the tool opened becomes this mail (no re-mount: it types the real text in).
+      const k = prev?.kind === "mail" && prev.state === "drafting" ? prev.key : key;
       const art: Artifact = {
         ...base,
+        key: k,
         kind: "mail",
         app: ev.type === "hr.outreach" ? "AgentMail · hiring" : "AgentMail · compose",
         to: hide ? "Hidden" : to,
         subject: hide ? "Hidden" : subject || fallbackSubject,
-        body: hide ? HIDDEN : body || draft,
-        attachments,
+        body: hide ? HIDDEN : body,
+        attachments: hide ? [] : attachments,
         state: "done",
       };
-      return put(st, seat, { art, act: settled(st.desks[seat].act) });
+      return put(st, seat, { art, act });
     }
     case "post.published": {
-      const prev = st.desks[seat].art;
-      const text = block(str(p, "text"), 600) || (prev?.kind === "post" ? prev.text : "");
-      return put(st, seat, { art: { ...base, kind: "post", channel: line(str(p, "channel"), 20).toLowerCase(), text, image: ctx.image(p.image_url) ?? null, state: "done" }, act: settled(st.desks[seat].act) });
-    }
-    case "ad.created": {
-      return put(st, seat, { art: { ...base, kind: "post", channel: "", text: block(str(p, "headline") || str(p, "text"), 600), image: ctx.image(p.image_url) ?? null, state: "drafting" } });
+      const text = block(str(p, "text"), 600);
+      if (!text) return st;
+      const k = prev?.kind === "post" && prev.state === "drafting" ? prev.key : key;
+      return put(st, seat, { art: { ...base, key: k, kind: "post", channel: line(str(p, "channel"), 20).toLowerCase(), text, image: ctx.image(p.image_url) ?? null, state: "done" }, act });
     }
     case "tax.computed": {
       const auth = num(p, "authorized_method_cents");
       const par = num(p, "assumed_par_method_cents");
       const total = num(p, "total_cents");
-      if (![auth, par, total].every((c) => c !== null && Number.isSafeInteger(c) && c >= 0)) return st;
+      if (auth === null || par === null || total === null || ![auth, par, total].every((c) => Number.isSafeInteger(c) && c >= 0)) return st;
       const chosen = str(p, "chosen");
       return put(st, seat, {
         art: {
           ...base,
           kind: "calc",
           lines: [
-            { label: "Authorized Shares Method", value: formatCents(auth as number), chosen: chosen === "authorized" },
-            { label: "Assumed Par Value Method", value: formatCents(par as number), chosen: chosen !== "authorized" },
-            { label: `Total due for ${who}`, value: formatCents(total as number) },
+            { label: "Authorized Shares Method", value: formatCents(auth), chosen: chosen === "authorized" },
+            { label: "Assumed Par Value Method", value: formatCents(par), chosen: chosen !== "authorized" },
+            { label: `Total due for ${who}`, value: formatCents(total) },
           ],
           state: "done",
         },
+        act,
       });
     }
     case "call.booked": {
       const minutes = num(p, "minutes") ?? 0;
       const w = p.kind === "candidate" ? line(str(p, "invitee_masked"), 40) || "a candidate" : who;
-      return put(st, seat, { art: { ...base, kind: "invite", with: w, minutes, state: "done" }, act: settled(st.desks[seat].act) });
+      return put(st, seat, { art: { ...base, kind: "invite", with: w, minutes, state: "done" }, act });
     }
     case "doc.step": {
       const doc = str(p, "doc");
-      const step = line(str(p, "step"), 80);
+      if (doc !== "workpaper" && doc !== "memo" && doc !== "books") return st;
       const detail = line(str(p, "detail"), 200);
-      // v1.18: admin readers get the cells this step wrote.
-      const cells = Array.isArray(p.cells)
-        ? p.cells.filter(isObj).slice(0, 40).map((c) => ({ tab: line(str(c, "sheet"), 40) || "Sheet1", label: line(str(c, "cell"), 12), value: line(typeof c.value === "number" ? String(c.value) : str(c, "value"), 80) }))
-        : [];
-      if (!step && !detail && !cells.length) return st;
-      const prev = st.desks[seat].art;
+      const cur: Artifact & DocsArt =
+        prev?.kind === "docs" && prev.caseId === ev.case_id ? prev : { ...base, kind: "docs", workpaper: null, memo: null, books: null, units: [], state: "drafting" };
+      const units = [...cur.units];
+      let next: Artifact & DocsArt = { ...cur, ts: ev.ts };
       if (doc === "memo") {
-        const cur = prev?.kind === "doc" && prev.caseId === ev.case_id && prev.state === "drafting" ? prev : { ...base, kind: "doc" as const, file: "Memo.docx", sections: [], state: "drafting" as const, verified: null };
-        return put(st, seat, { art: { ...cur, ts: ev.ts, sections: [...cur.sections, { title: step || "Section", text: detail }].slice(-12) } });
+        const m = cur.memo ?? { file: "Memo.docx", sections: [], verified: null };
+        const title = detail.replace(/^Memo:\s*/i, "") || `Part ${num(p, "step") ?? m.sections.length + 1}`;
+        next = { ...next, memo: { ...m, sections: [...m.sections, title].slice(-12) } };
+        units.push({ doc });
+      } else {
+        const b = cur[doc] ?? emptyBook(doc === "books" ? "U-Tax_Books.xlsx" : "Workpaper.xlsx");
+        // v1.18: admin readers get the sheet as written (each step resends its sheet); never for a flagged case.
+        const cells = !hide && Array.isArray(p.cells) ? p.cells.filter(isObj).slice(0, 400) : [];
+        if (cells.length) {
+          const all = { ...b.cells };
+          const sheets = [...b.sheets];
+          for (const c of cells) {
+            const sheet = line(str(c, "sheet"), 40) || "Sheet1";
+            const ref = str(c, "cell").toUpperCase();
+            if (!/^[A-Z]{1,2}[0-9]{1,4}$/.test(ref)) continue;
+            const value = line(typeof c.value === "number" ? String(c.value) : str(c, "value"), 80);
+            if (!sheets.includes(sheet)) sheets.push(sheet);
+            const had = all[sheet]?.[ref];
+            all[sheet] = { ...(all[sheet] ?? {}), [ref]: value };
+            if (had !== value) units.push({ doc, sheet, cell: ref });
+          }
+          next = { ...next, [doc]: { ...b, cells: all, sheets } };
+        } else {
+          const tab = doc === "books" ? "Books" : detail.split(":")[0].trim() || "Workpaper";
+          const sheets = b.sheets.includes(tab) ? b.sheets : [...b.sheets, tab];
+          next = { ...next, [doc]: { ...b, sheets, lines: [...b.lines, { tab, text: detail.split(":").slice(1).join(":").trim() || detail }].slice(-40) } };
+          units.push({ doc, sheet: tab });
+        }
       }
-      // The workpaper and the books are spreadsheets: each step is a row on its tab.
-      const tab = doc === "books" ? "Books" : step.split(":")[0].trim() || "Workpaper";
-      const cur =
-        prev?.kind === "sheet" && prev.caseId === ev.case_id && prev.state === "drafting"
-          ? prev
-          : { ...base, kind: "sheet" as const, file: doc === "books" ? "U-Tax_Books.xlsx" : "Workpaper.xlsx", tabs: [], rows: [], state: "drafting" as const, verified: null };
-      const [label, ...rest] = (detail || step).split(":");
-      const value = rest.join(":").trim() || detail;
-      const added = cells.length ? cells : [{ tab, label: line(label, 60), value: line(value, 80) }];
-      const tabs = [...cur.tabs];
-      for (const a of added) if (!tabs.includes(a.tab)) tabs.push(a.tab);
-      return put(st, seat, { art: { ...cur, ts: ev.ts, tabs, rows: [...cur.rows, ...added].slice(-MAX_ROWS) } });
+      next = { ...next, units: units.slice(-MAX_UNITS) };
+      return put(st, seat, { art: next, act });
     }
     case "doc.created": {
-      const file = line(str(p, "file_name"), 80);
+      const doc = str(p, "doc");
+      const file = line(str(p, "file_name"), 100);
       const cid = ev.case_id;
-      const files = cid && file ? { ...st.files, [cid]: [...(st.files[cid] ?? []).filter((f) => f !== file), file].slice(-6) } : st.files;
-      const prev = st.desks[seat].art;
-      const art = prev && (prev.kind === "sheet" || prev.kind === "doc") && prev.caseId === cid && file ? { ...prev, file } : prev;
+      // Only the workpaper and the memo go to the client (the books stay in the firm); the latest version wins.
+      let files = st.files;
+      if (cid && file && (doc === "workpaper" || doc === "memo")) {
+        files = { ...st.files, [cid]: { ...st.files[cid], [doc]: file } };
+        const ids = Object.keys(files);
+        if (ids.length > 50) delete files[ids[0]];
+      }
+      let art = prev;
+      if (prev?.kind === "docs" && prev.caseId === cid && file && (doc === "workpaper" || doc === "memo" || doc === "books")) {
+        const d = prev[doc];
+        art = d ? { ...prev, [doc]: { ...d, file } } : prev;
+      }
       return { ...put(st, seat, { art }), files };
     }
     case "doc.verified": {
-      const prev = st.desks[seat].art;
-      if (!prev || (prev.kind !== "sheet" && prev.kind !== "doc") || prev.caseId !== ev.case_id) return st;
-      return put(st, seat, { art: { ...prev, state: "done", verified: p.ok === true } });
+      const doc = str(p, "doc");
+      if (prev?.kind !== "docs" || prev.caseId !== ev.case_id || (doc !== "workpaper" && doc !== "memo" && doc !== "books")) return st;
+      const d = prev[doc];
+      if (!d) return st;
+      const next = { ...prev, [doc]: { ...d, verified: p.ok === true } };
+      const all = (["workpaper", "memo", "books"] as const).every((k) => !next[k] || next[k]?.verified !== null);
+      return put(st, seat, { art: { ...next, state: all ? "done" : "drafting" }, act });
     }
   }
   return st;
 }
+
+/** Whether a desk's activity or notes are still current at `now` (no idle ever came, or it's history). */
+export const current = (ts: string | undefined, now: number, ms = ACTIVITY_MS) => {
+  const at = Date.parse(ts ?? "");
+  return Number.isFinite(at) && now - at < ms && at - now < ms;
+};

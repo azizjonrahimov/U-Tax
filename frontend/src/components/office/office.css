@@ -203,3 +203,11 @@
 @media (prefers-reduced-motion: reduce) {
   .office .of-dept .art, .office .of-dept .art .caret, .office .of-dept .act::after, .office .of-dept .page-doc section.fresh, .office .of-dept .calc dl div { animation: none; }
 }
+/* D37 review: the agent's own notes (its narration), under the window; the case's documents as tabs */
+.office .of-dept .notes { margin: 0; padding: 10px 16px; border-top: 1px solid var(--line); font-size: 14px; color: var(--dim); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.office .of-dept .notes-who { color: var(--c); font-weight: 600; margin-right: 6px; }
+.office .of-dept .doc-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.office .of-dept .doc-tabs span { padding: 4px 10px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); font: 500 13px var(--font-jetbrains-mono), monospace; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.office .of-dept .doc-tabs span.on { color: var(--text); border-color: var(--c); }
+.office .of-dept .sheet td.fresh { background: color-mix(in srgb, var(--c) 22%, transparent); }
+.office .of-dept .sheet { overflow: auto; }

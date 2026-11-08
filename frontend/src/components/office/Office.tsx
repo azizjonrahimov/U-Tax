@@ -5,15 +5,15 @@
 // from the event log. Auto-follow opens whichever department acted last; any click takes over.
 
 import Link from "next/link";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Theater } from "@/components/theater/Theater";
 import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
 import { logout, useSessionToken } from "@/ceo/session";
 import { followDelay, followTarget, initialView, type View } from "@/office/follow";
-import type { Desk } from "@/office/artifact";
-import { ActivityPill, ArtifactView } from "./Artifact";
+import { ARTIFACT_MS, current, DRAFT_MS, type Desk } from "@/office/artifact";
+import { ActivityPill, AgentNotes, ArtifactView } from "./Artifact";
 import { SEAT_NAME, SEAT_ROLE, SEATS, type Seat, type Workspace, type WsStep } from "@/office/workspace";
 import "./office.css";
 
@@ -26,6 +26,7 @@ const seatColor = (seat: Seat) => `var(--seat-${seat})`;
 export function Office() {
   const session = useSessionToken();
   const { office, numbers, status, live, studio } = useFirmFeed(session);
+  const theater = useMemo(() => <Theater />, []);
   const [view, setView] = useState<View>("overview");
   const [follow, setFollow] = useState(true);
   const lastSwitch = useRef(0);
@@ -148,10 +149,10 @@ export function Office() {
       <div className="office-main">
         {view === "overview" ? (
           <div className="overview">
-            <Theater />
+            {theater}
           </div>
         ) : (
-          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || studio.desks[view].act !== null} following={follow} />
+          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} />
         )}
       </div>
     </div>
@@ -180,7 +181,7 @@ function FeedDot({ status }: { status: FeedStatus }) {
 
 // ------------------------------------------------------------------ one department
 
-function Department({ desk, studio, numbers, working, following }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean }) {
+function Department({ desk, studio, numbers, working, following, now }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number }) {
   const seat = desk.seat;
   const step = desk.steps[0];
   return (
@@ -196,7 +197,7 @@ function Department({ desk, studio, numbers, working, following }: { desk: Works
         {following && <span className="dept-follow">Auto-following the firm</span>}
       </header>
       <div className="dept-grid">
-        <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} studio={studio} />
+        <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} studio={studio} now={now} />
         <aside className="dept-side">
           <Kpis desk={desk} numbers={numbers} />
           <section className="steps" aria-label={`${SEAT_NAME[seat]} steps`}>
@@ -226,17 +227,23 @@ function Department({ desk, studio, numbers, working, following }: { desk: Works
 const STATUS_ICON: Readonly<Record<WsStep["status"], string>> = { done: "✓", needs_approval: "⏳", refused: "⛔", error: "✕", other: "•" };
 
 /** The department's browser: tabs, address bar, the page, and the agent's cursor driving it. */
-/** D37: the artifact is what the window shows while it is the desk's latest work (or close to it). */
-const ART_WINDOW_MS = 60_000;
-function showsArtifact(studio: Desk, step: WsStep | undefined): boolean {
-  if (!studio.art) return false;
+/**
+ * D37: the window shows the artifact while it is the desk's latest work: not after a newer
+ * non-tool step (a tool.called line belongs to the artifact it made), and not once it is old
+ * (a composer that never got anything closes sooner). `now` is the office's ticking clock.
+ */
+function showsArtifact(studio: Desk, step: WsStep | undefined, now: number): boolean {
+  const art = studio.art;
+  if (!art) return false;
+  const a = Date.parse(art.ts);
+  if (!Number.isFinite(a)) return false;
+  if (now && now - a > (art.state === "drafting" && art.kind !== "docs" ? DRAFT_MS : ARTIFACT_MS)) return false;
   if (!step) return true;
-  const a = Date.parse(studio.art.ts);
   const s = Date.parse(step.ts);
-  return !Number.isFinite(s) || !Number.isFinite(a) || a >= s - ART_WINDOW_MS;
+  return !Number.isFinite(s) || step.kind === "tool" || a >= s - 2000;
 }
 
-function Window({ seat, step, tabs, trail, studio }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[]; studio: Desk }) {
+function Window({ seat, step, tabs, trail, studio, now }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[]; studio: Desk; now: number }) {
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number; press: number }>({ x: 24, y: 24, press: 0 });
   const [typed, setTyped] = useState<number>(Infinity);
@@ -246,8 +253,12 @@ function Window({ seat, step, tabs, trail, studio }: { seat: Seat; step: WsStep 
     reduce.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   }, []);
 
+  const art = showsArtifact(studio, step, now) ? studio.art : null;
+  const pageStep = art ? undefined : step;
+
   // A new step: the cursor travels to the field it touched, presses, and types the value in.
   useLayoutEffect(() => {
+    const step = pageStep;
     if (!step || !body.current) return;
     const target = body.current.querySelector<HTMLElement>('[data-focus="1"]');
     const box = body.current.getBoundingClientRect();
@@ -277,9 +288,8 @@ function Window({ seat, step, tabs, trail, studio }: { seat: Seat; step: WsStep 
       clearTimeout(start);
       clearInterval(typing);
     };
-  }, [step]);
+  }, [pageStep]);
 
-  const art = showsArtifact(studio, step) ? studio.art : null;
   const site = art ? ART_SITE[art.kind] : (step?.site ?? "about:blank");
   return (
     <section className="win" aria-label={`${SEAT_NAME[seat]}'s workspace`}>
@@ -303,7 +313,7 @@ function Window({ seat, step, tabs, trail, studio }: { seat: Seat; step: WsStep 
           ⌁
         </span>
         <span className="mono addr">{site}</span>
-        <ActivityPill act={studio.act} />
+        <ActivityPill act={studio.act} now={now} />
         {!art && step && <span className={`badge ${step.status}`}>{STATUS_WORD[step.status]}</span>}
       </div>
       {/* the page loads (a short bar) whenever a new step arrives */}
@@ -354,6 +364,7 @@ function Window({ seat, step, tabs, trail, studio }: { seat: Seat; step: WsStep 
           </div>
         )}
       </div>
+      <AgentNotes desk={studio} now={now} who={SEAT_NAME[seat]} />
     </section>
   );
 }
@@ -361,8 +372,7 @@ function Window({ seat, step, tabs, trail, studio }: { seat: Seat; step: WsStep 
 const ART_SITE: Readonly<Record<NonNullable<Desk["art"]>["kind"], string>> = {
   mail: "AgentMail · compose",
   post: "Social · compose",
-  sheet: "Excel · workpaper",
-  doc: "Word · memo",
+  docs: "Excel · Word · case documents",
   calc: "utax · compute_tax",
   invite: "Calendar · invite",
 };
