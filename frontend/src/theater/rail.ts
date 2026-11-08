@@ -26,7 +26,7 @@ export const AGENT_COUNT = 7;
 /** Candidate stages in order; hired and declined are both final. */
 const STAGE_RANK: Record<string, number> = { applicant: 0, screened: 1, shortlisted: 2, hired: 3, declined: 3 };
 /** Action types with a one-time training touch (contract: trust action_type values). */
-export const TRAINABLE_ACTION_TYPES = 4;
+export const TRAINABLE_ACTION_TYPES = 5; // v1.19: + contractor_pay
 
 const SCALE = BigInt("10000000000"); // fixed-point scale for USD sums
 
@@ -90,7 +90,10 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
     // Contract v1.7.4: spent = Σ cost_usd over cost.booked only. Other events (tool.bought,
     // law.searched, post.published, screen.call) may show a cost but are booked separately, so
     // summing them would double-count. A failed provider call still books its cost.
-    if (e.type === "cost.booked" && typeof e.cost_usd === "string") costs.push(e.cost_usd);
+    // v1.19 §9.1: a contractor payment's cost.booked is testnet tokens, not dollars: never "spent".
+    const model = (e.payload as Record<string, unknown> | null)?.model;
+    const tokensOnly = typeof model === "string" && model.startsWith("contractor:");
+    if (e.type === "cost.booked" && typeof e.cost_usd === "string" && !tokensOnly) costs.push(e.cost_usd);
     const amount = (e.payload as Record<string, unknown> | null)?.amount_usd;
     const amountStr = typeof amount === "number" && Number.isFinite(amount) ? String(amount) : typeof amount === "string" ? amount : null;
     if (e.status === "ok" && amountStr !== null && e.type === "payment.sent") paid.push(amountStr);
