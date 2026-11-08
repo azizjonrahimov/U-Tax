@@ -262,10 +262,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         ip = _client_ip(request)
         signup_limiter.check(ip)
         signup_daily.check(ip)
-        out = act("signup", _pick(body, "name", "company", "email", "request_id"))
-        if "case_id" not in out:  # an existing client's address: the same generic answer
-            return {"ok": True}
-        return {"case_id": out["case_id"], "masked_name": out["masked_name"]}
+        # v1.12.2: always the same answer, new address or existing client (no way to tell
+        # which addresses are clients); the welcome email is the client's receipt
+        act("signup", _pick(body, "name", "company", "email", "request_id"))
+        return {"ok": True}
 
     @router.post("/api/voice")
     async def voice(request: Request, authorization: str | None = Header(None)):

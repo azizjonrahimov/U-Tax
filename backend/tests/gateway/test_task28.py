@@ -83,7 +83,7 @@ def test_a_signup_opens_a_case_wakes_the_crew_and_sends_the_welcome(site):
     woke = []
     h.gw.on_wake(woke.append)
     r = client.post("/api/signup", json=FORM)
-    assert r.status_code == 200 and r.json() == {"case_id": "case_1", "masked_name": "Team #1"}
+    assert r.status_code == 200 and r.json() == {"ok": True}  # v1.12.2: always just ok
     [received] = h.events("email.received")
     assert received.payload["source"] == "signup" and received.payload["masked_name"] == "Team #1"
     blob = json.dumps(received.payload)
@@ -127,6 +127,7 @@ def test_a_retry_is_the_same_and_a_second_signup_creates_nothing(site):
     h.ok("set_trust", action_type="email", state="AUTO")
     first = client.post("/api/signup", json={**FORM, "request_id": "r1"}).json()
     assert client.post("/api/signup", json={**FORM, "request_id": "r1"}).json() == first
+    assert len(h.events("email.received")) == 1  # the retry opened nothing new
     again = client.post("/api/signup", json={**FORM, "email": "Jane+x@AcmeRockets.dev"})
     assert again.status_code == 200 and again.json() == {"ok": True}  # the same client
     assert len(h.events("email.received")) == 1 and len(h.outbox()) == 1
@@ -226,10 +227,9 @@ def test_a_typed_company_never_blocks_marketing(site):
 
 def test_a_request_id_is_per_address(site):
     h, client = site
-    first = client.post("/api/signup", json={**FORM, "request_id": "r1"}).json()
-    other = client.post("/api/signup", json={**FORM, "email": "b@other.dev",
-                                              "request_id": "r1"}).json()
-    assert other["case_id"] != first["case_id"]
+    client.post("/api/signup", json={**FORM, "request_id": "r1"})
+    client.post("/api/signup", json={**FORM, "email": "b@other.dev", "request_id": "r1"})
+    assert {e.case_id for e in h.events("email.received")} == {"case_1", "case_2"}
 
 
 def test_a_welcome_the_provider_refuses_stops_after_3_tries(site, monkeypatch):
@@ -248,3 +248,13 @@ def test_a_welcome_the_provider_refuses_stops_after_3_tries(site, monkeypatch):
     for _ in range(6):
         h.gw.retry_signup_welcomes()
     assert len(calls) == 3
+
+
+def test_new_and_existing_addresses_get_the_same_answer(site):
+    # v1.12.2: no way to tell which addresses are clients from the response
+    h, client = site
+    new = client.post("/api/signup", json=FORM)
+    existing = client.post("/api/signup", json=FORM)
+    assert new.json() == existing.json() == {"ok": True}
+    assert new.status_code == existing.status_code == 200
+
