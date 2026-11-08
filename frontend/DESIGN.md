@@ -1,7 +1,7 @@
 ---
 # gstack: design-md-format=spec
 name: U-Tax
-description: "A calm, exact ledger that shows its work: light paper for clients, a dark control room for the firm, and every number set like a receipt."
+description: "Night Lime (D39): near-black pages, one lime action color, glass product cards, an italic serif accent word per headline, mono microcopy, and every number set like a receipt."
 colors:
   paper: "#F6F7F9"
   surface: "#FFFFFF"
@@ -9,11 +9,24 @@ colors:
   ink-muted: "#4A5568"
   ink-faint: "#6B7280"
   line: "#DDE2EA"
-  primary: "#0B6E4F"
-  on-primary: "#FFFFFF"
-  primary-hover: "#095C42"
-  brand: "#E5372A"
-  on-brand: "#000000"
+  primary: "#BEF243"
+  on-primary: "#0B0D06"
+  primary-hover: "#D4FF6A"
+  brand: "#BEF243"
+  on-brand: "#0B0D06"
+  bg: "#050505"
+  bg-2: "#0A0B09"
+  panel: "rgba(18,20,16,.72)"
+  panel-solid: "#0F110D"
+  line-1: "rgba(255,255,255,.08)"
+  line-2: "rgba(255,255,255,.14)"
+  text: "#F2F3EE"
+  dim: "#A1A39B"
+  faint: "#6F7169"
+  lime: "#BEF243"
+  lime-2: "#D4FF6A"
+  on-lime: "#0B0D06"
+  cyan: "#7CC7FF"
   warning: "#9A5B00"
   error: "#B42318"
   room-bg: "#07070B"
@@ -34,15 +47,23 @@ colors:
   seat-hr: "#2EE6D6"
 typography:
   display:
-    fontFamily: Schibsted Grotesk
-    fontWeight: 800
-    fontSize: clamp(2.25rem, 4.2vw, 4rem)
-    letterSpacing: -0.02em
+    fontFamily: Geist
+    fontWeight: 500
+    fontSize: clamp(42px, 4.9vw, 72px)
+    letterSpacing: -0.035em
+    lineHeight: 1.02
   heading:
-    fontFamily: Schibsted Grotesk
-    fontWeight: 700
-    fontSize: 1.5rem
-    letterSpacing: -0.01em
+    fontFamily: Geist
+    fontWeight: 500
+    fontSize: clamp(32px, 3.6vw, 52px)
+    letterSpacing: -0.035em
+  accent:
+    fontFamily: Instrument Serif
+    fontStyle: italic
+    fontWeight: 400
+  site-mono:
+    fontFamily: Geist Mono
+    fontSize: 12.5px
   body:
     fontFamily: Inter
     fontSize: 1rem
@@ -125,10 +146,11 @@ components:
 - Green means money kept and the next step. The brand red is the logo mark and nothing else.
 - Seat colors appear only as department identity (sidebar dots, badges, cursors), never as decoration.
 
-**Light or dark:** decided by the use scene.
-- Clients reach `/`, `/signup` and `/login` on a laptop, usually in daylight, so those pages are light (`paper`, `surface`, `ink`).
-- The office is watched on a projector and recorded for the demo video, beside the existing theater, so it is dark (the `room-*` tokens are the theater's own values).
-- Dark surfaces keep hierarchy through three panel steps (`room-bg` < `room-panel` < `room-panel-2`) and borders (`room-line`), not by inverting lightness. `room-dim` and `room-faint` both pass AA on `room-panel` (7.7:1 and 5.3:1).
+**Light or dark:** All public pages are dark (D39). Hierarchy comes from glass panels and borders, not lightness.
+- `/` is "Night Lime" first (D39 phase 1); `/signup`, `/login`, `/office`, `/talk` and `/ceo` move to the same tokens in phase 2 by token swap.
+- The office and theater keep their `room-*` panel steps and every `seat-*` color (wayfinding, rehearsed demo).
+- **Lime vs QA green:** lime (`primary`) and the QA seat green (`#3DDC84`) are close. Lime is for **actions and highlights only**. The QA seat keeps green only as a cursor/badge color and never sits on a lime surface.
+- The tokens and the reference: `docs/designs/landing/LANDING-BRIEF.md` §3; target prototype `docs/designs/landing/hero-prototype.html`.
 
 **Contrast (checked):**
 
@@ -145,7 +167,8 @@ White on `brand` is only 4.3:1, so the logo mark uses `on-brand` (black) text, a
 
 ## Typography
 
-- **Display and headings:** Schibsted Grotesk (Google Fonts, SIL OFL 1.1, variable; loaded with `next/font/google`). It's a news-brand grotesk from Bakken & Bæck: confident and exact, never cute. Used at 700–800 for headlines and section heads.
+- **D39 (supersedes the faces below on public pages):** display and headings in **Geist** 500 with tight tracking (-0.035em); one accent word or short phrase per headline in **Instrument Serif Italic**; site microcopy (pills, badges, labels, logs, axis ticks, fine print) in **Geist Mono**, 12–13px, lowercase. The theater keeps JetBrains Mono.
+- **Display and headings (D32, kept until phase 2 re-skins a page):** Schibsted Grotesk (Google Fonts, SIL OFL 1.1, variable; loaded with `next/font/google`). It's a news-brand grotesk from Bakken & Bæck: confident and exact, never cute. Used at 700–800 for headlines and section heads.
 - **Body and UI:** Inter.
   - Inter is on the overused-as-display list, so it never sets a headline here.
   - It stays as the body and UI face because the theater (the Overview) already runs on it. These are Operate surfaces, and one UI face across the whole product beats a second one.
@@ -233,3 +256,4 @@ White on `brand` is only 4.3:1, so the logo mark uses `on-brand` (black) text, a
 | 2026-11-07 | Light for client pages, dark for the office | The use scene: founders on daytime laptops, versus the projector and recorded video. |
 | 2026-11-07 | Ledger green as the only action color; brand red as the logo only | Green reads as money kept. White on red fails AA. |
 | 2026-11-07 | Risks taken | (1) The hero is a figure set in mono, not an illustration. (2) The landing page shows the live firm (a counter and a line from the log). (3) Seat colors as wayfinding across theater, office and badges. |
+| 2026-11-08 | D39 "Night Lime": every public page dark, lime as the only action color | The owner's reference video ("look like this professional"). It overrides D32's light landing. Tokens and type in LANDING-BRIEF §3; seat colors are kept as wayfinding; no invented numbers, testimonials or reference-brand assets (§0, §8). |

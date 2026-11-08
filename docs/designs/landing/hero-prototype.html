@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<!-- D39 target prototype (2026-11-08). Tokens, ribbons and layout are the spec. The case rows are SAMPLE data: in the app they come from /api/state and the public event stream (LANDING-BRIEF.md §4 S2). -->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>U-Tax Hero Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+<style>
+/* D39 tokens: copy these into the app's globals (see LANDING-BRIEF.md §3) */
+:root{
+  --bg:#050505; --bg-2:#0a0b09; --panel:rgba(18,20,16,.72); --panel-solid:#0f110d;
+  --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14);
+  --text:#f2f3ee; --dim:#a1a39b; --faint:#6f7169;
+  --lime:#bef243; --lime-2:#d4ff6a; --on-lime:#0b0d06; --cyan:#7cc7ff;
+  --r-card:20px; --r-pill:999px;
+  --sans:"Geist",system-ui,sans-serif; --mono:"Geist Mono",ui-monospace,monospace; --serif:"Instrument Serif",Georgia,serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{background:var(--bg);color:var(--text);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+.page{position:relative;min-height:100vh;overflow:hidden}
+canvas#ribbons{position:absolute;inset:0;width:100%;height:100%;z-index:0}
+.dots{position:absolute;inset:0;z-index:1;pointer-events:none;
+  background-image:radial-gradient(rgba(255,255,255,.07) 1px,transparent 1px);background-size:28px 28px;
+  mask-image:radial-gradient(ellipse 70% 60% at 30% 40%,#000 30%,transparent 80%)}
+.vignette{position:absolute;inset:0;z-index:1;pointer-events:none;background:radial-gradient(ellipse at 20% 50%,transparent 40%,rgba(0,0,0,.65) 100%)}
+.wrap{position:relative;z-index:2;max-width:1280px;margin:0 auto;padding:0 64px}
+nav{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:24px;height:64px;
+  backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);background:linear-gradient(rgba(5,5,5,.75),rgba(5,5,5,.35))}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:17px;letter-spacing:-.01em}
+.mark{width:26px;height:26px;border-radius:7px;background:var(--lime);color:var(--on-lime);display:grid;place-items:center;font:700 14px var(--sans)}
+.links{display:flex;gap:36px;margin:0 auto;font-size:13.5px;color:var(--dim)}
+.links a{color:inherit;text-decoration:none}.links a:hover{color:var(--text)}
+.status{display:flex;align-items:center;gap:8px;font:400 12.5px var(--mono);color:var(--text);border:1px solid var(--line-2);border-radius:var(--r-pill);padding:7px 14px;background:rgba(0,0,0,.35)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime)}
+.btn{display:inline-flex;align-items:center;gap:8px;border-radius:var(--r-pill);font:500 14px var(--sans);padding:10px 20px;text-decoration:none;border:0;cursor:pointer;transition:transform .2s,box-shadow .2s}
+.btn-lime{background:var(--lime);color:var(--on-lime);box-shadow:0 0 0 1px rgba(190,242,67,.4),0 8px 30px -8px rgba(190,242,67,.55)}
+.btn-lime:hover{transform:translateY(-1px);box-shadow:0 0 0 1px rgba(190,242,67,.6),0 10px 40px -6px rgba(190,242,67,.7)}
+.btn-ghost{background:rgba(255,255,255,.06);color:var(--text);border:1px solid var(--line-2)}
+.hero{display:grid;grid-template-columns:1.12fr 1fr;gap:40px;align-items:center;min-height:calc(100vh - 64px);padding:40px 0 80px}
+.badge{display:inline-flex;align-items:center;gap:10px;font:400 12.5px var(--mono);color:var(--text);border:1px solid var(--line-2);border-radius:8px;padding:7px 12px;background:rgba(0,0,0,.4)}
+.badge .dot{width:6px;height:6px;border-radius:1px}
+h1{margin-top:28px;font-weight:500;font-size:clamp(42px,4.9vw,72px);line-height:1.02;letter-spacing:-.035em}
+h1 em{font-family:var(--serif);font-style:italic;font-weight:400;letter-spacing:-.01em;color:#e9eadf}
+.sub{margin-top:26px;max-width:470px;color:var(--dim);font-size:17px;line-height:1.55;text-shadow:0 1px 12px rgba(0,0,0,.9)}
+.ctas{display:flex;gap:12px;margin-top:34px}
+.fine{margin-top:18px;font:400 12.5px var(--mono);color:var(--faint)}
+.card{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r-card);
+  backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);box-shadow:0 40px 120px -40px rgba(0,0,0,.9),inset 0 1px 0 rgba(255,255,255,.05)}
+.flow{padding:22px 26px 18px;transform:perspective(1600px) rotateY(-9deg) rotateX(3deg);transform-origin:left center}
+.flow-head{display:flex;align-items:center;gap:14px;font-size:13.5px;color:var(--dim)}
+.flow-head .m{font-family:var(--mono);font-size:12.5px;color:var(--text)}
+.flow-head .run{margin-left:auto;font:400 12.5px var(--mono);color:var(--lime)}
+.canvas{position:relative;height:250px;margin:18px 0 6px}
+.node{position:absolute;z-index:1;background:#15170f;border:1px solid var(--line-2);border-radius:12px;padding:10px 12px}
+.node b{display:block;font-weight:500;font-size:13.5px}
+.node span{font:400 11.5px var(--mono);color:var(--faint)}
+.node.done{border-color:rgba(190,242,67,.35)}
+.node.wait b::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--lime);margin-left:8px;vertical-align:middle;animation:pulse 1.4s infinite}
+.tag{position:absolute;z-index:2;font:400 11px var(--mono);color:var(--dim);background:#111309;border:1px solid var(--line);border-radius:5px;padding:2px 7px}
+svg.edges{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+svg.edges path{fill:none;stroke:rgba(190,242,67,.55);stroke-width:1.4}
+svg.edges path.dim{stroke:rgba(255,255,255,.18)}
+.flow .runs{border-top:1px solid var(--line);padding-top:12px;font:400 12px var(--mono);color:var(--faint)}
+.row{display:flex;gap:16px;padding:5px 0;color:var(--dim)}
+.row i{width:6px;height:6px;border-radius:50%;background:var(--faint);margin-top:6px}
+.row:first-of-type i{background:var(--lime)}
+.row .t{color:var(--faint)}.row .ms{margin-left:auto;color:var(--faint)}
+@keyframes pulse{50%{opacity:.3}}
+.reveal{opacity:0;filter:blur(8px);transform:translateY(14px);animation:rv .9s cubic-bezier(.2,.7,.2,1) forwards}
+.d1{animation-delay:.05s}.d2{animation-delay:.15s}.d3{animation-delay:.28s}.d4{animation-delay:.4s}.d5{animation-delay:.55s}
+@keyframes rv{to{opacity:1;filter:none;transform:none}}
+@media (prefers-reduced-motion:reduce){.reveal{animation:none;opacity:1;filter:none;transform:none}}
+@media (max-width:960px){.wrap{padding:0 16px}.links,.status{display:none}.hero{grid-template-columns:1fr;padding-top:24px;min-height:0}.flow{transform:none}
+  canvas#ribbons{opacity:.35}nav .btn{padding:8px 14px;font-size:13px;margin-left:auto}
+  .ctas{flex-direction:column}.ctas .btn{justify-content:center}
+  .canvas{display:none}.flow-head{flex-wrap:wrap}.row{flex-wrap:wrap;gap:8px}.row .ms{display:none}}
+</style>
+</head>
+<body>
+<div class="page">
+  <canvas id="ribbons" aria-hidden="true"></canvas>
+  <div class="dots"></div><div class="vignette"></div>
+  <div class="wrap">
+    <nav>
+      <div class="brand"><span class="mark">U</span>U-Tax</div>
+      <div class="links"><a href="#">Product</a><a href="#">How it works</a><a href="#">The firm, live</a><a href="#">Pricing</a></div>
+      <span class="status"><span class="dot"></span><span id="st">firm open · 7 agents</span></span>
+      <a class="btn btn-lime" href="#">Start free check</a>
+    </nav>
+    <section class="hero">
+      <div>
+        <span class="badge reveal d1"><span class="dot"></span><span id="bd">live tonight / 23 startups checked</span></span>
+        <h1 class="reveal d2">The tax firm runs<br><em>itself</em>.</h1>
+        <p class="sub reveal d3">Seven AI departments find the client, check the math twice and send the memo. One human signs off when it matters.</p>
+        <div class="ctas reveal d4"><a class="btn btn-lime" href="#">Get your free check</a><a class="btn btn-ghost" href="#">▶&nbsp; Watch the firm work, live</a></div>
+        <p class="fine reveal d5">free / educational estimate, not tax advice / no SSN, ever</p>
+      </div>
+      <div class="card flow reveal d3" aria-label="A live U-Tax case">
+        <div class="flow-head"><span>Delaware franchise tax</span><span class="m">5 steps / 1 branch</span><span class="run">running</span></div>
+        <div class="canvas">
+          <svg class="edges" viewBox="0 0 100 250" preserveAspectRatio="none">
+            <path vector-effect="non-scaling-stroke" d="M29 125 C36 125 35 55 42 55"/><path vector-effect="non-scaling-stroke" d="M29 125 C36 125 35 195 42 195" class="dim"/>
+            <path vector-effect="non-scaling-stroke" d="M75 55 C79 55 77 118 81 118"/><path vector-effect="non-scaling-stroke" d="M75 195 C79 195 77 132 81 132" class="dim"/>
+          </svg>
+          <div class="node done" style="left:0;top:98px;width:29%"><b>Email received</b><span>intake</span></div>
+          <span class="tag" style="left:29%;top:66px">min()</span>
+          <span class="tag" style="left:29%;top:174px">if 25%+</span>
+          <div class="node done" style="left:42%;top:28px;width:33%"><b>$85,165 → $400</b><span>tax · engine</span></div>
+          <div class="node" style="left:42%;top:168px;width:33%"><b>Form 5472 flag</b><span>tax · rule</span></div>
+          <div class="node wait" style="left:81%;top:98px;width:19%"><b>QA</b><span>then memo</span></div>
+        </div>
+        <div class="runs">
+          <div style="margin-bottom:6px">last memos</div>
+          <div class="row"><i></i><span class="t">01:41:49</span><span>team #7 · $85,165 → $450</span><span class="ms">41 s</span></div>
+          <div class="row"><i></i><span class="t">01:39:02</span><span>team #3 · $85,165 → $450</span><span class="ms">48 s</span></div>
+          <div class="row"><i></i><span class="t">01:30:57</span><span>share card · paid PixelAgent</span><span class="ms">0.50</span></div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+<script>
+// Light ribbons: additive-blended bezier strands with a soft glow, drifting slowly.
+// Canvas 2D only (no libraries). Pauses when the tab is hidden; static under reduced motion.
+(() => {
+  const c = document.getElementById('ribbons'), x = c.getContext('2d');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let w, h, dpr, t = 0, running = true;
+  const STRANDS = 120;
+  const seeds = Array.from({length: STRANDS}, (_, i) => ({ o: i / STRANDS, s: Math.random() * 6.28, hue: Math.random() }));
+  function size() { dpr = Math.min(devicePixelRatio || 1, 2); w = c.clientWidth; h = c.clientHeight; c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  function color(hue, a) { // lime → yellow-green → a little cyan
+    return hue < 0.72 ? `rgba(190,242,67,${a})` : hue < 0.9 ? `rgba(225,255,140,${a})` : `rgba(124,199,255,${a})`;
+  }
+  function frame() {
+    x.globalCompositeOperation = 'source-over';
+    x.clearRect(0, 0, w, h);
+    x.globalCompositeOperation = 'lighter';
+    const cx = w * 0.50, cy = h * 0.74; // the "focus" where strands pinch together
+    // soft wide beam under the strands (the glow the reference has)
+    x.save(); x.filter = 'blur(28px)'; x.lineWidth = 60; x.strokeStyle = 'rgba(190,242,67,.10)';
+    x.beginPath(); x.moveTo(w * 1.05, h * 0.18); x.bezierCurveTo(w * 0.62, h * 0.05, cx - 40, cy - 30, cx - 20, cy);
+    x.bezierCurveTo(cx + 10, cy + 60, w * 0.55, h * 0.98, w * 0.70, h * 1.05); x.stroke(); x.restore();
+    for (const s of seeds) {
+      const spread = (s.o - 0.5) * 1.25;
+      const wob = Math.sin(t * 0.0006 + s.s) * 26;
+      const p0 = [w * 1.05, h * (0.02 + s.o * 0.45) + wob];
+      const p1 = [w * 0.62, h * 0.05 + spread * 140 + wob];
+      const p2 = [cx - 40 + spread * 40, cy - 30 + spread * 120];
+      const p3 = [cx + 30 + spread * 30, cy + 40 + spread * 60];
+      const p4 = [w * 0.70, h * 1.05 + spread * 80];
+      x.beginPath(); x.moveTo(...p0);
+      x.bezierCurveTo(p1[0], p1[1], p2[0], p2[1], (p2[0] + p3[0]) / 2 - 30, (p2[1] + p3[1]) / 2);
+      x.bezierCurveTo(p3[0] - 60, p3[1], p4[0] - 120, p4[1] - 80, p4[0], p4[1]);
+      const core = Math.pow(1 - Math.abs(spread) * 2, 2);
+      const a = 0.08 + 0.5 * core;
+      x.strokeStyle = color(s.hue, a); x.lineWidth = 0.6 + 1.4 * core; x.shadowBlur = 16; x.shadowColor = color(s.hue, 0.8);
+      x.stroke();
+    }
+    // the bright pinch point
+    const g = x.createRadialGradient(cx, cy, 0, cx, cy, 120);
+    g.addColorStop(0, 'rgba(235,255,170,.45)'); g.addColorStop(1, 'rgba(190,242,67,0)');
+    x.fillStyle = g; x.shadowBlur = 0; x.fillRect(cx - 200, cy - 200, 400, 400);
+  }
+  function loop(now) { if (!running) return; t = now; frame(); requestAnimationFrame(loop); }
+  size(); addEventListener('resize', () => { size(); if (reduce) frame(); });
+  document.addEventListener('visibilitychange', () => { running = !document.hidden && !reduce; if (running) requestAnimationFrame(loop); });
+  if (reduce) frame(); else requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>

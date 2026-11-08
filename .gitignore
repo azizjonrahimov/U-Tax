@@ -26,3 +26,6 @@ Thumbs.db
 .idea/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# third-party design reference (D39): local only
+reference/

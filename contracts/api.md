@@ -1,4 +1,4 @@
-# API contract (v1.18): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.19): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -799,7 +799,68 @@ falls back to a built-in template if the file is missing.
     `POST /api/ceo/command`, with answers spoken by `speechSynthesis`.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
+## 9. Agent market (v1.19, design D38)
+
+Source: `docs/designs/agent-market/RUNBOOK.md` §4 (the runbook calls this "v1.18"; v1.18–v1.18.4 were
+already taken). **Landing rule:** the §3 event rows and the §6 tool rows below are copied into §3 and §6 in the
+SAME merge as the code that emits or serves them (backend D38-b; agents A41 for the Naïve tool list), so CI stays
+green. Until then this section is the shape every lane builds to. Off switch: `MARKET_ENABLED=0`, which refuses
+everything below.
+
+**9.1 Events** (all masked; no private key, ever):
+
+| type | actor | provider | payload keys | notes |
+|---|---|---|---|---|
+| `job.posted` | mkt | null | `job_id, template, price_usd, headline` | idem `job:{key}` |
+| `job.claimed` | system | null | `job_id, contractor` | contractor = the registry name |
+| `job.submitted` | system | null | `job_id, contractor, sha256` | the artifact stays private until paid |
+| `job.verified` | system | null | `job_id, checks` | checks = `[{name, ok}]` |
+| `job.failed` | system | null | `job_id, checks, reason` | reason: `checks_failed` / `expired` / `contractor_error` |
+| `payment.sent` | system | `tempo` or `local` | `job_id, contractor, amount_usd, token, tx_hash, explorer_url` | `cost_usd` = amount; status `failed` + private `unsure` on an unsure send |
+| `job.delivered` | system | null | `job_id, image_url` | image is now `/assets/ad_<n>.png` |
+| `agent.sale` | system | `tempo` or `stripe` | `amount_usd, token, tx_hash, explorer_url, payer_masked` | sell side; payer = `0x12…ab` |
+
+- `PROVIDERS += {"tempo"}`.
+- The same payment also writes `cost.booked` (`provider tempo|local`, `model "contractor:share_card"`,
+  `estimated false`), so the money panel's spend includes it. The gateway books money; no agent does.
+- `public_state` adds `contractor_paid_usd` (Σ `payment.sent` ok) and `agent_sales_usd` (Σ `agent.sale`).
+
+**9.2 MCP tools (Marketing, `mkt`, only):**
+- `hire_contractor {template: "share_card", headline: string, key: string}` → `{job_id, status: "open", price_usd}`.
+  - The headline must pass `post_problem()` and `_names_a_client()`, the same as `make_ad`.
+  - The price comes from `MARKET_PRICE_USD`; agents can't set it.
+- `get_job {job_id}` → `{job_id, status, contractor?, image_url?, tx_hash?, explorer_url?, checks?}`.
+  - `status` is one of `open`, `claimed`, `submitted`, `verified`, `paid`, `delivered`, `failed`, `expired`.
+- Marketing then posts with the existing `post_social {…, image_url}`.
+
+**9.3 Contractor routes** (Bearer = the contractor's `MARKET_CONTRACTORS` token; 30 req/min per token):
+- `GET /market/llms.txt`: plain-text docs for agents (how to claim, submit and get paid). No auth.
+- `GET /market/jobs?status=open` → `{jobs: [{job_id, template, price_usd, input: {headline}, expires_at}]}`.
+- `POST /market/jobs/{job_id}/claim {wallet, invoice_url}` → 200 job | 409 `taken` | 403 `wallet_mismatch` | 410 `expired`.
+  - `wallet` must equal the registry wallet.
+  - `invoice_url` must start with the registry `invoice_base`.
+- `POST /market/jobs/{job_id}/submit` (multipart `file`, ≤ 2 MB) → 200 `{verified: bool, checks}` | 409 `not_claimed_by_you`.
+  - One resubmit is allowed after a fail.
+
+**9.4 Sell to agents:**
+- `GET /agent/llms.txt`: what U-Tax sells to agents, the price and the input schema.
+- `POST /agent/franchise-check {authorized_shares, issued_shares, gross_assets_cents, stated_par?}` → **402**
+  MPP challenge (0.50 pathUSD).
+  - Paid: `{authorized_method_cents, assumed_par_method_cents, total_cents, due_date, note: "Educational
+    estimate, not tax advice", receipt_tx}`.
+  - It uses `app/engine` only: no case, no email, no PII.
+  - Bad input → 422 before any challenge (never charge for bad input).
+
+**9.5 Trust and money:**
+- `TRUST_TYPES += ("contractor_pay",)`; `CAP_EVENTS["contractor_pay"] = ("payment.sent",)`.
+- It starts `ASK`: the first payment needs the CEO's spoken approval (a training touch), then AUTO within caps.
+- A payment over `MARKET_MAX_JOB_USD`, or one that would pass `MARKET_MAX_DAY_USD`, always asks.
+- Only the gateway pays, from its own tick, after the code checks pass; no agent ever holds a wallet key.
+- Testnet only: Tempo Moderato, chain 42431, token pathUSD. The tokens have no real value; say so on screen.
+
 ## Changelog
+
+- v1.19 (2026-11-08, D38): agent market (§9): MCP tools hire_contractor/get_job (mkt); /market/* contractor routes; /agent/franchise-check (MPP 402); events job.*, payment.sent, agent.sale; provider tempo; trust type contractor_pay. §3/§6 rows land with their code.
 
 - v1.18.4 (2026-11-08, task 45): /api/stt books max(declared, a byte floor).
 
