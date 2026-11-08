@@ -20,6 +20,7 @@ right number and we'll send an updated estimate.
 
 When you file your annual report, you choose the method. A licensed CPA or EA can confirm which
 one applies to you before you file.
+Want hands-on help? For $49, a member of our team walks you through filing your Delaware annual report yourself on a 20-minute call: {{payment_link}}
 
 U-Tax, an AI accounting firm run by seven agents and one human
 

@@ -15,7 +15,7 @@ paid and escalation tools are denied by name.
 | `prompts/ceo-voice.md` | the `/ceo` voice agent for the CEO (OpenAI Realtime, run by the backend; not a Naïve agent; only the contract §5b CEO tools, every start action a proposal the CEO confirms) |
 | `prompts/ceo-assistant.md` | the CEO's conversational assistant on Naïve (v1.14 §5a-ter, D34): the §5b CEO tools on `/mcp/ceo`, run directly with no confirm; exact ids for approve, deny and hire; no board |
 | `prompts/talk-phrases.json` | the only lines the public `/talk` voice speaks (contract v1.10.2): a flat key → line map the gateway renders for `POST /api/tts` purpose `talk`, numbers only in `{placeholders}` |
-| `templates/memo.md` | the client memo (contract §7 placeholders only) |
+| `templates/memo.md` | the client memo (contract §7 placeholders, plus D36's `payment_link`) |
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
 | `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, the page's questions word for word), the Chief of Staff's card rules and firm rules 9 and 11 kept word for word, the CEO assistant's seat (§5b tools, no team or board, $3/day) and safety rules, every template's rules, bad-env guard tests |
 
@@ -29,7 +29,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 
 | File | Sent when | Placeholders |
 |---|---|---|
-| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note` (`masked_name` allowed, unused) |
+| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note`, `payment_link` (D36: the Stripe link for the $49 offer of a human-led 20-minute walkthrough of the client's own filing (U-Tax files nothing); its whole line is dropped when empty, by the gateway once its D36 change lands) (`masked_name` allowed, unused) |
 | `ask-client.md` | `ask_client` | `greeting_name`, `missing_list` (joined fact labels, never `stated_par`), `problems_line` (may be empty) |
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
@@ -39,6 +39,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 | `follow-up-memo_check.md` | `follow_up` kind `memo_check` | `greeting_name` |
 | `follow-up-missing_facts.md` | `follow_up` kind `missing_facts` | `greeting_name`, `missing_list` |
 | `follow-up-call_reminder.md` | `follow_up` kind `call_reminder` | `greeting_name`, `call_time` |
+| `payment-receipt.md` | `payment.received` (D36) | `greeting_name`, `booking_url` (required: a bare https link to the CEO's 20-minute booking page, on its own line right under the price line) |
 | `signup-welcome.md` | `POST /api/signup` (v1.12) | `greeting_name` (the Spec also allows `masked_name`, never used in client mail) |
 | `ceo-update-email.md` | approval needed, BLOCKED, flagged, shortlisted, paused | `headline`, `lead`, `summary`, `action_line` (per reason: "Approve or Deny it in the console", "Unblock or skip it", …), `console_url` |
 | `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `touches_engineering`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |
