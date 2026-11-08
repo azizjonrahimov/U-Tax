@@ -25,10 +25,10 @@ describe("D32 workspaces: tool.called drives each department's browser", () => {
       ev(4, "tool.called", { tool: "law_search", status: "error" }, { actor: "tax" }),
     ]);
     expect(o.desks.tax.steps.map((s) => [s.site, s.text, s.status])).toEqual([
-      ["Naïve Data · law search", "Searched the law: failed", "error"],
+      ["Naïve Data · law search", "Queried the law catalogue: failed", "error"],
       ["utax · compute_tax", "Ran the tax engine", "done"],
     ]);
-    expect(o.desks.acct.steps[0]).toMatchObject({ text: "Asked the CEO to approve: sent the memo", status: "needs_approval", site: "AgentMail · compose" });
+    expect(o.desks.acct.steps[0]).toMatchObject({ text: "Asked the CEO's OK to send the memo", status: "needs_approval", site: "AgentMail · compose" });
     expect(o.desks.mkt.steps[0].status).toBe("refused");
     expect(o.desks.tax.tabs).toEqual(["utax · compute_tax", "Naïve Data · law search"]);
     expect(o.desks.tax.counts.tools).toBe(2);

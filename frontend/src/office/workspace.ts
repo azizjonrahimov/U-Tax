@@ -114,36 +114,51 @@ const TOOL_SITE: Readonly<Record<string, string>> = {
   hr_outreach: "AgentMail · hiring",
 };
 
-/** What a tool call did, as a verb phrase. */
+/**
+ * What the tool call was, as the click in the browser ("Pressed Post"). The result, when the
+ * tool produced one, follows as its own line from the domain event ("Posted to X").
+ */
 const TOOL_VERB: Readonly<Record<string, string>> = {
   get_case: "Opened the case file",
-  list_open_cases: "Listed the open cases",
-  firm_brief: "Pulled the firm's numbers for the brief",
+  list_open_cases: "Opened the list of open cases",
+  firm_brief: "Pulled the firm's numbers",
   send_to_agent: "Handed the work to a department",
-  board_write: "Updated the team board",
+  board_write: "Wrote on the team board",
   board_read: "Read the team board",
-  extract_facts: "Recorded the facts from the email",
-  ask_client: "Wrote to the client",
+  extract_facts: "Filled in the intake sheet",
+  ask_client: "Pressed Send on a question to the client",
   mark_not_eligible: "Marked the case not eligible",
-  book_call: "Booked a call",
-  follow_up: "Followed up with the client",
-  law_search: "Searched the law",
+  book_call: "Sent a calendar invite",
+  follow_up: "Pressed Send on a follow-up",
+  law_search: "Queried the law catalogue",
   compute_tax: "Ran the tax engine",
-  qa_check: "Re-checked the numbers",
-  flag_case: "Flagged the case for the CEO",
-  phone_check: "Checked the memo on a phone",
-  send_memo: "Sent the memo",
-  post_social: "Posted for the firm",
-  draft_dm: "Drafted a DM",
-  make_ad: "Made an ad image",
-  buy_tool: "Bought a data tool",
-  source_candidates: "Searched public profiles",
-  list_candidates: "Listed the candidates",
+  qa_check: "Re-ran the engine to check",
+  flag_case: "Raised a flag for the CEO",
+  phone_check: "Opened the memo on a cloud phone",
+  send_memo: "Pressed Send on the memo",
+  post_social: "Pressed Post",
+  draft_dm: "Wrote a DM draft",
+  make_ad: "Rendered the ad in the studio",
+  buy_tool: "Paid for a data tool",
+  source_candidates: "Ran a public-profile search",
+  list_candidates: "Opened the candidate list",
   get_candidate: "Opened a candidate's answers",
-  hr_record: "Updated a candidate's stage",
-  hr_outreach: "Emailed a candidate",
+  hr_record: "Moved a candidate on the board",
+  hr_outreach: "Pressed Send on an invite",
 };
 
+/** What a tool waiting on the CEO would do, for "Asked the CEO's OK to …". */
+const TOOL_ASK: Readonly<Record<string, string>> = {
+  send_memo: "send the memo",
+  post_social: "post for the firm",
+  hr_outreach: "email a candidate",
+  ask_client: "write to the client",
+  book_call: "send a calendar invite",
+  follow_up: "send a follow-up",
+  buy_tool: "buy a data tool",
+  draft_dm: "send a DM",
+};
+const toolAsk = (tool: string) => (Object.hasOwn(TOOL_ASK, tool) ? TOOL_ASK[tool] : `use ${tool}`);
 const toolSite = (tool: string) => (Object.hasOwn(TOOL_SITE, tool) ? TOOL_SITE[tool] : `utax · ${tool}`);
 const toolVerb = (tool: string) => (Object.hasOwn(TOOL_VERB, tool) ? TOOL_VERB[tool] : `Used ${tool}`);
 /** Only safe characters from an agent-supplied tool name (as the theater does). */
@@ -204,7 +219,7 @@ export function stepOf(ev: UTaxEvent, name: (caseId: string | null) => string, f
       const status: StepStatus = raw === "done" || raw === "needs_approval" || raw === "refused" || raw === "error" ? raw : "other";
       const verb = toolVerb(tool);
       const text =
-        status === "needs_approval" ? `Asked the CEO to approve: ${verb.toLowerCase()}` : status === "refused" ? `${verb}: refused by the firm's rules` : status === "error" ? `${verb}: failed` : verb;
+        status === "needs_approval" ? `Asked the CEO's OK to ${toolAsk(tool)}` : status === "refused" ? `${verb}: refused by the firm's rules` : status === "error" ? `${verb}: failed` : verb;
       return { seat, kind: "tool", text, status, site: toolSite(tool), fields: [{ label: "Tool", value: tool }, { label: "Result", value: STATUS_WORD[status] }], focus: 1, count: "tools" };
     }
     case "naive.confirm": {
