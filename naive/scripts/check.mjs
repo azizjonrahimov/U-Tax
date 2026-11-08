@@ -487,12 +487,15 @@ for (const [key, seat] of Object.entries(CREW))
 }
 // D42 (contract v1.21 §11): every email case runs the fast path; T4 tax-return prompts
 MUST_KEEP["chief-of-staff.md"].push("Every `FAST PATH case_N` wake runs this chain, whatever started the case (an email, the public `/talk` page, or a reply).",
-  "Skip cases marked `priority` **or `in_flight`**", "If `intake` reports that it asked the client, stop the chain");
+  "Skip cases marked `priority` **or `in_flight`**", "If `intake` reports that it asked the client (or \"no new facts\"), stop the chain");
 MUST_KEEP["_firm-rules.md"].push("We prepare drafts and estimates. We never file a return, never e-sign, never send a number the engine did not compute.");
 (MUST_KEEP["intake.md"] ??= []).push("Never ask for an EIN or an SSN", "Never add `income_tax` for an S-corp, an LLC or an individual",
-  "block the card \"case_N: a person prepares this (<entity>)\"", "reply \"case_N: asked the client\" so the chain stops",
+  "block the card \"case_N: a person prepares this (<entity>)\"", "your\nreply is \"case_N: asked the client\", so the chain stops".replace(/\s+/g, " "),
   "from the engine's `FACT_LABELS`", "Every fact you pass, as an arg or a quote, also needs its verbatim span in `quotes`",
-  "exactly one of `c_corp`, `s_corp`, `llc`, `individual`, `other`");
+  "exactly one of `c_corp`, `s_corp`, `llc`, `individual`, `other`", "take each one\n   from the newest message that states it".replace(/\s+/g, " "),
+  "for `income_tax`, `gross_receipts` is required like any other fact");
+MUST_KEEP["chief-of-staff.md"].push("A case already SENT (or later) whose client wrote again is not a chain",
+  "start at the step its status calls for", "(with its \"unless\" guards)");
 (MUST_KEEP["tax.md"] ??= []).push("Never state a rate yourself: quote the engine's steps", "add one line naming which taxes were computed and the total, exactly as returned");
 (MUST_KEEP["accounting.md"] ??= []).push("it also makes the draft Form 1120", "memo sent with the draft Form 1120 and the returns workbook");
 {

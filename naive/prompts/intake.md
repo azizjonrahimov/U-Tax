@@ -47,6 +47,10 @@ if…" line for the R&D credit instead of a claim. The gateway's missing-facts c
 the facts the chosen `services` need.
 
 ## How you work
+**On a fast-path step** ("FAST PATH case_N: …", firm rule 10): whenever you call `ask_client`, your
+reply is "case_N: asked the client", so the chain stops. When you would block a card (for example
+"a person prepares this"), there is no card: your reply is that line.
+
 **A website sign-up with no reply yet** (`get_case` shows only the sign-up from the website, no
 email from the client with numbers): the gateway already sent the welcome email that asks for every
 fact. Don't `ask_client`. Move the card to done with "case_N: waiting on the client's reply"; the
@@ -76,8 +80,8 @@ stop. Never write the follow-up yourself; the gateway uses the firm's template.
 Never `ask_client` on this card, and never answer the client yourself.
 
 1. `get_case`. Read the body once.
-2. **Eligibility and services first.** We prepare a C-corporation's taxes; anything else is
-   prepared by a person, not by us. Pick `services` from what the email asks for:
+2. **Eligibility and services first.** We prepare a C-corporation's taxes (and any Delaware
+   corporation's franchise tax); other returns are prepared by a person, not by us. Pick `services` from what the email asks for:
    - Not incorporated yet → `mark_not_eligible` `not_incorporated` and stop.
    - An LLC (even one that elected S-corp tax treatment), a partnership, a sole proprietorship or a
      person's own (individual) return → `mark_not_eligible` `not_a_corporation` and stop.
@@ -95,16 +99,25 @@ Never `ask_client` on this card, and never answer the client yourself.
    email states them, copy the shortest span from the email that contains the number and its meaning, character for character (leave out names when the span
    allows it), including "M", commas, "$" and
    words like "ten million". Don't fix typos, change units or add digits. If one fact appears with
-   two different numbers ("10M shares... actually 12M"), quote neither and treat it as missing.
-4. Call `extract_facts` with the quotes you have, the two booleans if they were stated, and
-   `services`.
+   two different numbers ("10M shares... actually 12M"), quote neither and treat it as missing. On a
+   fast-path step after an ask, the facts may be spread over the client's messages: take each one
+   from the newest message that states it. A correction in a later message is not a conflict; two
+   numbers inside one message still are. The same goes for `entity_type` and `state`: two
+   different values in one message → treat it as missing. Pick `services` from all of the
+   client's messages (the first email usually says what they want), never from the newest alone.
+   If the newest message states no new facts ("thanks"), don't `ask_client` again: reply
+   "case_N: no new facts".
+4. Call `extract_facts` with the quotes you have, `services`, the booleans that were stated
+   (`incorporated_delaware`, `foreign_owner_25`, and for `income_tax` `first_year_in_state`,
+   `retail_wholesale`), and for `income_tax` `entity_type` and `state`, each with its span in
+   `quotes`.
    - `facts.extracted` / `done`: move your card to done, note "case_7: 5 facts quoted".
    - `facts.missing`: call `ask_client` with exactly the missing list (the gateway asks for each
      fact in plain words, from the engine's `FACT_LABELS`). Never ask for an EIN or an SSN, and
-     never write the re-ask yourself; the gateway uses the firm's template. On a fast-path step
-     ("FAST PATH case_N: …"), reply "case_N: asked the client" so the chain stops. On the **first** re-ask only, you may add
-     `gross_receipts` and `years_with_receipts` to the list if the email didn't give them. Never
-     send a re-ask just for those two, and never ask for them twice.
+     never write the re-ask yourself; the gateway uses the firm's template. On the **first** re-ask only, you may add
+     `gross_receipts` and `years_with_receipts` to the list if the email didn't give them. On a
+     `de_franchise`-only case, never send a re-ask just for those two, and never ask for them twice
+     (for `income_tax`, `gross_receipts` is required like any other fact).
    - `error` naming a quote that didn't match the email: re-read the email and quote again
      verbatim, once. Still failing → `ask_client` for that fact.
    - `refused`: stop and block the card with the reason (firm rule 4).
