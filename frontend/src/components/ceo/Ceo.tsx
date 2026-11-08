@@ -119,10 +119,23 @@ interface Confirm {
  */
 export function Ceo({ variant = "page", onElsewhere }: { variant?: "page" | "panel"; onElsewhere?: (elsewhere: boolean) => void } = {}) {
   const token = useSessionToken();
-  const { state, take } = useConsoleLock(!!token, variant === "page");
+  const { state, take, everElsewhere } = useConsoleLock(!!token, variant === "page");
   useEffect(() => {
     onElsewhere?.(!!token && state === "elsewhere");
   }, [onElsewhere, state, token]);
+  // No Web Locks: only the /ceo page runs a console (two could never be fenced from each other).
+  if (token && variant === "panel" && state === "unsupported") {
+    return (
+      <div className="ceo in-panel">
+        <main className="elsewhere">
+          <p>This browser can&rsquo;t share the console between windows, so it runs on its own page.</p>
+          <a className="secondary signin-link" href="/ceo" target="_blank" rel="opener">
+            Open the CEO console
+          </a>
+        </main>
+      </div>
+    );
+  }
   if (token && (state === "waiting" || state === "elsewhere")) {
     return (
       <div className={`ceo${variant === "panel" ? " in-panel" : ""}`}>
@@ -141,10 +154,11 @@ export function Ceo({ variant = "page", onElsewhere }: { variant?: "page" | "pan
       </div>
     );
   }
-  return <CeoConsole variant={variant} />;
+  // The brief reads itself only when a /ceo window opens (not the panel, not a tab getting the console back later).
+  return <CeoConsole variant={variant} autoplay={variant === "page" && !everElsewhere} />;
 }
 
-function CeoConsole({ variant }: { variant: "page" | "panel" }) {
+function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay: boolean }) {
   const token = useSessionToken();
   /** Why the console signed out (a 401: the session expired or was revoked), shown on the sign-in link. */
   const [signInError, setSignInError] = useState<string | null>(null);
@@ -357,9 +371,9 @@ function CeoConsole({ variant }: { variant: "page" | "panel" }) {
         briefRef.current = b;
         setBrief(b);
         setBriefError(null);
-        if (variant === "page") {
+        if (autoplay) {
           rememberSeen(b);
-          void playBrief(b, token); // the panel shows the brief; its Play button reads it
+          if (document.visibilityState === "visible") void playBrief(b, token); // the panel shows the brief; its Play button reads it
         }
       } catch (e) {
         if (mine !== session.current) return;
@@ -381,7 +395,7 @@ function CeoConsole({ variant }: { variant: "page" | "panel" }) {
       clearTimeout(timer);
       clearInterval(clock);
     };
-  }, [token, refreshNow, loadBrief, playBrief, fail, variant]);
+  }, [token, refreshNow, loadBrief, playBrief, fail, autoplay]);
 
   useEffect(() => () => stopAudio(), [stopAudio]);
 
@@ -506,7 +520,8 @@ function CeoConsole({ variant }: { variant: "page" | "panel" }) {
     ) : null;
 
   return (
-    <div className={`ceo${variant === "panel" ? " in-panel" : ""}`}>
+    // In the panel the root takes focus on a click inside, so Esc (STOP EVERYTHING) still works there.
+    <div className={`ceo${variant === "panel" ? " in-panel" : ""}`} tabIndex={variant === "panel" ? -1 : undefined}>
       <header>
         {variant === "page" && <span className="logo">U</span>}
         <span className="title">{variant === "page" ? "U-Tax · CEO console" : "CEO console"}</span>

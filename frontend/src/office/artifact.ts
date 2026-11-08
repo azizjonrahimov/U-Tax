@@ -193,7 +193,11 @@ const INT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
  */
 export function cellText(value: unknown, fmt: string): string {
   if (typeof value === "number" && Number.isFinite(value)) {
-    if (fmt === "usd") return USD.format(value === 0 ? 0 : value); // never "-$0.00"
+    // Float noise off (1234.5600000000002), never "-$0.00"; the gateway's real digits stay (APVC).
+    if (fmt === "usd") {
+      const v = Number(value.toFixed(10));
+      return USD.format(v === 0 ? 0 : v);
+    }
     if (fmt === "int") return INT.format(value);
     if (fmt === "par") return value.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 21 });
     return String(value);

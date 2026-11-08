@@ -193,3 +193,12 @@ describe("v1.18.2 money at full precision", () => {
     expect(cellText(-1234.5, "usd")).toBe("-$1,234.50");
   });
 });
+
+describe("money without float noise", () => {
+  it("0.1 + 0.2 is $0.30; real extra digits stay", async () => {
+    const { cellText } = await import("./artifact");
+    expect(cellText(0.1 + 0.2, "usd")).toBe("$0.30");
+    expect(cellText(1234.5600000000002, "usd")).toBe("$1,234.56");
+    expect(cellText(625000.0625, "usd")).toBe("$625,000.0625");
+  });
+});

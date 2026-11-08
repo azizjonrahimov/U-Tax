@@ -84,6 +84,8 @@ type Link = "off" | "connecting" | "realtime" | "fallback";
 type Flow = "listening" | "thinking" | "speaking" | "idle";
 /** A transcript line; a D34 reply carries the actions the assistant took (chips, with Undo). */
 type Line = { who: "you" | "firm" | "alert"; text: string; n: number; actions?: TalkAction[] };
+/** A failed STOP from a console that unmounted mid-STOP, for the next console in this tab to show. */
+const STOP_FAILED_KEY = "utax.ceo.stopFailed";
 /** A talk turn waits this long at most per request (the gateway holds it up to 25 s). */
 const TALK_REQUEST_MS = 35_000;
 interface Card extends Proposal {
@@ -183,6 +185,19 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
   const [notice, setNotice] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null);
   const [stopNote, setStopNote] = useState<{ ok: boolean | null; text: string } | null>(null);
+  // A STOP that failed in a console that went away mid-STOP (hidden, popped out): say so here.
+  useEffect(() => {
+    let text: string | null = null;
+    try {
+      text = sessionStorage.getItem(STOP_FAILED_KEY);
+      sessionStorage.removeItem(STOP_FAILED_KEY);
+    } catch {
+      /* storage off */
+    }
+    if (!text) return;
+    const t = setTimeout(() => setStopNote({ ok: false, text: text as string }), 0);
+    return () => clearTimeout(t);
+  }, []);
   const [draft, setDraft] = useState("");
   const [canListen, setCanListen] = useState(true);
 
@@ -1262,7 +1277,16 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
         signedOut = true;
         return;
       }
-      if (alive.current) setStopNote({ ok: false, text: `STOP didn't reach the gateway: ${voiceError(e)} Press it again.` });
+      const text = `STOP didn't reach the gateway: ${voiceError(e)} Press it again.`;
+      if (alive.current) setStopNote({ ok: false, text });
+      else {
+        // This console went away mid-STOP (hidden, popped out): the next one says so.
+        try {
+          sessionStorage.setItem(STOP_FAILED_KEY, text);
+        } catch {
+          /* storage off */
+        }
+      }
     } finally {
       stopping.current = false;
       if (!signedOut && alive.current) refresh();

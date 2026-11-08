@@ -157,3 +157,4 @@
 .ceo.in-panel .voice-dock { margin: -8px -14px 0; padding: 12px 14px; }
 .ceo main.elsewhere { padding: 20px 16px; gap: 12px; }
 .ceo main.elsewhere p { margin: 0; color: var(--dim); font-size: 15px; }
+.ceo.in-panel:focus { outline: none; }
