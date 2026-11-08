@@ -7,6 +7,10 @@
 // answers {conversation_id, say, actions:[{tool, summary, undo_id?}]}; text containing "slow" answers
 // {pending: true} first (GET /api/ceo/talk/{id} has it ~3 s later); stops run at once with an undo.
 // POST /api/ceo/undo {undo_id} (once). MOCK_TALK=503 answers assistant_unavailable (the console falls back).
+// D37: agent.activity {agent, kind: thinking|tool_started|tool_done|writing|idle, tool?, text?, order_id?}
+// while the agents work (admin and session readers only), artifact events carry their private
+// subject/body for admin readers only, and the case flow builds the D35 documents (doc.step,
+// doc.created, doc.verified). Approving a memo writes and sends it (memo.sent with attachments).
 // Task 36/39: POST /api/stream-ticket (Bearer) → {ticket, expires_at}, 60 s single use, for
 // GET /api/events/stream?ticket=; a session is never accepted from a URL.
 //
@@ -70,10 +74,34 @@ const proposals = new Map();
 let nextApproval = 1;
 let nextProposal = 1;
 
-function emit(type, payload, extra = {}) {
+function emit(type, payload, extra = {}, priv = null) {
   const e = { id: events.length + 1, ts: new Date().toISOString(), type, actor: "system", case_id: null, provider: null, status: "ok", payload, tokens_in: null, tokens_out: null, cost_usd: null, ...extra };
   events.push(e);
+  if (priv) privates.set(e.id, priv);
   return e;
+}
+/** D37: event id -> fields only admin readers see; agent.activity is admin-only as a whole. */
+const privates = new Map();
+/** What a reader sees of an event: null when it isn't theirs to see. */
+function view(e, admin) {
+  if (e.type === "agent.activity" && !admin) return null;
+  const priv = privates.get(e.id);
+  return admin && priv ? { ...e, payload: { ...e.payload, ...priv } } : e;
+}
+/** D37: an agent's live activity (thinking, a tool, the text it writes), as Naive relays it. */
+function activity(seat, kind, extra = {}) {
+  const tool = extra.tool && !String(extra.tool).includes(".") ? { tool: `utax.${extra.tool}` } : {};
+  emit("agent.activity", { agent: `utax-${seat}`, session_id: `ses_${seat}`, kind, ...extra, ...tool }, { actor: seat });
+}
+/** Steps that type `text` in a few deltas (each its own step, so it arrives over time). */
+function writes(at, seat, text, extra = {}) {
+  const parts = text.match(/[^\s]+\s*/g) || [text];
+  const per = Math.max(1, Math.ceil(parts.length / 5));
+  for (let i = 0; i < parts.length; i += per) {
+    // v1.18: each writing event is the draft so far (the latest 600 characters).
+    const sofar = parts.slice(0, i + per).join("").slice(-600);
+    at(() => activity(seat, "writing", { text: sofar, ...extra }));
+  }
 }
 function requestApproval(summary, caseId, actionType = "email") {
   const id = `apr_${nextApproval++}`;
@@ -326,6 +354,8 @@ function order(text, via) {
       emit("ad.created", { kind: "client", headline: "Your Delaware franchise tax, done right", image_url: `http://127.0.0.1:${PORT}/assets/ad_${n}.svg`, order_id: ref }, { actor: "mkt" });
     });
     for (const channel of ["x", "linkedin"]) {
+      at(() => activity("mkt", "tool_started", { tool: "post_social", order_id: ref }));
+      writes(at, "mkt", `Drafting the ${channel === "x" ? "X" : "LinkedIn"} post: the $85,165 notice against the $450 most startups owe, with the ad image.`, { order_id: ref });
       call("mkt", "post_social");
       at(() =>
         emit("post.published", { channel, text: "Delaware sent you an $85,165 franchise tax bill? Most startups owe $450. U-Tax checks yours free.", url: `https://${channel}.com/utax/status/${events.length}`, image_url: `http://127.0.0.1:${PORT}/assets/ad_${ads}.svg`, order_id: ref }, { actor: "mkt" }),
@@ -342,17 +372,78 @@ function order(text, via) {
       const label = `Candidate ${String.fromCharCode(65 + (candidates++ % 26))}`;
       const id = `cand_${candidates}`;
       const start = new Date(Date.now() + 86400000 + i * 3600000).toISOString();
+      const subject = "A paid tax-season gig at U-Tax (and a 20-minute call)";
+      const mail = `Hi ${label},\n\nU-Tax checks Delaware franchise tax for startups. We have a short paid gig this season reviewing estimates.\n\nI've put a 20-minute call on your calendar; move it if the time doesn't work.\n\nThe U-Tax hiring team`;
+      at(() => activity("hr", "tool_started", { tool: "hr_outreach", order_id: ref }));
+      writes(at, "hr", `Inviting ${label} to a 20-minute call about the tax-season gig; the email goes from the hiring template.`, { order_id: ref });
       call("hr", "hr_outreach");
-      at(() => emit("hr.outreach", { candidate_id: id, label, slot: start, order_id: ref }, { actor: "hr" }));
+      at(() => emit("hr.outreach", { candidate_id: id, label, slot: start, order_id: ref }, { actor: "hr" }, { sent: { subject, body: mail, to_masked: `${label.slice(-1).toLowerCase()}***@example.com` } }));
       at(() => emit("call.booked", { start, minutes: 20, invitee_masked: label, kind: "candidate", order_id: ref }, { actor: "hr" }));
     }
   }
   if (/follow|customer|client|remind/.test(w)) {
     handoff("intake", "follow_up");
-    at(() => emit("client.followed_up", { kind: "memo_check", order_id: ref }, { actor: "intake", case_id: "case_7" }));
+    const subject = "Did your franchise tax memo make sense?";
+    const mail = "Hi Team #7,\n\nChecking in on the estimate we sent: $450 with the assumed par value method, due March 1.\n\nReply here if anything looks off and we'll take another look.\n\nU-Tax";
+    at(() => activity("intake", "tool_started", { tool: "follow_up", order_id: ref }));
+    writes(at, "intake", "Following up with Team #7 on the memo; the template has the numbers and the due date.", { order_id: ref });
+    at(() => emit("client.followed_up", { kind: "memo_check", order_id: ref }, { actor: "intake", case_id: "case_7" }, { sent: { subject, body: mail, to_masked: "f***@team7.dev" } }));
+    at(() => activity("intake", "idle", { order_id: ref }));
   }
   steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
   return o.id;
+}
+
+/** D37: an approved memo, written live and sent with the documents attached. */
+function sendMemo(caseId) {
+  const c = cases.find((x) => x.case_id === caseId);
+  const masked = c ? c.masked_name : "your team";
+  const subject = `Your Delaware franchise tax estimate: $450 (memo UTX-${caseId.toUpperCase().replace(/[^A-Z0-9]/g, "")})`;
+  const body = `Dear ${masked},\n\nYou owe $450 in Delaware franchise tax and fees, not the $85,165 on your notice. We used the assumed par value capital method, which is lower for your company.\n\nThe workpaper and the memo are attached. File and pay by March 1.\n\nU-Tax`;
+  const steps = [];
+  const at = (fn) => steps.push(fn);
+  at(() => activity("acct", "tool_started", { tool: "send_memo" }));
+  writes(at, "acct", `The memo for ${masked} is approved; sending it with the workpaper and the memo attached.`);
+  at(() => emit("tool.called", { tool: "send_memo", status: "done" }, { actor: "acct", case_id: caseId }));
+  at(() => emit("memo.sent", { to_masked: "f***@team.dev", subject, body: "(the masked memo body)", message_id: `msg_${events.length}`, seconds_since_last_fact: 42, memo_ref: `UTX-${events.length}` }, { actor: "acct", case_id: caseId }, { sent: { subject, body, to_masked: "f***@team.dev" } }));
+  at(() => activity("acct", "idle"));
+  steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
+}
+
+/** D35/D37: prepare_documents' events in one burst, shaped as the gateway emits them. */
+function buildDocuments(caseId, masked) {
+  const tag = masked.replace(/[^A-Za-z0-9]/g, "");
+  const step = (doc, n, of, detail, cells) => emit("doc.step", { doc, step: n, detail, of }, { actor: "acct", case_id: caseId }, cells ? { cells } : null);
+  const grid = (sheet, rows) => rows.flatMap((row, r) => row.map((value, c) => ({ sheet, cell: `${String.fromCharCode(65 + c)}${r + 1}`, value })).filter((x) => x.value !== ""));
+  step("workpaper", 1, 5, "Inputs: 6 facts, each with the client's own words", grid("Inputs", [
+    ["Fact", "Value", "From the client's email (verbatim)"],
+    ["Incorporated in Delaware", "yes", "We're a Delaware C-corp"],
+    ["Authorized shares", 10000000, "10M authorized"],
+    ["Issued shares", 8000000, "8M issued"],
+    ["Stated par value", "$0.00001", "assumed"],
+    ["Gross assets", "$500,000", "about $500k on the balance sheet"],
+  ]));
+  step("workpaper", 2, 5, "Authorized Shares Method: 10,000,000 shares → $85,165", grid("Authorized Shares Method", [
+    ["Step", "Value"], ["First 5,000 shares", "$175"], ["Next 5,000 shares", "$250"], ["Each further 10,000 shares", "$85"], ["Tax", "$85,165"],
+  ]));
+  step("workpaper", 3, 5, "Assumed Par Value Capital Method: $500,000 ÷ 8,000,000 issued", grid("Assumed Par Value Capital", [
+    ["Step", "Value"], ["Assumed par", "$0.0625"], ["Assumed par value capital", "$625,000"], ["Tax", "$400"],
+  ]));
+  step("workpaper", 4, 5, "Comparison: $400 + $50 annual report fee = $450", grid("Comparison", [
+    ["Method", "Tax"], ["Authorized shares", "$85,165"], ["Assumed par value capital", "$400"], ["Annual report fee", "$50"], ["Total due", "$450"],
+  ]));
+  step("workpaper", 5, 5, "Filing: due March 1; late: $200 + 1.5% a month", grid("Filing", [["Due", "March 1"], ["Late penalty", "$200 + 1.5% a month"]]));
+  emit("doc.created", { doc: "workpaper", file_name: `Delaware_Franchise_Tax_Workpaper_${caseId}_v1.xlsx`, sha256: "mock", pages_or_sheets: 5 }, { actor: "acct", case_id: caseId });
+  step("memo", 1, 3, "Memo: summary ($450 instead of $85,165)");
+  step("memo", 2, 3, "Memo: both methods as tables, and why the lower one");
+  step("memo", 3, 3, "Memo: 8 Del. C. § 503, next steps and the disclaimer");
+  emit("doc.created", { doc: "memo", file_name: `Franchise_Tax_Memo_${caseId}_v1.docx`, sha256: "mock", pages_or_sheets: 2 }, { actor: "acct", case_id: caseId });
+  step("books", 1, 1, `Books: ${masked}, fee $0, tax saved $84,715`, [
+    { sheet: "Books", cell: `A${2 + signups}`, value: caseId }, { sheet: "Books", cell: `B${2 + signups}`, value: masked }, { sheet: "Books", cell: `C${2 + signups}`, value: "$84,715" },
+  ]);
+  emit("doc.created", { doc: "books", file_name: "U-Tax_Books.xlsx", sha256: "mock", pages_or_sheets: 1 }, { actor: "acct", case_id: caseId });
+  for (const doc of ["workpaper", "memo", "books"]) emit("doc.verified", { doc, ok: true }, { actor: "acct", case_id: caseId });
+  return tag;
 }
 
 let signups = 0;
@@ -376,10 +467,16 @@ function signup(name, company, email) {
   at(() => emit("facts.extracted", { facts: { incorporated_delaware: true, authorized_shares: 10000000, issued_shares: 8000000, stated_par: "0.00001", gross_assets_cents: 50000000, foreign_owner_25: false }, quotes: {}, assumed: [] }, { actor: "intake", case_id: caseId }));
   call("tax", "law_search");
   at(() => emit("law.searched", { query: "Delaware franchise tax assumed par value capital method", results: [{ cite: "8 Del. C. § 503", snippet: "assumed par value capital method" }] }, { actor: "tax", case_id: caseId }));
+  at(() => activity("tax", "tool_started", { tool: "compute_tax" }));
   call("tax", "compute_tax");
   at(() => emit("tax.computed", { authorized_method_cents: 8516500, assumed_par_method_cents: 40000, chosen: "assumed_par", annual_report_fee_cents: 5000, fee_source: "snapshot", total_cents: 45000, due_date: "2027-03-01", form5472_flag: false, rnd_flag: false, engine_version: "mock" }, { actor: "tax", case_id: caseId }));
   call("qa", "qa_check");
   at(() => emit("qa.passed", { checks: [{ field: "total", ok: true, note: "engine re-run matches" }, { field: "assumed_par_method", ok: true, note: "matches" }] }, { actor: "qa", case_id: caseId }));
+  // D35/D37: the documents, built step by step from the engine's numbers.
+  at(() => activity("acct", "tool_started", { tool: "prepare_documents" }));
+  call("acct", "prepare_documents");
+  at(() => buildDocuments(caseId, masked));
+  at(() => activity("acct", "idle"));
   call("acct", "send_memo", "needs_approval");
   at(() => requestApproval(`memo for ${masked}`, caseId));
   steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
@@ -534,8 +631,9 @@ const server = createServer(async (req, res) => {
       res.write(": open\n\n"); // as the gateway's heartbeat: the browser sees the stream open at once
       const pump = () => {
         for (const e of events.filter((x) => x.id > after)) {
-          res.write(`id: ${e.id}\ndata: ${JSON.stringify(e)}\n\n`);
           after = e.id;
+          const v = view(e, ceoRead);
+          if (v) res.write(`id: ${e.id}\ndata: ${JSON.stringify(v)}\n\n`);
         }
       };
       pump();
@@ -553,8 +651,10 @@ const server = createServer(async (req, res) => {
   if (req.method === "GET" && p === "/api/events") {
     const after = Number(url.searchParams.get("after_id") || 0);
     const limit = Number(url.searchParams.get("limit") || 500);
-    const data = events.filter((e) => e.id > after).slice(0, limit);
-    return out(200, { data, next_after_id: data.at(-1)?.id ?? after, has_more: events.filter((e) => e.id > after).length > limit });
+    const page = events.filter((e) => e.id > after).slice(0, limit);
+    const admin = isAdmin(req);
+    const data = page.map((e) => view(e, admin)).filter(Boolean);
+    return out(200, { data, next_after_id: page.at(-1)?.id ?? after, has_more: events.filter((e) => e.id > after).length > limit });
   }
   if (req.method === "GET" && p === "/api/ceo/brief") {
     const e = emit("brief.generated", { text: `Good evening. ${pending.size} approval waiting: memo for Team #7, $450.`, counts: {} }, { actor: "cos" });
@@ -593,6 +693,7 @@ const server = createServer(async (req, res) => {
     const a = pending.get(body.approval_id);
     if (!a) return out(404, { error: { code: "not_found", message: "no such approval" } });
     pending.delete(a.approval_id);
+    if (body.decision !== "deny" && /^memo for /.test(String(a.summary)) && a.case_id) sendMemo(a.case_id);
     emit("touch.training", { note: body.decision, approval_id: a.approval_id, channel: "click" }, { actor: "ceo", case_id: a.case_id });
     return out(200, { ok: true });
   }

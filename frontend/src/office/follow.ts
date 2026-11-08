@@ -13,8 +13,13 @@ export const FOLLOW_FRESH_MS = 15_000;
  * The desk to follow, or null. Only a step that arrived on the live stream (`live`, never the log
  * folded on open) counts, only if it is still that desk's newest step, and only while it is recent.
  */
-export function followTarget(follow: boolean, live: { seat: Seat; key: string } | null, office: Office, now: number, freshMs = FOLLOW_FRESH_MS): Seat | null {
+export function followTarget(follow: boolean, live: { seat: Seat; key: string; ts?: string; activity?: true } | null, office: Office, now: number, freshMs = FOLLOW_FRESH_MS): Seat | null {
   if (!follow || !live) return null;
+  if (live.activity) {
+    // D37: an agent working live (agent.activity) has no step yet: its own log time decides.
+    const at = Date.parse(live.ts ?? "");
+    return Number.isFinite(at) && Math.abs(now - at) <= freshMs && (SEATS as readonly string[]).includes(live.seat) ? live.seat : null;
+  }
   const newest = office.desks[live.seat]?.steps[0];
   if (!newest || newest.key !== live.key) return null;
   const at = Date.parse(newest.ts);
