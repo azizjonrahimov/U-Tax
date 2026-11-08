@@ -878,8 +878,11 @@ everything below.
   - On `job.delivered`: `Job job_N delivered (order_<id>)`.
   - On `job.failed`: `Job job_N failed: <reason> (order_<id>)`.
   - A `contractor_pay` approval wake names its type: `… (contractor_pay job_N)`.
-- `MARKET_JOB_TTL_MINUTES` defaults to **3**, matching Marketing's checks (about 9 × 20 s). A job past its TTL
-  expires and can no longer be claimed, delivered or paid.
+- `MARKET_JOB_TTL_MINUTES` (default 3) runs from posting and stops once the job is `verified` (task 48).
+  - An open, claimed or submitted job past it expires (`job.failed` reason `expired`).
+  - A verified job waits for its payment, so an approval always pays for verified work.
+  - A `job.failed` supersedes that job's waiting `contractor_pay` approval (a late approve answers 409 `superseded`).
+  - `make_ad` for a CEO order expires that order's open or claimed job.
 - **A contractor's image never posts unseen.** `post_social` with an `image_url` from a market job is ASK until
   the CEO has approved one post with an image from that contractor. A third party's pixels are a new kind of
   content: the format, size and headline checks are filters, not a review.

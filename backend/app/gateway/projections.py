@@ -570,6 +570,10 @@ class State:
             return
         reason = e.payload["reason"]
         job.update(checks=e.payload["checks"] or job.get("checks"), reason=reason)
+        # task 48: an abandoned job's waiting payment approval is moot (the console drops it)
+        pending = self.approvals.get(self.approval_by_key.get(f"pay:{job['job_id']}", ""))
+        if pending is not None and pending.decision is None:
+            pending.decision, pending.superseded_by = "superseded", f"{job['job_id']} {reason}"
         if reason == "expired":
             job["status"] = "expired"
         elif reason == "checks_failed" and job.get("submits", 0) < 2:
