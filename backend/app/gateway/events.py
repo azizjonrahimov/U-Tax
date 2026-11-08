@@ -12,7 +12,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
-ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system"}
+ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system",
+          "ceo_assistant"}  # v1.14.1: the CEO assistant's direct actions
 PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "elevenlabs", "hubspot", "mobilerun",
              "apify", "monid", "google", "stripe", None}
 STATUSES = {"ok", "failed", "skipped"}
@@ -80,6 +81,8 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     # v1.8 §5b: the CEO voice console's proposals
     "ceo.proposed": ("proposal_id", "tool", "args", "readback", "expires_at", "source"),
     "ceo.confirmed": ("proposal_id", "via", "heard_len"),  # v1.8.5: heard is private
+    "ceo.said": ("conversation_id", "text_len"),  # v1.14: the text is private
+    "ceo.replied": ("conversation_id", "actions"),
     "ceo.cancelled": ("proposal_id", "via", "heard_len", "reason"),
 }
 

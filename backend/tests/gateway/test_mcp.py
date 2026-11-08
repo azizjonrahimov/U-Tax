@@ -8,7 +8,7 @@ from app.main import create_app
 
 from .conftest import HAPPY_QUOTES
 
-TOKENS = {a: f"tok-{a}-" + "x" * 32 for a in AGENTS}
+TOKENS = {a: f"tok-{a}-" + "x" * 32 for a in (*AGENTS, "ceo")}  # v1.14: + the ceo seat
 
 
 @pytest.fixture
@@ -41,7 +41,8 @@ def test_the_token_must_belong_to_the_seat(mcp):
     assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
     assert call(client, "intake", "ping", headers={"X-UTax-Actor": "tax"}).status_code == 401
     assert call(client, "intake", "ping", headers={"X-UTax-Actor": "intake"}).status_code == 200
-    assert client.post("/mcp/ceo", json={}).status_code == 404  # not a seat
+    assert client.post("/mcp/boss", json={}).status_code == 404  # not a seat
+    assert client.post("/mcp/ceo", json={}).status_code == 401  # v1.14: a seat, its own token
 
 
 @pytest.mark.parametrize("tokens", [{}, {"intake": ""}, {"intake": "short"}])

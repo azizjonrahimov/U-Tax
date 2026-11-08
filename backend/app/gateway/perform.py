@@ -395,6 +395,10 @@ class Gateway:
             "ceo_tool": self._ceo_tool,
             "ceo_confirm": self._ceo_confirm,
             "ceo_command": self._ceo_command,
+            "ceo_direct": self._ceo_direct,  # v1.14: the /mcp/ceo seat (and the talk stop)
+            "ceo_undo": self._ceo_undo,
+            "ceo_turn": self._ceo_turn,
+            "ceo_reply": self._ceo_reply,
             # v1.9 §6b-bis: Naïve's data-leak confirms (app/naive_confirm.py), never an agent's
             "naive_confirm": self._naive_confirm,
             "naive_question": self._naive_question,
@@ -413,6 +417,13 @@ class Gateway:
             "law_search": self._law_fetch, "buy_tool": self._buy_fetch,
             "source_candidates": self._source_fetch}  # v1.11: Monid search before the lock
         self._order_ctx = threading.local()  # v1.11.1: the CEO order a tool call serves
+        # v1.14 (D34): the CEO assistant's direct actions (app/ceo_direct.py)
+        self._actor_as: str | None = None  # its events carry ceo_assistant
+        self._undos: dict[str, dict] = {}  # undo_id -> what to put back (in memory)
+        self._cancelled_orders: set[str] = set()  # cancel_order: tools for it are refused
+        self._stops = 0  # pauses so far, from any path (a counter: clocks can tie)
+        self._ceo_turn_stops: int | None = None  # _stops when the latest talk turn began
+        self._ceo_turn_actions: dict[str, list[dict]] = {}  # conversation -> this turn's
         from app.gateway.adapters.local import _KeyedJson
 
         self._buy_intents = _KeyedJson(settings.data_dir / "toolbuy-intents.json")
@@ -741,6 +752,10 @@ class Gateway:
         if actor is not None:
             args["_actor"] = actor
             order = self._valid_order(args.pop("order_id", None))  # v1.11.1, else ignored
+            if order and order in self._cancelled_orders:  # v1.14: the CEO cancelled it
+                return ToolResult("refused", error={
+                    "code": "order_cancelled",
+                    "message": f"the CEO cancelled {order}; close its card, don't work it"})
             if order:
                 args["_order_id"] = order
         slow = self._slow_reads.get(name)
@@ -825,6 +840,10 @@ class Gateway:
         events = [replace(e, payload={**e.payload, "channel": channel})
                   if e.type.startswith("touch.") and "channel" not in e.payload else e
                   for e in events]  # v1.8: every touch says how the CEO touched
+        if getattr(self, "_actor_as", None):  # v1.14.1: the assistant acted, not the CEO
+            events = [replace(e, actor=self._actor_as)
+                      if e.actor == "ceo" and not e.type.startswith("touch.") else e
+                      for e in events]  # touches stay the CEO's: the human asked for it
         order = getattr(self._order_ctx, "value", None)
         if order:  # v1.11.1: the theater groups a CEO order's steps by it
             events = [e if "order_id" in e.payload
@@ -3810,6 +3829,56 @@ class Gateway:
             count, ts = self.state.naive_recoveries.get(session_id, (0, ""))
         return count, ts or None
 
+    # ------------------------------------------------------------------ v1.14 (D34)
+
+    def _ceo_direct(self, args: dict) -> dict:
+        """/mcp/ceo: a §5b tool run directly (app/ceo_direct.py). `as_ceo`: the gateway's own
+        stop grammar inside /api/ceo/talk (the CEO's words, no LLM)."""
+        from app import ceo_direct, ceo_tools
+
+        name = _str(args, "name", max_len=40)
+        actor = "ceo" if args.get("as_ceo") is True else ceo_direct.ASSISTANT
+        try:
+            out = ceo_direct.run(self, name, args.get("args"), actor=actor)
+        except ceo_tools.ToolRefused as err:
+            raise Refused(err.code, err.message, err.data) from err
+        if out["kind"] == "done":
+            action = {"tool": name, "summary": out["summary"],
+                      **({"undo_id": out["undo_id"]} if out.get("undo_id") else {})}
+            for actions in self._ceo_turn_actions.values():  # the turn(s) under way
+                actions.append(action)
+        return out
+
+    def _ceo_undo(self, args: dict) -> dict:
+        """POST /api/ceo/undo (the CEO) or the seat's undo tool (the assistant)."""
+        from app import ceo_direct, ceo_tools
+
+        undo_id = _str(args, "undo_id", max_len=40)
+        actor = "ceo" if args.get("as_ceo") is True else ceo_direct.ASSISTANT
+        try:
+            return ceo_direct.undo(self, undo_id, actor=actor)
+        except ceo_tools.ToolRefused as err:
+            raise Refused(err.code, err.message, err.data) from err
+
+    def _ceo_turn(self, args: dict) -> dict:
+        """A CEO turn starts: ceo.said (the text private), the turn's clock and its actions."""
+        conversation_id = _str(args, "conversation_id", max_len=40)
+        text = _str(args, "text", max_len=4000)
+        self._ceo_turn_stops = self._stops
+        self._ceo_turn_actions[conversation_id] = []
+        self._emit([NewEvent(type="ceo.said", actor="ceo",
+                             payload={"conversation_id": conversation_id, "text_len": len(text)},
+                             private={"text": text})])
+        return {"started": iso_ts(self._now())}
+
+    def _ceo_reply(self, args: dict) -> dict:
+        """The assistant answered: ceo.replied with what it did this turn."""
+        conversation_id = _str(args, "conversation_id", max_len=40)
+        actions = self._ceo_turn_actions.pop(conversation_id, [])
+        self._emit([NewEvent(type="ceo.replied", actor="ceo_assistant",
+                             payload={"conversation_id": conversation_id, "actions": actions})])
+        return {"actions": actions}
+
     def _ceo_confirm(self, args: dict) -> dict:
         """POST /api/ceo/confirm: carry out a proposal's pinned action, once, within 60 s,
         through the same internals as the §5 routes. A spoken confirm is re-checked here."""
@@ -3941,6 +4010,8 @@ class Gateway:
                               for t in TRUST_TYPES}}
         action_type = _one_of(args, "action_type", TRUST_TYPES)
         requested = _one_of(args, "state", ("PAUSED", "AUTO", "ASK", "RESUME"))
+        if requested == "PAUSED":  # v1.14.1: a RESUME from a turn begun before this fails
+            self._stops += 1
         current = self.state.trust[action_type]
         to = requested
         if requested == "RESUME":
