@@ -97,6 +97,8 @@ class Case:
     memo_result: dict | None = None  # v1.7.1: the result the latest memo was sent with
     phone_attempts: dict[str, list[str]] = field(default_factory=dict)  # memo_ref -> statuses
     memo_ts: str | None = None
+    docs: dict | None = None  # v1.15: {"key", "files"} of the verified documents
+    docs_building: dict = field(default_factory=dict)  # v1.15: the version being built
     call: dict[str, Any] | None = None
     blocked_reason: str | None = None
     not_eligible_reason: str | None = None
@@ -418,6 +420,32 @@ class State:
 
     _on_qa_failed = _on_qa_passed
 
+    # v1.15: doc.created names each file, doc.verified passes it; once the workpaper, the
+    # memo and the books of one memo version all pass, the case's documents are ready
+    def _on_doc_created(self, e: Event) -> None:
+        case = self._case(e)
+        if case is not None and e.idempotency_key:
+            version = e.idempotency_key.rsplit(":", 2)[0]
+            building = case.docs_building if case.docs_building.get("key") == version else {
+                "key": version, "files": {}, "ok": set()}
+            building["files"][e.payload["doc"]] = e.payload["file_name"]
+            case.docs_building = building
+
+    def _on_doc_verified(self, e: Event) -> None:
+        case = self._case(e)
+        if case is None or not e.idempotency_key:
+            return
+        building = case.docs_building
+        if building.get("key") != e.idempotency_key.rsplit(":", 2)[0]:
+            return
+        if not e.payload.get("ok"):
+            building["ok"] = set()
+            return
+        building["ok"].add(e.payload["doc"])
+        if {"workpaper", "memo", "books"} <= building["ok"]:
+            case.docs = {"key": building["key"],
+                         "files": [building["files"]["workpaper"], building["files"]["memo"]]}
+
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)
         if case is not None and e.status == "ok" and case.reply_to and not case.memos_sent:
@@ -434,10 +462,25 @@ class State:
             if case.result:
                 case.memo_result = dict(case.result)
 
+    def _on_hr_outreach_declined(self, e: Event) -> None:
+        """Task 38b: HR's no: like the gateway's (slot freed, no later mail); no stage."""
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is None:
+            return
+        cand["outreach_declined"] = True
+        cand.pop("replied", None)  # the tick never books it
+        if not cand.get("booked_at"):
+            cand["slot_released"] = True
+            self.candidate_call_starts.discard(cand.get("contacted"))
+
     def _on_call_booked(self, e: Event) -> None:
         if e.payload.get("kind") == "candidate":  # v1.11.1: no case; the slot is held
             if e.status == "ok":
                 self.candidate_call_starts.add(e.payload["start"])
+                parts = (e.idempotency_key or "").split(":")  # hr_outreach:<cand>:call
+                cand = self.candidates.get(parts[1]) if len(parts) == 3 else None
+                if cand is not None:
+                    cand["booked_at"] = e.payload["start"]  # task 38
             return
         case = self._case(e)
         if case is not None and e.status == "ok":
@@ -580,12 +623,23 @@ class State:
             cand["reply_to"] = private.get("reply_to")
         if private.get("listed"):  # v1.11: from the CEO's HR_CANDIDATES (no questionnaire)
             cand["listed"] = True
-        if stage == "applicant" and cand.get("contacted") and not private.get("listed"):
-            cand["replied"] = True  # task 32: a mail after the outreach note is the reply
+        if stage == "applicant" and cand.get("contacted") and private.get("affirmative"):
+            cand["replied"] = True  # 32b: a plain yes to the outreach note books the call
+            cand.pop("outreach_declined", None)  # task 38: a later yes undoes a no
+        if stage == "applicant" and private.get("outreach_reply"):
+            # task 38: "yes" sticks once said; anything else is "other"
+            cand["reply_kind"] = "yes" if private.get("affirmative") or cand.get(
+                "reply_kind") == "yes" else "other"
+            if private.get("outreach_declined") and cand.get("reply_kind") != "yes":
+                cand["outreach_declined"] = True
+                cand["slot_released"] = True
+                self.candidate_call_starts.discard(cand.get("contacted"))
         if stage == "applicant":  # 22b: the applicant's latest mail wakes HR anew
             cand["last_event_id"] = max(cand.get("last_event_id", 0), e.id)
         if stage == "applicant" and private.get("text"):
-            if cand.get("texts"):  # every mail after the first is an answer
+            # every mail after the first is an answer; 32b: never a reply to the outreach
+            if cand.get("texts") and not private.get("outreach_reply") \
+                    and not cand.get("listed"):
                 cand["answers"] = cand.get("answers", 0) + 1
             cand.setdefault("texts", []).append(private["text"])  # contact-free answers
         if stage == "applicant" and e.payload["note"] and "credentials" not in cand:

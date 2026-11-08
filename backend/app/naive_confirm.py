@@ -33,6 +33,7 @@ log = logging.getLogger("utax.naive_confirm")
 AGENT_NAMES: dict[str, str] = {
     "chief-of-staff": "cos", "intake": "intake", "tax": "tax", "qa": "qa",
     "accounting": "acct", "marketing": "mkt", "hr": "hr",
+    "ceo-assistant": "ceo",  # v1.14 (D34): the CEO's conversation, the /mcp/ceo seat
 }
 BOARD_TOOLS = ("board_read", "board_write")
 # v1.10.3 (owner: "allow handoffs"): Naive's coordinator tools hand work to our own agents
@@ -47,8 +48,9 @@ RECOVER_TEXT = ("Your previous attempt stopped on a platform error. Continue the
 RECOVER_WITHIN = 2 * 3600.0  # only sessions created in the last 2 h
 RECOVER_BACKOFF = (30.0, 120.0)  # before nudge 1 (from first sight), before nudge 2
 RECOVER_MAX = len(RECOVER_BACKOFF)
-POLL_SECONDS = 5.0
+POLL_SECONDS = 10.0  # task 35: was 5 s
 SESSIONS_PAGE = 100
+PASS_PAGE = 50  # task 35: ONE list call per pass (all agents), filtered here to ours
 DETAILS_PER_POLL = 25  # GET /v1/sessions/{id} per pass: never a burst against Naïve's limits
 QUIET_SECONDS = 30.0  # a session with nothing for the gateway to answer rests this long
 REBOOT_SECONDS = 600.0  # the 7 ids are looked up again (a re-created agent, a partial boot)
@@ -62,6 +64,11 @@ def naive_decision(actor: str | None, name: str) -> str:
         return "allow"
     if name in COORDINATOR_TOOLS:
         return "allow" if actor == "cos" else "deny"
+    if actor == "ceo":  # v1.14: its own seat's tools (the gateway enforces the rest)
+        from app.ceo_direct import SEAT_TOOLS
+
+        ok = name.startswith(MCP_PREFIX) and name[len(MCP_PREFIX):] in SEAT_TOOLS
+        return "allow" if ok else "deny"
     if name.startswith(MCP_PREFIX) and actor in TOOL_ACTORS.get(name[len(MCP_PREFIX):], ()):
         return "allow"
     return "deny"
@@ -85,6 +92,7 @@ class NaiveConfirmer:
         # 19b: Naive re-asks with the SAME tool_call_id after a retry; each ask is answered
         # (Naive is the dedup) and logged as its own attempt
         self._attempts: dict[tuple[str, str], int] = {}
+        self._pass_rows: list[dict] | None = None  # task 35: this pass's one sessions page
 
     async def boot(self) -> dict[str, str]:
         """Resolve the 7 agent ids by name. naive.config.ts also stamps each agent with
@@ -112,6 +120,9 @@ class NaiveConfirmer:
     async def poll_once(self) -> int:
         """One pass over every waiting session; returns how many asks were answered."""
         await self._replay_unlogged()
+        backoff = getattr(self.client, "backoff", None)
+        if backoff is not None and backoff.blocked():
+            return 0  # task 35: Naïve is at capacity; the backoff logged it once
         if self.booted_at is not None and self.clock() - self.booted_at >= REBOOT_SECONDS:
             try:
                 await self.boot()
@@ -122,17 +133,21 @@ class NaiveConfirmer:
         agents = list(self.agents.items())
         if not agents:
             return 0
+        # task 35: one list call per pass (GET /v1/sessions?limit=50), not one per seat
+        try:
+            page = await self.client.list_sessions(limit=PASS_PAGE)
+        except NaiveError as err:
+            if err.status_code not in (429, 503):
+                log.warning("naive confirms: listing sessions failed: %s", err)
+            return 0
+        self._pass_rows = list(page.data)
         start = self._turn % len(agents)
         self._turn += 1
         answered, budget = 0, DETAILS_PER_POLL
         for agent_id, actor in agents[start:] + agents[:start]:
-            try:
-                page = await self.client.list_sessions(agent_id=agent_id, status="idle",
-                                                       limit=SESSIONS_PAGE)
-            except NaiveError:  # one agent's error never ends the pass for the others
-                log.exception("naive confirms: listing %s's sessions failed", actor)
-                continue
-            for row in page.data:
+            rows = [r for r in self._pass_rows if r.get("agent_id") == agent_id
+                    and r.get("status") in (None, "idle")]
+            for row in rows:
                 session_id = str(row.get("id") or "")
                 if not session_id or row.get("agent_id") not in (None, agent_id):
                     continue  # the filter is the server's; _answer re-checks the session
@@ -145,7 +160,13 @@ class NaiveConfirmer:
                 budget -= 1
                 try:
                     n = await self._answer(session_id, agent_id, actor)
-                except (NaiveError, KeyError, TypeError, ValueError):
+                except NaiveError as err:
+                    if err.status_code in (429, 503):
+                        return answered  # the backoff tripped: the whole pass stops
+                    log.exception("naive confirm for session %s failed; retried next poll",
+                                  session_id)
+                    continue
+                except (KeyError, TypeError, ValueError):
                     log.exception("naive confirm for session %s failed; retried next poll",
                                   session_id)
                     continue
@@ -205,8 +226,10 @@ class NaiveConfirmer:
         """Has the agent started a session after this one (that one carries on)?"""
         from datetime import datetime
 
-        page = await self.client.list_sessions(agent_id=agent_id, limit=SESSIONS_PAGE)
-        for row in page.data:
+        rows = self._pass_rows  # task 35: this pass's page holds the newest sessions
+        if rows is None:
+            rows = (await self.client.list_sessions(agent_id=agent_id, limit=SESSIONS_PAGE)).data
+        for row in rows:
             if str(row.get("id") or "") == session_id or row.get("agent_id") not in (
                     None, agent_id):
                 continue

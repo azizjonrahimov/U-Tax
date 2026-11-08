@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 from app.engine import (
@@ -95,6 +96,7 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "list_open_cases": ("cos",), "get_case": AGENTS, "extract_facts": ("intake",),
     "ask_client": ("intake",), "mark_not_eligible": ("intake",), "law_search": ("tax",),
     "compute_tax": ("tax",), "qa_check": ("qa",), "send_memo": ("acct",),
+    "prepare_documents": ("acct",),  # v1.15 (D35)
     "book_call": ("intake",), "phone_check": ("qa",), "post_social": ("mkt",),
     "draft_dm": ("mkt",), "hr_record": ("hr",), "firm_brief": ("cos",),
     "get_candidate": ("hr",), "flag_case": ("qa",),  # v1.4
@@ -133,6 +135,35 @@ _AUTO_SUBJECT = re.compile(r"(?i)^\s*(auto(matic)?[ -]?(reply|response)\b|auto:|
                            r"updated invitation|invitation)\s*:)")
 CLIENT_REPLY_WAKES_PER_DAY = 3
 MAX_REVISIONS = 2
+
+
+_YES = re.compile(r"\b(yes|yeah|yep|yup|sure|sounds (good|great)|works( for me)?|ok|okay|"
+                  r"happy to|i'?m in|count me in|absolutely|definitely|of course|perfect|"
+                  r"great|let'?s do it)\b")
+_NOT_YES = re.compile(r"\b(no|nope|not|never|can'?t|cannot|won'?t|don'?t|doesn'?t|isn'?t|"
+                      r"unfortunately|decline|pass|busy|unsubscribe|stop|remove|but|maybe|"
+                      r"another time|reschedule|instead)\b|n't\b|\?")
+
+
+def affirmative(body: str) -> bool:
+    """Task 32b: a candidate's reply to the outreach note books the call only when the
+    reply-only text (quotes and signature cut) is a plain yes: "yes", "sure", "sounds good",
+    "works for me", "ok". A no, a question, a "but" or a new time is a note for HR, never
+    a booking (fail safe: a mixed reply books nothing)."""
+    text = " ".join(new_text(body or "").lower().replace("\u2019", "'").split())[:300]
+    return bool(text) and bool(_YES.search(text)) and not _NOT_YES.search(text)
+
+
+# task 38: a "no" to the outreach (not merely "not a yes": a question or a new time is
+# HR's to answer, and keeps the slot)
+_NO = re.compile(r"\b(no|nope|not interested|no thanks|not for me|not now|not right now|"
+                 r"not this time|decline|pass|unsubscribe|remove me|take me off|stop)\b")
+
+
+def declined(body: str) -> bool:
+    """Task 38: the reply-only text says no (and isn't a yes)."""
+    text = " ".join(new_text(body or "").lower().replace("\u2019", "'").split())[:300]
+    return bool(text) and not affirmative(body) and bool(_NO.search(text))
 
 
 def new_text(body: str) -> str:
@@ -358,6 +389,7 @@ class Gateway:
             "compute_tax": self._compute_tax,
             "qa_check": self._qa_check,
             "send_memo": self._send_memo,
+            "prepare_documents": self._prepare_documents,
             "book_call": self._book_call,
             "phone_check": self._phone_check,
             "post_social": self._post_social,
@@ -392,6 +424,10 @@ class Gateway:
             "ceo_tool": self._ceo_tool,
             "ceo_confirm": self._ceo_confirm,
             "ceo_command": self._ceo_command,
+            "ceo_direct": self._ceo_direct,  # v1.14: the /mcp/ceo seat (and the talk stop)
+            "ceo_undo": self._ceo_undo,
+            "ceo_turn": self._ceo_turn,
+            "ceo_reply": self._ceo_reply,
             # v1.9 §6b-bis: Naïve's data-leak confirms (app/naive_confirm.py), never an agent's
             "naive_confirm": self._naive_confirm,
             "naive_question": self._naive_question,
@@ -410,6 +446,13 @@ class Gateway:
             "law_search": self._law_fetch, "buy_tool": self._buy_fetch,
             "source_candidates": self._source_fetch}  # v1.11: Monid search before the lock
         self._order_ctx = threading.local()  # v1.11.1: the CEO order a tool call serves
+        # v1.14 (D34): the CEO assistant's direct actions (app/ceo_direct.py)
+        self._actor_as: str | None = None  # its events carry ceo_assistant
+        self._undos: dict[str, dict] = {}  # undo_id -> what to put back (in memory)
+        self._cancelled_orders: set[str] = set()  # cancel_order: tools for it are refused
+        self._stops = 0  # pauses so far, from any path (a counter: clocks can tie)
+        self._ceo_turn_stops: int | None = None  # _stops when the latest talk turn began
+        self._ceo_turn_actions: dict[str, list[dict]] = {}  # conversation -> this turn's
         from app.gateway.adapters.local import _KeyedJson
 
         self._buy_intents = _KeyedJson(settings.data_dir / "toolbuy-intents.json")
@@ -456,7 +499,16 @@ class Gateway:
     def _try_wake(self, message: str, waker: Callable[[str], None], *, attempt: int) -> None:
         try:
             waker(message)
-        except Exception:  # noqa: BLE001 - a dead waker never blocks the firm; retried
+        except Exception as err:  # noqa: BLE001 - a dead waker never blocks the firm; retried
+            held = getattr(err, "retry_after", None)
+            if isinstance(held, (int, float)) and held > 0:
+                # task 35: Naïve is at capacity: queued until the shared backoff clears,
+                # the same attempt (no escalation), one quiet line
+                log.info("wake %r held by the Naïve backoff; retry in %.0fs", message, held)
+                with self._lock:
+                    self._wake_retries.append((message, waker, attempt,
+                                               time.monotonic() + held + 1))
+                return
             delay = self.WAKE_BACKOFF[min(attempt, len(self.WAKE_BACKOFF) - 1)]
             log.exception("waker failed for %r (attempt %d); retry in %ss", message,
                           attempt + 1, delay)
@@ -729,6 +781,10 @@ class Gateway:
         if actor is not None:
             args["_actor"] = actor
             order = self._valid_order(args.pop("order_id", None))  # v1.11.1, else ignored
+            if order and order in self._cancelled_orders:  # v1.14: the CEO cancelled it
+                return ToolResult("refused", error={
+                    "code": "order_cancelled",
+                    "message": f"the CEO cancelled {order}; close its card, don't work it"})
             if order:
                 args["_order_id"] = order
         slow = self._slow_reads.get(name)
@@ -813,6 +869,10 @@ class Gateway:
         events = [replace(e, payload={**e.payload, "channel": channel})
                   if e.type.startswith("touch.") and "channel" not in e.payload else e
                   for e in events]  # v1.8: every touch says how the CEO touched
+        if getattr(self, "_actor_as", None):  # v1.14.1: the assistant acted, not the CEO
+            events = [replace(e, actor=self._actor_as)
+                      if e.actor == "ceo" and not e.type.startswith("touch.") else e
+                      for e in events]  # touches stay the CEO's: the human asked for it
         order = getattr(self._order_ctx, "value", None)
         if order:  # v1.11.1: the theater groups a CEO order's steps by it
             events = [e if "order_id" in e.payload
@@ -1158,17 +1218,31 @@ class Gateway:
         sender_key = mail.sender.strip().lower()
         candidate_id, name_masked, new = self._candidate_for(sender_key)
         known = self.state.candidates.get(candidate_id, {})
-        first_answer = not new and not known.get("answers")
+        # 32b: a listed candidate (HR_CANDIDATES) got the outreach, never the questionnaire:
+        # their mail is a reply to the note, never questionnaire answers
+        listed = bool(known.get("listed"))
+        first_answer = not new and not known.get("answers") and not listed
+        outreach_reply = not new and bool(known.get("contacted"))
+        yes = outreach_reply and affirmative(mail.body)
+        no = outreach_reply and not yes and declined(mail.body)
         # The public note is the stated credentials only (the raw text can carry a name or
         # signature); the redacted, contact-free text stays private for the HR screen.
-        raw = re.sub(r"\s+", " ", strip_contacts(mail.body)).strip()[:2000]
-        note = credentials_summary(raw) if new else "replied to the questionnaire"
+        raw = re.sub(r"\s+", " ", strip_contacts(
+            new_text(mail.body) if outreach_reply else mail.body)).strip()[:2000]
+        if not raw and not new:
+            raw = "(empty reply)"  # task 38: every reply lands in texts, even a blank one
+        note = credentials_summary(raw) if new else (
+            "replied to the outreach" if outreach_reply or listed
+            else "replied to the questionnaire")
         self._emit([NewEvent(type="hr.applicant", actor="hr", provider=self.ports.mail.provider,
                              payload={"candidate_id": candidate_id, "name_masked": name_masked,
                                       "note": note},
                              idempotency_key=key,
                              private={"reply_to": mail.sender.strip(), "sender_key": sender_key,
                                       "message_id": mail.message_id,
+                                      **({"outreach_reply": True, "affirmative": yes,
+                                          "outreach_declined": no}
+                                         if outreach_reply else {}),
                                       "text": mask_text(raw, masked_name=name_masked,
                                                         company=None,
                                                         hide_words=sender_words(sender_key))})])
@@ -1178,9 +1252,13 @@ class Gateway:
             self._wake(f"New applicant {candidate_id}")
         elif first_answer:
             self._wake(f"Applicant answered {candidate_id}")  # v1.5: now HR has answers
-        if not new and self.state.candidates.get(candidate_id, {}).get("contacted"):
-            # task 32: the reply to the outreach note books the call and sends the invite
+        if no:  # task 38: they said no: the held slot goes back on the calendar
+            self._outreach_intents.put(candidate_id, None)
+        if yes:  # task 32b: only a plain yes books the call and sends the invite
             self._send_candidate_invite(candidate_id, reply_id=mail.message_id)
+        elif outreach_reply:  # anything else is HR's to read: a note, no booking
+            self._wake(f"Candidate {candidate_id} replied to the outreach (not a yes; "
+                       "no call booked)")
         return {"candidate_id": candidate_id, "name_masked": name_masked, "new": new,
                 "questionnaire": questionnaire}
 
@@ -2614,7 +2692,7 @@ class Gateway:
                                  provider="local", payload={"checks": checks},
                                  idempotency_key=key),
                         self._status(case, "QA_PASSED")])
-            return {"passed": True, "checks": checks, "next": "send_memo"}
+            return {"passed": True, "checks": checks, "next": "prepare_documents"}
         events = [NewEvent(type="qa.failed", actor="qa", case_id=case.case_id, provider="local",
                            payload={"checks": checks}, idempotency_key=key),
                   NewEvent(type="case.status", actor="system", case_id=case.case_id,
@@ -2700,6 +2778,7 @@ class Gateway:
             raise Refused("qa_gate", "QA ran on older facts; run compute_tax and qa_check again")
         if not case.reply_to:
             raise Refused("no_reply_address", f"{case.case_id} has no reply address")
+        attachments = self._memo_attachments(case)  # v1.15: docs_missing until prepared
         day_ago = self._now() - timedelta(days=1)
         recent = [ts for ts in self.state.memo_log.get(mail_identity(case.reply_to), [])
                   if parse_ts(ts) > day_ago]
@@ -2719,7 +2798,7 @@ class Gateway:
         try:
             sent = self._with_retry("memo email", lambda: self.ports.mail.send(
                 OutMail(to=case.reply_to, subject=MEMO_SUBJECT, body=outgoing,
-                        bcc=self.settings.mail_qa_bcc or None), key))
+                        bcc=self.settings.mail_qa_bcc or None, attachments=attachments), key))
         except ToolError as err:
             self._block(case, f"memo email failed: {err.code}")
             raise
@@ -2741,6 +2820,126 @@ class Gateway:
         ])
         return {"message_id": sent.message_id, "seconds_since_last_fact": seconds,
                 "memo_ref": memo_ref, "next": "book_call"}
+
+    # ------------------------------------------------------------------ v1.15 (D35)
+
+    DOC_TYPES = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml"
+                          ".document"}
+
+    def docs_dir(self, case_id: str) -> Path:
+        return self.settings.data_dir / "docs" / case_id
+
+    def _docs_key(self, case: Case) -> str:
+        return f"docs:{case.case_id}:v{case.facts_version}r{case.reopens}"
+
+    def doc_file(self, case_id: str, file_name: str) -> Path | None:
+        """GET /api/docs: a verified document of this case, by its exact file name."""
+        with self._lock:
+            case = self.state.cases.get(case_id)
+            files = (case.docs or {}).get("files", []) if case else []
+        if file_name not in files:
+            return None
+        path = self.docs_dir(case_id) / file_name
+        return path if path.is_file() else None
+
+    def _memo_attachments(self, case: Case) -> tuple:
+        from app.gateway.ports import Attachment
+
+        docs = case.docs or {}
+        if docs.get("key") != self._docs_key(case):
+            raise Refused("docs_missing", "run prepare_documents first: the workpaper and memo "
+                                          "for these facts aren't built and checked yet")
+        out = []
+        for name in docs["files"]:
+            path = self.docs_dir(case.case_id) / name
+            if path.suffix not in self.DOC_TYPES:
+                continue  # the books stay in the firm
+            try:
+                out.append(Attachment(filename=name, content_type=self.DOC_TYPES[path.suffix],
+                                      content=path.read_bytes()))
+            except OSError as err:
+                raise Refused("docs_missing", f"{name} is gone from disk; run "
+                                              "prepare_documents again") from err
+        return tuple(out)
+
+    def _prepare_documents(self, args: dict) -> dict:
+        """v1.15 (D35): the workpaper, the memo and a books entry, from the engine's stored
+        result and the extracted facts only; each file re-opened and checked against a fresh
+        engine run before it can go out. A mismatch blocks the case."""
+        from app.gateway import documents as docs
+
+        case = self._case(args)
+        key = self._docs_key(case)
+        if (case.docs or {}).get("key") == key:  # this memo version is built: same files
+            return {"ok": True, "files": list(case.docs["files"]), "duplicate": True,
+                    "next": "send_memo"}
+        self._require_status(case, "QA_PASSED", code="qa_gate")
+        if case.qa_version != case.facts_version or case.result_version != case.facts_version \
+                or not case.result or not case.facts:
+            raise Refused("qa_gate", "QA ran on older facts; run compute_tax and qa_check again")
+        figures = docs.figures(case.facts, case.result)
+        truth = docs.engine_figures(case.facts, figures.fee_cents)
+        folder = self.docs_dir(case.case_id)
+        label = case.masked_name
+        # the memo version is in the name: a v2 builds new files and never touches v1's
+        version = f"v{case.facts_version}" + (f"r{case.reopens}" if case.reopens else "")
+        sheet = f"Delaware_Franchise_Tax_Workpaper_{case.case_id}_{version}.xlsx"
+        memo = f"Franchise_Tax_Memo_{case.case_id}_{version}.docx"
+        books = self.settings.data_dir / "docs" / "U-Tax_Books.xlsx"
+        plan = {"workpaper": 5, "memo": 3, "books": 1}
+
+        def stepper(doc: str):
+            n = [0]
+
+            def step(detail: str) -> None:
+                n[0] += 1
+                self._emit([NewEvent(type="doc.step", actor="acct", case_id=case.case_id,
+                                     payload={"doc": doc, "step": n[0], "detail": detail,
+                                              "of": plan[doc]},
+                                     idempotency_key=f"{key}:{doc}:step{n[0]}")])
+            return step
+
+        def created(doc: str, path: Path) -> None:
+            self._emit([NewEvent(type="doc.created", actor="acct", case_id=case.case_id,
+                                 payload={"doc": doc, "file_name": path.name,
+                                          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                          "pages_or_sheets": docs.shape(path)},
+                                 idempotency_key=f"{key}:{doc}:created")])
+
+        try:
+            checks = docs.build_workpaper(folder / sheet, label, case.facts, case.quotes,
+                                          figures, stepper("workpaper"))
+            created("workpaper", folder / sheet)
+            carry = docs.build_memo(folder / memo, label, figures, stepper("memo"))
+            created("memo", folder / memo)
+            row = docs.append_books(books, case.case_id, self._now().date().isoformat(), label,
+                                    figures)
+            stepper("books")(f"Books: {label}, fee $0, tax saved "
+                             f"{format_usd(max(figures.auth_cents, figures.apv_cents) - figures.tax_cents)}")
+            created("books", books)
+            failed_by = {"workpaper": docs.verify_workpaper(folder / sheet, checks, truth),
+                         "memo": docs.verify_memo(folder / memo, carry, truth),
+                         "books": docs.verify_books(books, row, figures, truth)}
+        except OSError as err:  # a file in use (the books open in Excel), a full disk: retry
+            log.warning("documents for %s not written: %s", case.case_id, err)
+            raise Refused("docs_unavailable", "a document couldn't be written (is "
+                                              "U-Tax_Books.xlsx open?); try again") from err
+        except (KeyError, ValueError, TypeError) as err:
+            log.warning("documents for %s failed: %s", case.case_id, err)
+            failed_by = {"workpaper": [f"build: {type(err).__name__}"], "memo": [], "books": []}
+        # one doc.verified per document; the case's documents are ready once all three pass
+        self._emit([NewEvent(type="doc.verified", actor="acct", case_id=case.case_id,
+                             payload={"doc": doc, "ok": not bad, **({"failed": bad} if bad else {})},
+                             idempotency_key=f"{key}:{doc}:{'verified' if not bad else 'mismatch'}")
+                    for doc, bad in failed_by.items()])
+        failed = [f"{doc}.{check}" for doc, bad in failed_by.items() for check in bad]
+        if failed:
+            self._block(case, "documents don't match the engine: " + ", ".join(failed))
+            raise Refused("docs_mismatch", "a figure in the documents doesn't match the "
+                                           "engine; the case is BLOCKED for the CEO",
+                          {"failed": failed})
+        return {"ok": True, "files": [sheet, memo], "next": "send_memo"}
 
     def _phone_check(self, args: dict) -> dict:
         """v1.7: starts a phone run for the latest memo and returns {pending: true}; the
@@ -3252,9 +3451,9 @@ class Gateway:
         key = f"hr_outreach:{candidate_id}:call"
         if self._done_from(key) is not None:
             return "sent"
-        start = cand.get("contacted")
+        start = None if cand.get("slot_released") else cand.get("contacted")
         soon = self._now() + timedelta(minutes=30)
-        if not start or parse_ts(start) < soon:
+        if not start or parse_ts(start) < soon:  # task 38: a released slot isn't theirs
             offered = self.offered_slots(None)
             if not offered:
                 return "no_slot"
@@ -3373,7 +3572,7 @@ class Gateway:
     def _hr_record(self, args: dict) -> dict:
         """v1.4: HR screens and shortlists. Applicants come from the gateway (§6c); hiring
         and declining are the CEO's (POST /api/candidates/{id}/decision)."""
-        stage = _one_of(args, "stage", ("screened", "shortlisted"))
+        stage = _one_of(args, "stage", ("screened", "shortlisted", "outreach_declined"))
         candidate_id = _str(args, "candidate_id", max_len=64)
         cand = self.state.candidates.get(candidate_id)
         if cand is None:
@@ -3381,6 +3580,8 @@ class Gateway:
         if cand.get("stage") in ("hired", "declined"):
             raise Refused("wrong_status", f"{candidate_id} is already {cand['stage']}")
         note = strip_contacts(_str(args, "note", required=False, max_len=500) or "")
+        if stage == "outreach_declined":
+            return self._outreach_declined(candidate_id, cand, note)
         written = self._emit([NewEvent(type=f"hr.{stage}", actor="hr", provider="local",
                                        payload={"candidate_id": candidate_id,
                                                 "name_masked": cand["name_masked"],
@@ -3392,6 +3593,27 @@ class Gateway:
                              "Hire or decline in the CEO console.",
                              key=f"ceo:shortlisted:{candidate_id}:{written[0].id}")
         return {"candidate_id": candidate_id, "stage": stage}
+
+    def _outreach_declined(self, candidate_id: str, cand: dict, note: str) -> dict:
+        """Task 38b: HR read a reply to the outreach as a no ("thanks, I'm all set"): the
+        same as the gateway's own no. The held slot is freed and no later mail goes out.
+        Not a hiring decision: the stage stays as it is (those are the CEO's)."""
+        if not cand.get("contacted"):
+            raise Refused("wrong_status", f"{candidate_id} was never sent the outreach")
+        if cand.get("outreach_declined"):
+            return {"candidate_id": candidate_id, "stage": "outreach_declined",
+                    "duplicate": True}
+        self._outreach_intents.put(candidate_id, None)  # the slot goes back on offer
+        self._emit([NewEvent(type="hr.outreach_declined", actor="hr", provider="local",
+                             payload={"candidate_id": candidate_id,
+                                      "name_masked": cand["name_masked"],
+                                      "note": note or "declined the outreach"},
+                             idempotency_key=f"hr:outreach_declined:{candidate_id}:"
+                                             f"{cand.get('last_event_id', 0)}")])
+        return {"candidate_id": candidate_id, "stage": "outreach_declined",
+                "booked_at": cand.get("booked_at"),
+                **({"note": "the intro call was already booked: cancel it in the calendar"}
+                   if cand.get("booked_at") else {})}
 
     def _get_candidate(self, args: dict) -> dict:
         """v1.4 (hr): the masked candidate. Stated credentials, questionnaire answers with
@@ -3407,7 +3629,10 @@ class Gateway:
                 # v1.11: hr_outreach books one of these; consented = an address with consent
                 "offered_slots": self.offered_slots(None),
                 "consented": bool(cand.get("reply_to")),
-                "contacted": cand.get("contacted")}
+                "contacted": cand.get("contacted"),
+                # task 38: how they answered the outreach, and the call it booked
+                "replied": cand.get("reply_kind"), "booked_at": cand.get("booked_at"),
+                "outreach_declined": bool(cand.get("outreach_declined"))}
 
     FLAG_KINDS = ("possible_injection", "unrealistic_inputs")
 
@@ -3457,6 +3682,8 @@ class Gateway:
         cand = self.state.candidates[candidate_id]
         stage = cand.get("stage")
         if stage not in ("hired", "declined") or not cand.get("reply_to"):
+            return "skipped"
+        if cand.get("outreach_declined"):  # task 38: they said no to us: never mail again
             return "skipped"
         if cand.get("decision_mailed"):
             return "sent"
@@ -3677,6 +3904,56 @@ class Gateway:
             count, ts = self.state.naive_recoveries.get(session_id, (0, ""))
         return count, ts or None
 
+    # ------------------------------------------------------------------ v1.14 (D34)
+
+    def _ceo_direct(self, args: dict) -> dict:
+        """/mcp/ceo: a §5b tool run directly (app/ceo_direct.py). `as_ceo`: the gateway's own
+        stop grammar inside /api/ceo/talk (the CEO's words, no LLM)."""
+        from app import ceo_direct, ceo_tools
+
+        name = _str(args, "name", max_len=40)
+        actor = "ceo" if args.get("as_ceo") is True else ceo_direct.ASSISTANT
+        try:
+            out = ceo_direct.run(self, name, args.get("args"), actor=actor)
+        except ceo_tools.ToolRefused as err:
+            raise Refused(err.code, err.message, err.data) from err
+        if out["kind"] == "done":
+            action = {"tool": name, "summary": out["summary"],
+                      **({"undo_id": out["undo_id"]} if out.get("undo_id") else {})}
+            for actions in self._ceo_turn_actions.values():  # the turn(s) under way
+                actions.append(action)
+        return out
+
+    def _ceo_undo(self, args: dict) -> dict:
+        """POST /api/ceo/undo (the CEO) or the seat's undo tool (the assistant)."""
+        from app import ceo_direct, ceo_tools
+
+        undo_id = _str(args, "undo_id", max_len=40)
+        actor = "ceo" if args.get("as_ceo") is True else ceo_direct.ASSISTANT
+        try:
+            return ceo_direct.undo(self, undo_id, actor=actor)
+        except ceo_tools.ToolRefused as err:
+            raise Refused(err.code, err.message, err.data) from err
+
+    def _ceo_turn(self, args: dict) -> dict:
+        """A CEO turn starts: ceo.said (the text private), the turn's clock and its actions."""
+        conversation_id = _str(args, "conversation_id", max_len=40)
+        text = _str(args, "text", max_len=4000)
+        self._ceo_turn_stops = self._stops
+        self._ceo_turn_actions[conversation_id] = []
+        self._emit([NewEvent(type="ceo.said", actor="ceo",
+                             payload={"conversation_id": conversation_id, "text_len": len(text)},
+                             private={"text": text})])
+        return {"started": iso_ts(self._now())}
+
+    def _ceo_reply(self, args: dict) -> dict:
+        """The assistant answered: ceo.replied with what it did this turn."""
+        conversation_id = _str(args, "conversation_id", max_len=40)
+        actions = self._ceo_turn_actions.pop(conversation_id, [])
+        self._emit([NewEvent(type="ceo.replied", actor="ceo_assistant",
+                             payload={"conversation_id": conversation_id, "actions": actions})])
+        return {"actions": actions}
+
     def _ceo_confirm(self, args: dict) -> dict:
         """POST /api/ceo/confirm: carry out a proposal's pinned action, once, within 60 s,
         through the same internals as the §5 routes. A spoken confirm is re-checked here."""
@@ -3808,6 +4085,8 @@ class Gateway:
                               for t in TRUST_TYPES}}
         action_type = _one_of(args, "action_type", TRUST_TYPES)
         requested = _one_of(args, "state", ("PAUSED", "AUTO", "ASK", "RESUME"))
+        if requested == "PAUSED":  # v1.14.1: a RESUME from a turn begun before this fails
+            self._stops += 1
         current = self.state.trust[action_type]
         to = requested
         if requested == "RESUME":

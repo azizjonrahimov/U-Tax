@@ -1,44 +1,26 @@
-# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 08:05 local · SATURDAY LIVE
+# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 19:27 local · SATURDAY LIVE
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- Nothing right now. Next owner moment: approve the first X/LinkedIn post and the first calendar invite during the order rehearsal.
-- After the event: rotate every key pasted in chat (Naïve utax-up + utax-gateway, AgentMail, Mobilerun, Monid, Neon, ElevenLabs, Render, Vercel), and pause the Naïve schedule.
+- A (now): free memory (0.4 GB free: close the ChatGPT app and spare Chrome tabs), then reply "restart gateway". The live gateway was killed for low memory at ~18:10, so the firm is offline. Or "move to Render".
+- B (now): check the `frontend` tab in the crew window. It's been silent ~2 h with 4 files dirty; probably a prompt.
+- C (after the frontend READY): rerun crew/scripts/deploy-frontend.ps1 (Vercel).
+- D (decide): keep "no confirm" for approve/deny/hire by voice (D34, irreversible), or ask for a confirm on those three only.
+- E (after the event): rotate every key pasted in chat; pause the Naïve schedule.
 
 ## New
 
-- all · 0m · LIVE E2E PASSED on case_1 (email → intake → re-ask → reply → tax $450 → QA → memo sent) on the Naïve agents (haiku)
-- frontend · 25m · site live at https://u-tax.vercel.app (owner deploy); D32 product shell started (landing, login/signup, department workspaces)
-- backend · 0m · MERGED task 27 (session-error recovery, 1301 tests); task 28 (signup + tool.called) building
-- agents · 5m · signup-welcome template building
-
-- backend · 0m · MERGED 17b (1106 tests); Monid hold lifted; lane free for the AgentMail swap
-- captain · 10m · LIVE: naive up done (7 agents; engine bug worked around in 2 phases); the CoS ran through the tunnel; D29 found and proposed
-
-- captain · 0m · Naïve: org U-Tax live, Pro plan active, both models exist; gateway key saved + verified; gateway running locally; tunnel = owner step (classifier)
-- backend · 10m · MERGED task 18 CEO voice gateway (1077 tests); 18b started
-- captain · 15m · main red then fixed: the frontend fixture copy (my miss)
-
-- agents · 0m · MERGED task 5: the CEO voice agent prompt + check rule 12 + the 20-second demo voice beat
-- backend · 10m · MERGED task 17 (964 tests, CI green); 17b open (8 items), Monid held local; task 18 (CEO voice) started
-- backend · 0m · task 17 TIMEBOXED (auto): READY at its green head, open items → 17b; Monid stays local until 17b; task 18 (CEO voice) next
-- captain · 5m · contract v1.8.1: /ceo echo guard for voice confirms; the action result goes back to the model (from agents review)
-- captain · 0m · PLAN D28: the CEO runs the firm by voice (contract v1.8, faa2fad). Frontend (/ceo voice) and agents (task 5) started; backend task 18 queued after 17
-- backend · 0m · task 17 review-3 fixes committed (a598c8c); fresh /review run next, READY ETA ~11:15
-- captain · 5m · render.yaml: 1 GB disk for data_dir (8068646), CI green
-- backend · 0m · MERGED Linux depth fix as 2bf3a38; CI green on GitHub (all 3 jobs). Task 17 buy_tool hardening started (auto-decided)
-- captain · 25m · first CI run caught a Linux-only crash in Monid deep-input handling (backend 878/879)
-- captain · 0m · local boot with backend/.env: health 200; /mcp/cos with its own token lists 3 tools; another seat's token and no token both get 401; no token in the log
-- captain · 5m · backend/.env made (7 seat tokens, ADMIN, THEATER, PUBLIC_MODE=event; gitignored, never printed); backend/.venv installed in main
-- agents · 0m · MERGED buy_tool for mkt; CI + render.yaml pushed with it
-- agents · 10m · WOKEN: add buy_tool to mkt (contract v1.7.3 Saturday note), needs no Naïve access
-- captain · 15m · GitHub repo created: private azizjonrahimov/U-Tax; history secret scan clean; main pushed
+- all · 0m · preflight live: 9 green, 3 red (gateway down, public URL 502, ceo-assistant missing until the gateway restart + naive up)
+- backend · 5m · tasks 31–38b merged (stop exemption, deliverability, documents D35, the CEO conversation D34, 429 backoff, preflight/archive, outreach replies); 39 (no session in URLs) HELD with the frontend
+- agents · 2m · ceo-assistant, documents routing, HR reply handling merged
+- frontend · 2h · the voice-loop fix merged (needs a Vercel redeploy); D32 shell + login built but NOT ready (stalled)
+- REHEARSAL: order 1 (advertise → X + LinkedIn posted) and order 2 (hire 2 → ad posted, 2 outreach emails, calls booked) PASSED LIVE; case_1 e2e PASSED; documents e2e pending the gateway
 
 ## In progress
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | building /ceo voice mode (D28) | 0m |
-| backend | `backend/`, `fixtures/`, `db/` | building task 18: CEO voice gateway (D28) | 0m |
-| agents | `naive/` | done (task 5 merged); resting until `naive up` (task 3) | 0m |
+| frontend | `frontend/` | D32 shell + login + auth changes (then D34 conversation, panel, D35 docs view); STALLED | 2h |
+| backend | `backend/` | resting; task 39 held for the frontend | 3m |
+| agents | `naive/` | resting | 2m |

@@ -24,7 +24,10 @@ def test_happy_path_event_sequence(h):
     h.gw.drain_outbox()  # one stage per case per pass: call_booked waits for memo_sent
     assert h.types() == [
         "email.received", "case.status", "facts.extracted", "case.status", "tax.computed",
-        "case.status", "qa.passed", "case.status", "approval.requested", "touch.training",
+        "case.status", "qa.passed", "case.status",
+        *["doc.step"] * 5, "doc.created", *["doc.step"] * 3, "doc.created", "doc.step",
+        "doc.created", *["doc.verified"] * 3,  # v1.15: workpaper, memo, books
+        "approval.requested", "touch.training",
         "trust.changed", "memo.sent", "case.status", "crm.sync_requested",
         "phone.checked", "approval.requested", "touch.training", "trust.changed",
         "call.booked", "case.status", "crm.sync_requested", "crm.synced", "crm.synced",

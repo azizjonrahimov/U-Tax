@@ -1,4 +1,5 @@
-// U-Tax on Naïve: seven agents, one shared board, one MCP server (the U-Tax gateway).
+// U-Tax on Naïve: seven firm agents on one shared board, plus the CEO's assistant (v1.14), and one
+// MCP server (the U-Tax gateway).
 // Apply with `naive up --dry-run` first, then `naive up`. Env vars: see .env.example.
 //
 // Design: docs/designs/u-tax.md (E1 one gateway, E5 U-Tax tools only, D17 MCP transport).
@@ -107,7 +108,8 @@ const MODEL = "anthropic/claude-haiku-5.5";
 
 // Daily caps (period: day). Fast-path members delegated with wait:true run on the Chief of
 // Staff's budget, and every card that reaches done/blocked wakes a CoS digest session, so the
-// CoS carries the most. The caps total $13.00/day (the ceiling) and are unchanged for haiku:
+// CoS carries the most. The firm's seven caps total $13.00/day; the CEO assistant (v1.14) adds its own
+// $3.00, so $16.00/day in all. They are unchanged for haiku:
 // they are ceilings, not estimates. UNVERIFIED: haiku's per-token price on Naïve (not in the
 // docs we read); measure real per-session cost from session.usage and lower a cap if it binds.
 const BUDGETS: Record<AgentKey, { cap: number; task: number }> = {
@@ -118,6 +120,7 @@ const BUDGETS: Record<AgentKey, { cap: number; task: number }> = {
   acct: { cap: 1.0, task: 0.15 },
   mkt: { cap: 1.25, task: 0.25 },
   hr: { cap: 1.25, task: 0.25 },
+  ceo: { cap: 3.0, task: 2.0 }, // one session per CEO sign-in, so the task cap covers a whole conversation
 };
 
 const MODELS: Record<AgentKey, string> = {
@@ -128,6 +131,7 @@ const MODELS: Record<AgentKey, string> = {
   acct: MODEL,
   mkt: MODEL,
   hr: MODEL,
+  ceo: MODEL,
 };
 
 const GATEWAY_MCP_BASE = mcpUrl();
@@ -229,5 +233,8 @@ export default defineProject({
       ],
     },
     ...MEMBERS.map((m) => ({ ...agent(m), handoffs: false as const })),
+    // v1.14 (design D34): the CEO's conversational assistant. Not a team member and not on the board:
+    // it acts only through the CEO tools on /mcp/ceo.
+    { ...agent("ceo"), handoffs: false as const },
   ],
 });

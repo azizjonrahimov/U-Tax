@@ -37,7 +37,8 @@ def test_follow_ups_always_carry_the_disclaimer_and_make_no_promises():
         spec = SPECS[f"follow-up-{kind}"]
         assert DISCLAIMER in spec.lines and DISCLAIMER in spec.builtin, kind
     assert "any questions" not in SPECS["follow-up-memo_check"].builtin
-    assert "reply with a time" not in SPECS["hr-outreach"].builtin
+    assert "reply with a time" not in SPECS["hr-outreach-note"].builtin
+    assert "hr-outreach" not in SPECS  # task 32b: the one-email outreach is gone
 
 
 def test_outreach_also_asks_under_calendar_invite_trust(make_harness):

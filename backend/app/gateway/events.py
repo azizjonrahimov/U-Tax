@@ -12,7 +12,8 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Any
 
-ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system"}
+ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system",
+          "ceo_assistant"}  # v1.14.1: the CEO assistant's direct actions
 PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "elevenlabs", "hubspot", "mobilerun",
              "apify", "monid", "google", "stripe", None}
 STATUSES = {"ok", "failed", "skipped"}
@@ -53,6 +54,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "hr.declined": _HR,
     "hr.questionnaire_sent": _HR,
     "hr.decision_mailed": _HR,  # v1.6.1
+    "hr.outreach_declined": _HR,  # task 38b: HR read the reply as a no (not the CEO's call)
     "screen.call": ("candidate_id", "transcript_excerpt", "seconds"),
     "voice.command": ("text", "channel", "speaker", "case_id", "masked_name"),  # v1.6.4
     "ceo.notified": ("channel", "subject", "summary", "reason"),
@@ -63,6 +65,10 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "ad.created": ("kind", "headline", "image_url"),
     "hr.sourced": ("count", "source"),
     "hr.outreach": ("candidate_id", "label", "slot"),
+    # v1.15 (D35): the tax documents, built live (no client names: file names use case ids)
+    "doc.step": ("doc", "step", "detail"),  # step: 1, 2, ... (optional "of": the count)
+    "doc.created": ("doc", "file_name", "sha256", "pages_or_sheets"),
+    "doc.verified": ("doc", "ok"),  # one per document (optional "failed": the checks)
     "client.followed_up": ("kind",),
     "approval.requested": ("approval_id", "action_type", "summary"),
     "touch.training": _TOUCH,
@@ -76,6 +82,8 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     # v1.8 §5b: the CEO voice console's proposals
     "ceo.proposed": ("proposal_id", "tool", "args", "readback", "expires_at", "source"),
     "ceo.confirmed": ("proposal_id", "via", "heard_len"),  # v1.8.5: heard is private
+    "ceo.said": ("conversation_id", "text_len"),  # v1.14: the text is private
+    "ceo.replied": ("conversation_id", "actions"),
     "ceo.cancelled": ("proposal_id", "via", "heard_len", "reason"),
 }
 
@@ -85,6 +93,7 @@ FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "sta
 OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"}),
                          "call.booked": frozenset({"kind"}),  # v1.11.1: "candidate"
                          "email.received": frozenset({"source"}),  # v1.12: "signup"
+                         "doc.step": frozenset({"of"}), "doc.verified": frozenset({"failed"}),
                          **{t: frozenset({"channel"})
                             for t in ("touch.training", "touch.operating", "touch.engineering")}}
 OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only

@@ -45,7 +45,7 @@ def test_the_ceo_signs_in_and_uses_every_admin_route(site):
                        json={"text": "trust"}).status_code == 200
     assert client.get("/api/state", headers=bearer(token)).json()["hiring"].get(
         "candidates") is not None  # admin view
-    assert client.get("/api/state", params={"token": token}).status_code == 200  # ?token=
+    assert client.get("/api/state", params={"token": token}).status_code == 401  # task 39
     assert client.post("/api/ceo/command", json={"text": "trust"}).status_code == 401
 
 

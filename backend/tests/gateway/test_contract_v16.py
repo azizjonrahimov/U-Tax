@@ -65,6 +65,7 @@ def test_client_replied_reextracts_and_only_a_changed_fact_makes_memo_v2(h):
          incorporated_delaware=True, foreign_owner_25=False)
     h.ok("compute_tax", case_id=case_id)
     h.ok("qa_check", case_id=case_id)
+    h.ok("prepare_documents", case_id=case_id)  # v1.15
     h.ok("send_memo", case_id=case_id)
     assert len(h.events("memo.sent")) == 2
 
@@ -210,6 +211,7 @@ def test_a_retry_after_a_changed_fact_still_sends_memo_v2(h):
     assert ("READY", "SENT") not in moves
     h.ok("compute_tax", case_id=case_id)
     h.ok("qa_check", case_id=case_id)
+    h.ok("prepare_documents", case_id=case_id)  # v1.15
     h.ok("send_memo", case_id=case_id)
     assert len(h.events("memo.sent")) == 2
 

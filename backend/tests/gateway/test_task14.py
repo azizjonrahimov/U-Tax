@@ -26,6 +26,7 @@ def corrected_memo(h):
          incorporated_delaware=True, foreign_owner_25=False)
     h.ok("compute_tax", case_id=case_id)
     h.ok("qa_check", case_id=case_id)
+    h.ok("prepare_documents", case_id=case_id)  # v1.15
     second = h.do("send_memo", case_id=case_id)
     assert first.status == second.status == "needs_approval"
     return case_id, first.approval_id, second.approval_id

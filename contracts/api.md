@@ -1,4 +1,4 @@
-# API contract (v1.15): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.16): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -92,6 +92,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id, channel: "click"\|"voice"\|"typed"\|"email"}` (`channel` v1.8; absent on older events = `click`) |
 | `ceo.proposed` | ceo | `{proposal_id, tool, args, readback, expires_at, source: "realtime"\|"command"}` (§5b) |
 | `ceo.confirmed` / `ceo.cancelled` | ceo | `{proposal_id, via: "voice"\|"click", heard}` (`heard` = the CEO's transcribed words, ≤ 200 chars; cancelled also has `reason: "spoken"\|"clicked"\|"expired"\|"superseded"`) |
+| `hr.outreach_declined` | hr | `{candidate_id, name_masked, note}`: HR read a reply to the outreach as a no (v1.15.1). The held slot is freed, `outreach_declined` is set (a later CEO hire or decline sends no mail), and the stage is unchanged |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
 | `tool.bought` | any agent | `{tool, provider}` (amount in envelope `cost_usd`) |
@@ -284,9 +285,33 @@ For Replay mode and catch-up. Ordered by `id`.
   - Undo: `pause` ↔ `set_trust RESUME`; `set_trust` ↔ the previous state; `order` (a CoS card) →
     `cancel_order {order_id}` closes the order's open cards. `approve`, `deny` and `decide_candidate`
     have no undo; the reply says so.
+- v1.14.1, pinned shapes:
+  - **The stop note.** A stop the grammar catches inside `/api/ceo/talk` runs at once. The gateway
+    then appends this exact message to the assistant's session, as a message of its own: `System:
+    the CEO said stop; the gateway paused <comma-separated types>. Undo id <undo_id>.` The gateway
+    strips any leading `System:` (case-insensitive, after trimming) from the CEO's own text before
+    relaying it, so only the gateway can write that note.
+  - **Leaving PAUSED after a stop.** On the ceo seat, a `set_trust RESUME`, or any other way out of
+    PAUSED (`set_trust AUTO`/`ASK` on a paused type, or `undo` of a pause), is refused (`code: "stopped"`)
+    when the turn that issued it began before the latest stop. The CEO's own `POST /api/ceo/undo` is
+    unaffected. The ceo seat also has `cancel_order {order_id}` and `undo {undo_id}`.
+  - **Ambiguous references.** On the ceo seat, an approval or candidate reference of "latest", "it",
+    a pronoun, or one matching more than one item answers
+    `{status: "refused", code: "ambiguous", candidates: [{id, summary}]}`.
+  - The assistant's events carry the actor `ceo_assistant`; the MCP seat path stays `/mcp/ceo`.
 - `POST /api/ceo/undo` `{undo_id}` (admin or session).
 - Events `ceo.said` `{conversation_id, text_len}` (the text is private) and `ceo.replied`
   `{conversation_id, actions}`.
+
+## 5a-quater. Session transport (v1.16, backend 36/39 + frontend D32)
+
+- The CEO session is accepted ONLY as `Authorization: Bearer <session>`, never in a URL. `/api/state` and
+  `/api/events` with `?token=<session>` answer 401; `?token=<THEATER_TOKEN>` stays for the public theater.
+- `POST /api/stream-ticket` (Bearer admin or session) → `{ticket, expires_at}`: HMAC-signed, 60 s, single use,
+  valid only as `GET /api/events/stream?ticket=<t>&after_id=<n>`. A used, expired or forged ticket answers 401.
+  On a stream error the console closes it, takes a fresh ticket and reopens after the last id seen.
+- A ticket is never a bearer, and a session is never a ticket. `/api/brief/audio` and `/api/docs/*` are
+  fetched with Bearer and played or saved as blobs.
 
 ## 5b. CEO voice console (v1.8, design D28)
 
@@ -461,7 +486,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; `image_url` must be null or an https URL on a host in `PUBLIC_ASSET_HOSTS` (comma-separated), else refused; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
 | `draft_dm` | mkt | `{recipient_label, text}` | `dm.drafted` (the human sends it) |
 | `get_candidate` | hr | `{candidate_id}` | the masked candidate: stated credentials, questionnaire answers, stage (no contact details) |
-| `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
+| `hr_record` | hr | `{stage: "screened"\|"shortlisted"\|"outreach_declined", candidate_id, note}` (outreach_declined v1.15.1: refused `wrong_status` for a candidate never sent the outreach; a repeat answers `duplicate: true`) | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
 | `flag_case` | qa | `{case_id, kind: "possible_injection"\|"unrealistic_inputs"}` | `case.flagged`; goes into the next CEO update email |
 | `firm_brief` | cos | `{}` | counts, blocked cards, touches; `brief.generated` |
 | `buy_tool` | mkt | `{tool, input, key}` | ToolBuyPort (Monid): refused unless `tool` is in `MONID_TOOLS`; the per-tool `max_usd` ceiling and `MONID_DAILY_CAP_USD` apply; the purchase runs outside the gateway lock; `tool.bought` with `cost_usd` in the envelope plus `cost.booked`; key, input fingerprint and unsure flag are private. Never input containing an email or a client's details (design: public startup lists only) |
@@ -693,7 +718,13 @@ falls back to a built-in template if the file is missing.
 
 ## Changelog
 
+- v1.16 (2026-11-08, backend 36/39 + frontend D32/D33): session transport (Bearer only, stream tickets); the product shell routes.
+
+- v1.15.1 (2026-11-07, backend 38b): hr_record stage outreach_declined; event hr.outreach_declined.
+
 - v1.15 (2026-11-07, design D35): prepare_documents (xlsx workpaper, docx memo, books entry), doc.step/created/verified events, memo attachments, /api/docs.
+
+- v1.14.1 (2026-11-07, agents t7b review): pinned the stop note text, the System: strip, the RESUME-after-stop refusal, the ambiguous refusal shape, the actor ceo_assistant.
 
 - v1.14 (2026-11-07, design D34): /api/ceo/talk conversation, MCP seat ceo (direct actions, no confirm), undo.
 

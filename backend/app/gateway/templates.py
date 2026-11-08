@@ -140,13 +140,6 @@ SPECS: dict[str, Spec] = {
         "Hi there,\n\nThank you for applying. Our CEO has decided to go with another reviewer "
         "this time. A person made this decision, not the AI that ran the first screen.\n\n"
         + SIGN_OFF)),
-    # v1.11 (D31): agents-lane files in naive/templates; these built-ins stand in
-    "hr-outreach": Spec(("slot_time", "minutes", "booking_url"), lines=(AI_SCREEN_LINE,),
-                        builtin=(
-        "Hi there,\n\nU-Tax would like to offer you a paid 1-hour gig: reviewing Delaware "
-        "franchise tax memos our AI agents write, before they go to founders.\n\n"
-        + AI_SCREEN_LINE + "\n\nWe've sent a calendar invite for a {{minutes}}-minute intro "
-        "call on {{slot_time}}.\n{{booking_url}}\n\n" + SIGN_OFF)),
     # v1.12 (D32): the sign-up's welcome; the agents lane's file replaces this built-in
     "signup-welcome": Spec(("greeting_name",), lines=(DISCLAIMER,), builtin=(
         "Hi {{greeting_name}},\n\nThanks for signing up with U-Tax! We check your Delaware "

@@ -26,6 +26,8 @@ from app import __version__
 from app.gateway.perform import AGENTS, TOOL_ACTORS, Gateway
 
 log = logging.getLogger("utax.mcp")
+CEO_SEAT = "ceo"  # v1.14 (D34): the CEO assistant; its tools are the §5b registry, direct
+SEATS = (*AGENTS, CEO_SEAT)
 _background: set = set()  # tool.called writes in flight (a reference keeps each task alive)
 
 MIN_TOKEN_CHARS = 32
@@ -87,7 +89,13 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "inputSchema": _obj(_CASE, ["case_id"])},
     "qa_check": {"description": "Re-run the engine and re-match every quote.",
                  "inputSchema": _obj(_CASE, ["case_id"])},
-    "send_memo": {"description": "Send the memo (refused unless QA passed).",
+    "prepare_documents": {"description": "Build and check the case's workpaper (.xlsx), "
+                                         "memo (.docx) and books entry from the engine's "
+                                         "figures (refused unless QA passed). Before "
+                                         "send_memo.",
+                          "inputSchema": _obj(_CASE, ["case_id"])},
+    "send_memo": {"description": "Send the memo with its workpaper and memo files (refused "
+                                 "unless QA passed and prepare_documents ran).",
                   "inputSchema": _obj(_CASE, ["case_id"])},
     "book_call": {"description": "Book the 15-minute review call at one of get_case's "
                                  "offered_slots.",
@@ -110,9 +118,12 @@ TOOLS: dict[str, dict[str, Any]] = {
     "get_candidate": {"description": "One candidate, masked: credentials, answers, stage.",
                       "inputSchema": _obj({"candidate_id": {"type": "string"}},
                                           ["candidate_id"])},
-    "hr_record": {"description": "Record a screening stage; hiring and declining are the CEO's.",
+    "hr_record": {"description": "Record a screening stage; hiring and declining are the "
+                                 "CEO's. outreach_declined: the candidate said no to the "
+                                 "outreach in other words (frees the slot; no later mail).",
                   "inputSchema": _obj({"stage": {"type": "string",
-                                                 "enum": ["screened", "shortlisted"]},
+                                                 "enum": ["screened", "shortlisted",
+                                                          "outreach_declined"]},
                                        "candidate_id": {"type": "string"},
                                        "note": {"type": "string"}},
                                       ["stage", "candidate_id"])},
@@ -191,13 +202,13 @@ def seat_problems(tokens: dict[str, str]) -> dict[str, str]:
     """Seats that are closed, and why: unset, short, or sharing a token with another seat
     (a shared token would let either seat open both, which the contract forbids)."""
     out: dict[str, str] = {}
-    for seat in AGENTS:
+    for seat in SEATS:
         token = tokens.get(seat, "")
         if not token:
             out[seat] = "no token"
         elif len(token) < MIN_TOKEN_CHARS:
             out[seat] = f"token shorter than {MIN_TOKEN_CHARS} characters"
-        elif any(o != seat and tokens.get(o) == token for o in AGENTS):
+        elif any(o != seat and tokens.get(o) == token for o in SEATS):
             out[seat] = "token shared with another seat"
     return out
 
@@ -206,7 +217,7 @@ def seat_token_ok(tokens: dict[str, str], actor: str, authorization: str | None)
     expected = tokens.get(actor, "")
     if len(expected) < MIN_TOKEN_CHARS:
         return False  # an unset or short token closes the seat: no empty-token bypass
-    if any(o != actor and tokens.get(o) == expected for o in AGENTS):
+    if any(o != actor and tokens.get(o) == expected for o in SEATS):
         return False  # a token shared between seats opens neither
     scheme, _, given = (authorization or "").partition(" ")
     if scheme.lower() != "bearer" or not given.strip():
@@ -234,7 +245,7 @@ def build_mcp_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     @router.post("/mcp/{actor}")
     async def mcp(actor: str, request: Request):
         gw = get_gateway()
-        if actor not in AGENTS:
+        if actor not in SEATS:
             return JSONResponse(status_code=404,
                                 content={"error": {"code": "not_found",
                                                    "message": f"no seat {actor}"}})
@@ -326,6 +337,10 @@ async def _handle(gw: Gateway, actor: str, message: Any, request: Request) -> di
     if method == "ping":
         return {"jsonrpc": "2.0", "id": id_, "result": {}}
     if method == "tools/list":
+        if actor == CEO_SEAT:  # v1.14 decision 2: its own definitions (direct runs)
+            from app.ceo_direct import seat_tools
+
+            return {"jsonrpc": "2.0", "id": id_, "result": {"tools": seat_tools()}}
         tools = [{"name": name, **spec} for name, spec in TOOLS.items()
                  if actor in TOOL_ACTORS[name]]
         return {"jsonrpc": "2.0", "id": id_, "result": {"tools": tools}}
@@ -335,6 +350,8 @@ async def _handle(gw: Gateway, actor: str, message: Any, request: Request) -> di
         if not isinstance(name, str) or not isinstance(args, dict):
             return {"jsonrpc": "2.0", "id": id_,
                     "error": {"code": -32602, "message": "tools/call needs name and arguments"}}
+        if actor == CEO_SEAT:
+            return await _ceo_call(gw, id_, name, args)
         if name not in TOOLS:
             return {"jsonrpc": "2.0", "id": id_,
                     "error": {"code": -32602, "message": f"unknown tool {name}"}}
@@ -352,3 +369,32 @@ async def _handle(gw: Gateway, actor: str, message: Any, request: Request) -> di
         }}
     return {"jsonrpc": "2.0", "id": id_,
             "error": {"code": -32601, "message": f"method not found: {method}"}}
+
+
+async def _ceo_call(gw: Gateway, id_: Any, name: str, args: dict) -> dict:
+    """v1.14: a /mcp/ceo tool runs directly. Results: {status: "done", summary, undo_id?}
+    (or {status: "done", data} for a read); refusals {status: "refused", code, message,
+    candidates?} (v1.14.1)."""
+    import asyncio
+
+    from app.ceo_direct import ASSISTANT, SEAT_TOOLS
+
+    if name not in SEAT_TOOLS:
+        return {"jsonrpc": "2.0", "id": id_,
+                "error": {"code": -32602, "message": f"unknown tool {name}"}}
+    result = await asyncio.to_thread(gw.perform, "ceo_direct", {"name": name, "args": args})
+    task = asyncio.create_task(asyncio.to_thread(
+        gw.record_tool_call, ASSISTANT, name, result.status, None))
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+    if result.status == "done":
+        data = dict(result.data or {})
+        kind = data.pop("kind", None)
+        body = {"status": "done", **({"data": data["data"]} if kind == "read" else data)}
+    else:
+        error = result.error or {}
+        body = {"status": result.status, "code": error.get("code"),
+                "message": error.get("message"), **(result.data or {})}
+    return {"jsonrpc": "2.0", "id": id_, "result": {
+        "content": [{"type": "text", "text": json.dumps(body, ensure_ascii=False)}],
+        "structuredContent": body, "isError": result.status != "done"}}

@@ -83,13 +83,16 @@ class Harness:
         return self.ok("inject_email", **{"from": sender, "subject": subject,
                                           "body": body})["case_id"]
 
-    def to_qa_passed(self, case_id: str | None = None) -> str:
+    def to_qa_passed(self, case_id: str | None = None, *, docs: bool = True) -> str:
+        """QA_PASSED, with the documents prepared (v1.15; the status stays QA_PASSED)."""
         case_id = case_id or self.new_case()
         self.ok("extract_facts", case_id=case_id, quotes=HAPPY_QUOTES,
                 incorporated_delaware=True, foreign_owner_25=False)
         self.ok("compute_tax", case_id=case_id)
         data = self.ok("qa_check", case_id=case_id)
         assert data["passed"], data
+        if docs:
+            self.ok("prepare_documents", case_id=case_id)
         return case_id
 
     def approve_pending(self, result) -> None:

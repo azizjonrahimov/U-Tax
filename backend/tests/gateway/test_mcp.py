@@ -8,7 +8,7 @@ from app.main import create_app
 
 from .conftest import HAPPY_QUOTES
 
-TOKENS = {a: f"tok-{a}-" + "x" * 32 for a in AGENTS}
+TOKENS = {a: f"tok-{a}-" + "x" * 32 for a in (*AGENTS, "ceo")}  # v1.14: + the ceo seat
 
 
 @pytest.fixture
@@ -41,7 +41,8 @@ def test_the_token_must_belong_to_the_seat(mcp):
     assert r.status_code == 401 and r.headers["www-authenticate"] == "Bearer"
     assert call(client, "intake", "ping", headers={"X-UTax-Actor": "tax"}).status_code == 401
     assert call(client, "intake", "ping", headers={"X-UTax-Actor": "intake"}).status_code == 200
-    assert client.post("/mcp/ceo", json={}).status_code == 404  # not a seat
+    assert client.post("/mcp/boss", json={}).status_code == 404  # not a seat
+    assert client.post("/mcp/ceo", json={}).status_code == 401  # v1.14: a seat, its own token
 
 
 @pytest.mark.parametrize("tokens", [{}, {"intake": ""}, {"intake": "short"}])
@@ -98,6 +99,9 @@ def test_full_case_over_mcp(mcp):
     tool(client, "tax", "law_search", case_id=case_id, query="delaware assumed par")
     tool(client, "tax", "compute_tax", case_id=case_id)
     assert tool(client, "qa", "qa_check", case_id=case_id)["data"]["passed"] is True
+    early = tool(client, "acct", "send_memo", case_id=case_id)
+    assert early["error"]["code"] == "docs_missing"  # v1.15: the documents come first
+    assert tool(client, "acct", "prepare_documents", case_id=case_id)["data"]["ok"] is True
     pending = tool(client, "acct", "send_memo", case_id=case_id)
     assert pending["status"] == "needs_approval"
     h.ok("approve", approval_id=pending["approval_id"], decision="allow")

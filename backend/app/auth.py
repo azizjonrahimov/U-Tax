@@ -19,6 +19,7 @@ import time
 from typing import Callable
 
 SESSION_SECONDS = 12 * 3600
+TICKET_SECONDS = 60  # task 36: a stream ticket opens /api/events/stream once, within 60 s
 _N, _R, _P, _LEN = 2 ** 14, 8, 1, 32
 # a wrong email still pays a full scrypt check: the reply time never tells which field was wrong
 _DUMMY = "scrypt$" + base64.b64encode(b"utax-dummy-salt!").decode() + "$" + base64.b64encode(
@@ -63,6 +64,7 @@ class Sessions:
         self._key = secret.encode()
         self._clock = clock or (lambda: time.time())  # read at each call (patchable)
         self._revoked: dict[str, float] = {}
+        self._used: dict[str, float] = {}  # task 36: redeemed stream tickets, until expiry
         self._lock = threading.Lock()
 
     def _sign(self, payload: str) -> str:
@@ -86,6 +88,8 @@ class Sessions:
             return None
         if not isinstance(claims, dict) or not isinstance(claims.get("exp"), int):
             return None
+        if "use" in claims or not claims.get("sid"):
+            return None  # task 36: a stream ticket is never a session
         if claims["exp"] <= self._clock():
             return None
         with self._lock:
@@ -95,6 +99,40 @@ class Sessions:
 
     def valid(self, token: str | None) -> bool:
         return self._claims(token) is not None
+
+    def sid(self, token: str | None) -> str | None:
+        """v1.14: the sign-in a valid session belongs to (one CEO conversation each)."""
+        claims = self._claims(token)
+        return str(claims["sid"]) if claims else None
+
+    def issue_ticket(self) -> tuple[str, float]:
+        """Task 36: a single-use, 60 s ticket that only opens the event stream (EventSource
+        can't send headers; a 12 h session in a URL lands in access logs)."""
+        exp = self._clock() + TICKET_SECONDS
+        payload = _b64(json.dumps({"use": "stream", "tk": secrets.token_urlsafe(12),
+                                   "exp": int(exp) + 1}, separators=(",", ":")).encode())
+        return f"{payload}.{self._sign(payload)}", exp
+
+    def redeem_ticket(self, ticket: str | None) -> bool:
+        """True once per valid, unexpired stream ticket; a session never passes."""
+        if not ticket or ticket.count(".") != 1 or len(ticket) > 512:
+            return False
+        payload, signature = ticket.split(".")
+        if not hmac.compare_digest(signature.encode(), self._sign(payload).encode()):
+            return False
+        try:
+            claims = json.loads(_unb64(payload))
+        except (ValueError, UnicodeDecodeError):
+            return False
+        if not isinstance(claims, dict) or claims.get("use") != "stream"                 or not isinstance(claims.get("exp"), int) or claims["exp"] <= self._clock():
+            return False
+        now = self._clock()
+        with self._lock:
+            self._used = {t: e for t, e in self._used.items() if e > now}
+            if claims.get("tk") in self._used:
+                return False  # single use: a ticket replayed from a log opens nothing
+            self._used[str(claims.get("tk"))] = float(claims["exp"])
+        return True
 
     def revoke(self, token: str | None) -> bool:
         claims = self._claims(token)

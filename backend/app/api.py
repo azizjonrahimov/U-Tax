@@ -201,23 +201,25 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             auth_state.update(secret=key, sessions=Sessions(key))
         return auth_state["sessions"]
 
-    def is_admin(authorization: str | None, token: str | None = None) -> bool:
-        """The CEO: ADMIN_TOKEN as a bearer (scripts), or a signed-in session as a bearer or
-        as ?token= (EventSource can't send headers). v1.7.1 hiding: with no ADMIN_TOKEN and
-        no session, nobody is admin (the safe default for injection text)."""
+    def is_admin(authorization: str | None) -> bool:
+        """The CEO: ADMIN_TOKEN or a signed-in session, as the Authorization bearer only.
+        Task 39: never a session in the URL (access and tunnel logs keep URLs); the event
+        stream takes a 60 s single-use ?ticket= instead (task 36). v1.7.1 hiding: with no
+        ADMIN_TOKEN and no session, nobody is admin (the safe default for injection text)."""
         settings = gw().settings
         bearer = _bearer(authorization)
         if settings.admin_token and _same(bearer, settings.admin_token):
             return True
-        return sessions().valid(bearer) or sessions().valid(token)
+        return sessions().valid(bearer)
 
     def require_theater(token: str | None, authorization: str | None) -> None:
+        """?token= is the THEATER_TOKEN only; the CEO's console sends its bearer."""
         settings = gw().settings
         if not settings.theater_token:
             return
         if _same(token, settings.theater_token):
             return
-        if is_admin(authorization, token):
+        if is_admin(authorization):
             return  # the CEO console may read what the theater reads
         raise APIError(401, "unauthorized", "theater token required")
 
@@ -245,7 +247,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def state(token: str | None = Query(None), authorization: str | None = Header(None)):
         require_theater(token, authorization)
         settings = gw().settings
-        admin = not auth_configured() or is_admin(authorization, token)
+        admin = not auth_configured() or is_admin(authorization)
         return gw().public_state(admin=admin)
 
     @router.get("/api/events")
@@ -255,19 +257,28 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         batch = list(gw().store.since(after_id, limit=limit + 1))
         has_more = len(batch) > limit
         batch = batch[:limit]
-        admin = is_admin(authorization, token)
+        admin = is_admin(authorization)
         return {"data": [gw().public_event(e, admin=admin) for e in batch],
                 "next_after_id": batch[-1].id if batch else after_id, "has_more": has_more}
 
     @router.get("/api/events/stream")
     async def stream(request: Request, after_id: int = Query(0, ge=0),
-                     token: str | None = Query(None), authorization: str | None = Header(None),
+                     token: str | None = Query(None), ticket: str | None = Query(None),
+                     authorization: str | None = Header(None),
                      last_event_id: str | None = Header(None)):
-        require_theater(token, authorization)
+        # task 36: the CEO console opens the stream with a 60 s single-use ?ticket= (POST
+        # /api/stream-ticket), never its 12 h session in the URL; ?token= is the theater's
+        if ticket is not None:
+            if not sessions().redeem_ticket(ticket):
+                raise APIError(401, "unauthorized", "stream ticket expired or used; get a "
+                                                    "new one from POST /api/stream-ticket")
+            admin = True
+        else:
+            require_theater(token, authorization)
+            admin = is_admin(authorization)
         start = after_id
         if last_event_id and last_event_id.strip().isdigit():
             start = max(start, int(last_event_id.strip()))
-        admin = is_admin(authorization, token)
         body = sse_events(gw(), start, is_disconnected=request.is_disconnected,
                           heartbeat=request.app.state.sse_heartbeat,
                           view=lambda e: gw().public_event(e, admin=admin))
@@ -296,6 +307,14 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             raise APIError(401, "bad_login", "wrong email or password")
         token, expires = sessions().issue()
         return {"session": token, "expires_at": iso_ts(
+            datetime.fromtimestamp(expires, tz=timezone.utc))}
+
+    @router.post("/api/stream-ticket")
+    def stream_ticket(authorization: str | None = Header(None)):
+        """Task 36: a 60 s, single-use ticket for GET /api/events/stream?ticket= (admin)."""
+        require_admin(authorization)
+        ticket, expires = sessions().issue_ticket()
+        return {"ticket": ticket, "expires_at": iso_ts(
             datetime.fromtimestamp(expires, tz=timezone.utc))}
 
     @router.post("/api/auth/logout")
@@ -468,6 +487,46 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         require_admin(authorization)
         return _console("ceo_command", _pick(body, "text"))
 
+    # ------------------------------------------------------------------ v1.14 §5a-ter (D34)
+
+    def _talk_owner(authorization: str | None) -> str:
+        """One conversation per CEO sign-in; ADMIN_TOKEN scripts share "admin"."""
+        return sessions().sid(_bearer(authorization)) or "admin"
+
+    def _talk():
+        talk = getattr(gw(), "ceo_talk", None)
+        if talk is None:
+            raise APIError(503, "assistant_unavailable", "the CEO assistant isn't configured "
+                                                         "(NAIVE_API_KEY)")
+        return talk
+
+    @router.post("/api/ceo/talk")
+    async def ceo_talk(body: dict = Body(...), authorization: str | None = Header(None)):
+        from app.ceo_talk import TalkRefused
+
+        require_admin(authorization)
+        cid = body.get("conversation_id")
+        try:
+            return await _talk().talk(_talk_owner(authorization), body.get("text"),
+                                      cid if isinstance(cid, str) else None)
+        except TalkRefused as err:
+            raise APIError(err.status, err.code, err.message) from err
+
+    @router.get("/api/ceo/talk/{conversation_id}")
+    async def ceo_talk_check(conversation_id: str, authorization: str | None = Header(None)):
+        from app.ceo_talk import TalkRefused
+
+        require_admin(authorization)
+        try:
+            return await _talk().check(_talk_owner(authorization), conversation_id)
+        except TalkRefused as err:
+            raise APIError(err.status, err.code, err.message) from err
+
+    @router.post("/api/ceo/undo")
+    def ceo_undo(body: dict = Body(...), authorization: str | None = Header(None)):
+        require_admin(authorization)
+        return _console("ceo_undo", {**_pick(body, "undo_id"), "as_ceo": True})
+
     @router.get("/assets/{name}")
     def asset(name: str):
         """v1.11 make_ad: the firm's ad PNGs, public (X and LinkedIn fetch them). Only
@@ -479,6 +538,23 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             raise APIError(404, "not_found", "no such asset")
         return Response(content=path.read_bytes(), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=3600"})
+
+    @router.get("/api/docs/{case_id}/{file_name}")
+    def case_document(case_id: str, file_name: str, authorization: str | None = Header(None)):
+        """v1.15: a case's verified workpaper or memo, for the CEO (ADMIN_TOKEN or a session
+        as the bearer: fetch it and save the blob; never a ?token= link that lands in logs).
+        Only a file prepare_documents built and checked can be named."""
+        require_admin(authorization)
+        if not re.fullmatch(r"case_[0-9]{1,6}", case_id) or not re.fullmatch(
+                r"[A-Za-z0-9_]{1,80}\.(xlsx|docx)", file_name):
+            raise APIError(404, "not_found", "no such document")
+        path = gw().doc_file(case_id, file_name)
+        if path is None:
+            raise APIError(404, "not_found", "no such document")
+        return Response(content=path.read_bytes(),
+                        media_type=gw().DOC_TYPES["." + file_name.rsplit(".", 1)[1]],
+                        headers={"Content-Disposition": f'attachment; filename="{file_name}"',
+                                 "Cache-Control": "private, no-store"})
 
     @router.get("/api/brief/audio")
     def brief_audio(request: Request, event_id: int = Query(..., ge=1),

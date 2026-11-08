@@ -98,7 +98,8 @@ class Settings:
                 adapters[name] = value.lower()
         spend_cap = _env("SPEND_CAP_USD")
         tokens = {actor: _env(f"UTAX_TOOL_TOKEN_{actor.upper()}")
-                  for actor in ("cos", "intake", "tax", "qa", "acct", "mkt", "hr")}
+                  for actor in ("cos", "intake", "tax", "qa", "acct", "mkt", "hr",
+                                "ceo")}  # v1.14: the CEO assistant's seat
         return cls(
             data_dir=data_dir,
             fixtures_dir=Path(_env("UTAX_FIXTURES_DIR") or REPO_ROOT / "fixtures"),

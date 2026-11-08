@@ -65,6 +65,16 @@ class FaultPlan:
 
 
 @dataclass(frozen=True)
+class Attachment:
+    """v1.15: a file sent with a mail (AgentMail `attachments[]`: filename, content_type,
+    base64 content; the whole request is capped at 6 MB)."""
+
+    filename: str
+    content_type: str
+    content: bytes
+
+
+@dataclass(frozen=True)
 class OutMail:
     to: str
     subject: str
@@ -72,6 +82,7 @@ class OutMail:
     in_reply_to: str | None = None
     inbox: str = "clients"  # which of our inboxes sends it: "clients" or "hiring" (§6c)
     bcc: str | None = None  # v1.7: memos copy the QA phone's mailbox (MAIL_QA_BCC)
+    attachments: tuple[Attachment, ...] = ()  # v1.15: the memo's workpaper and memo files
 
 
 @dataclass(frozen=True)
