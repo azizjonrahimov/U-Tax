@@ -188,3 +188,63 @@ def test_the_site_may_post_a_signup_from_the_theater_origin(make_harness, monkey
             "Access-Control-Request-Headers": "content-type"})
     assert r.status_code == 200
     assert r.headers["access-control-allow-origin"] == "https://u-tax.vercel.app"
+
+
+# ---------------------------------------------------------------- review 1 (adversarial)
+
+
+def test_a_welcome_counts_in_the_public_send_bucket(site):
+    h, client = site
+    h.ok("set_trust", action_type="email", state="AUTO")
+    client.post("/api/signup", json=FORM)
+    assert len(h.gw.state.cap_log.get("email_public", [])) == 1  # never the firm's bucket
+    assert not h.gw.state.cap_log.get("email")
+
+
+def test_one_ip_gets_10_signups_a_day(site):
+    h, client = site
+    codes = [client.post("/api/signup", json={**FORM, "email": f"p{i}@site{i}.dev"}).status_code
+             for i in range(11)]
+    assert codes == [200] * 10 + [429]
+
+
+def test_a_real_mail_from_the_address_drops_the_typed_name(site):
+    h, client = site
+    h.ok("set_trust", action_type="email", state="AUTO")
+    client.post("/api/signup", json={**FORM, "name": "Totally Legit"})  # a stranger, say
+    h.ok("inject_email", **{"from": FORM["email"], "subject": "who signed me up?",
+                            "body": "We're a Delaware C-corp with 10,000,000 shares."})
+    case = h.gw.state.cases["case_1"]
+    assert h.gw._greeting(case) != "Totally Legit"
+
+
+def test_a_typed_company_never_blocks_marketing(site):
+    h, client = site
+    client.post("/api/signup", json={**FORM, "company": "Free"})
+    assert h.gw._names_a_client("Free Delaware franchise tax checkup") is None
+
+
+def test_a_request_id_is_per_address(site):
+    h, client = site
+    first = client.post("/api/signup", json={**FORM, "request_id": "r1"}).json()
+    other = client.post("/api/signup", json={**FORM, "email": "b@other.dev",
+                                              "request_id": "r1"}).json()
+    assert other["case_id"] != first["case_id"]
+
+
+def test_a_welcome_the_provider_refuses_stops_after_3_tries(site, monkeypatch):
+    from app.gateway.ports import Rejected
+
+    h, client = site
+    h.ok("set_trust", action_type="email", state="AUTO")
+    calls = []
+
+    def refuse(*a, **k):
+        calls.append(1)
+        raise Rejected("domain refused")
+
+    monkeypatch.setattr(h.gw.ports.mail, "send", refuse)
+    client.post("/api/signup", json=FORM)
+    for _ in range(6):
+        h.gw.retry_signup_welcomes()
+    assert len(calls) == 3

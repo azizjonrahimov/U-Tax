@@ -41,7 +41,7 @@ _STAGE_RANK = {"applicant": 0, "screened": 1, "shortlisted": 2, "declined": 3, "
 # Event types that count against an action type's hourly cap.
 CAP_EVENTS = {
     "email": ("memo.sent", "client.asked", "case.not_eligible", "hr.questionnaire_sent",
-              "hr.decision_mailed"),
+              "hr.decision_mailed", "client.followed_up"),  # v1.11/v1.12 follow-ups, welcomes
     "social_post": ("post.published",),
     "calendar_invite": ("call.booked",),
     "voice_screen": ("screen.call",),
@@ -314,6 +314,10 @@ class State:
         case.reply_to = private.get("reply_to") or case.reply_to
         case.company = private.get("company") or case.company
         case.greeting_name = private.get("greeting_name") or case.greeting_name
+        if e.type == "email.received" and e.payload.get("source") != "signup":
+            # the mailbox owner wrote: a name typed into the public form (maybe by a
+            # stranger who pre-claimed the address) never greets them again
+            case.greeting_name = None
         if private.get("message_id"):
             case.message_ids.append(private["message_id"])
 

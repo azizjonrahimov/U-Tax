@@ -400,6 +400,7 @@ class Gateway:
             "signup": self._signup,
         }
         self._naive_noticed: dict[tuple[str, str], datetime] = {}
+        self._welcome_failures: dict[str, int] = {}  # v1.12: case -> failed welcome sends
         self._naive_questions: set[str] = set()  # notices tried this process (mailed or not)
         self._wakers: list[Callable[[str], None]] = []
         self._pending_wakes: list[str] = []
@@ -1213,13 +1214,14 @@ class Gateway:
     # ------------------------------------------------------------ v1.12 §5a (D32)
 
     SIGNUPS_PER_EMAIL_PER_DAY = 3
+    WELCOME_TRIES = 3  # a welcome the provider keeps refusing stops after this many
     SIGNUP_SUBJECT = "Your free Delaware franchise tax check"
 
     def _signup(self, args: dict) -> dict:
         """POST /api/signup: a case opened like an inbound email (source "signup"), the crew
         woken, and one welcome email asking for the numbers (trust email)."""
         name = " ".join(_str(args, "name", max_len=120).split())
-        company = " ".join(_str(args, "company", max_len=120).split())
+        company = " ".join(_str(args, "company", max_len=120).split())  # required, not stored
         email = _str(args, "email", max_len=320).strip()
         if not name or not company:
             raise Refused("bad_input", "name and company are required")
@@ -1231,7 +1233,8 @@ class Gateway:
         if identity in own:  # never a case (or a welcome mail) to the firm itself
             raise Refused("bad_input", "that address can't sign up")
         request_id = _str(args, "request_id", required=False, max_len=80)
-        key = f"signup:{request_id}" if request_id else None
+        # the address in the key: a replayed or guessed id never returns another's case
+        key = f"signup:{mail_identity(email)}:{request_id}" if request_id else None
         if key:
             seen = self._done_from(key)
             if seen is not None:
@@ -1258,7 +1261,9 @@ class Gateway:
                      "subject": "Sign-up", "body": body, "source": "signup"},
             idempotency_key=key,
             private={"reply_to": email, "sender_key": sender_key, "masked_name": masked_name,
-                     "company": company, "greeting_name": _form_greeting(name),
+                     # the company from the address, like any inbound mail: the typed
+                     # one would feed the client-name guard ("startup" blocking posts)
+                     "company": company_label(sender), "greeting_name": _form_greeting(name),
                      "identity": identity, "message_id": f"signup-{case_id}",
                      "redactions": 0,
                      "agent_text": agent_text(f"{body} Waiting for their numbers by email."),
@@ -1276,6 +1281,8 @@ class Gateway:
         key = f"signup-welcome:{case_id}"
         if self._done_from(key) is not None:
             return "sent"
+        if self._welcome_failures.get(case_id, 0) >= self.WELCOME_TRIES:
+            return "gave_up"  # a provider that keeps refusing: never retried forever
         case = self.state.cases[case_id]
         try:
             self._gate("email", key, _cap(f"{self._first('email')}welcome email: "
@@ -1290,12 +1297,16 @@ class Gateway:
                         body=self.templates.render("signup-welcome", {
                             "greeting_name": self._greeting(case)})), key))
         except ToolError as err:
-            log.warning("welcome email for %s failed: %s", case_id, err)
+            failures = self._welcome_failures.get(case_id, 0) + 1
+            self._welcome_failures[case_id] = failures
+            log.warning("welcome email for %s failed (%d/%d): %s", case_id, failures,
+                        self.WELCOME_TRIES, err)
             return "failed"
+        # public: it counts in /talk's own send bucket, never the firm's
         self._emit([NewEvent(type="client.followed_up", actor="intake", case_id=case_id,
                              provider=self.ports.mail.provider,
                              payload={"kind": "signup_welcome"}, idempotency_key=key,
-                             private={"message_id": sent.message_id})])
+                             private={"message_id": sent.message_id, "public": True})])
         return "sent"
 
     def retry_signup_welcomes(self) -> list[str]:

@@ -173,6 +173,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     ceo_mint_limiter = RateLimiter(limit=10, window=3600.0)  # v1.8: the CEO's 10 an hour
     # v1.12 §5a: the public sign-up has /talk's per-IP limits, in its own bucket
     signup_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
+    # one IP can't use up the public daily case cap (shared with /talk) or relay mail
+    signup_daily = RateLimiter(limit=10, window=86400.0)
     # v1.10 §5c: /talk's TTS has the per-IP limits of a /talk Send, in its own bucket
     tts_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
     phrases_cache: dict[str, Any] = {"stamp": None, "phrases": None}
@@ -257,7 +259,9 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         """v1.12 §5a (D32): public. Opens a case like an inbound email and sends one welcome
         email asking for the numbers. Returns {case_id, masked_name}."""
         _talk_limit(signup_limiter, SEND_LIMITS)
-        signup_limiter.check(_client_ip(request))
+        ip = _client_ip(request)
+        signup_limiter.check(ip)
+        signup_daily.check(ip)
         out = act("signup", _pick(body, "name", "company", "email", "request_id"))
         if "case_id" not in out:  # an existing client's address: the same generic answer
             return {"ok": True}
