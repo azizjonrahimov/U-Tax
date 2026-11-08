@@ -5,11 +5,13 @@
 // the server renders the poster (Acts.tsx). No WebGL 2 → the poster; reduced motion → a still frame
 // with the acts in a normal column; phones → the light profile (scene.ts).
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { ACTS, ImmersivePoster, PillNav } from "./Acts";
 import { CARD_KEYS, CARD_LINKS, baseFaces } from "./cards";
-import { createImmersive, type Fonts, type Immersive as Scene } from "./scene";
+import { useGlass } from "./live";
+import { createImmersive, type CardFace, type Fonts, type Immersive as Scene } from "./scene";
 
 function hasWebGL2(): boolean {
   try {
@@ -50,6 +52,11 @@ export default function Immersive() {
   const sceneRef = useRef<Scene | null>(null);
   // client-only (next/dynamic, ssr: false), so the WebGL 2 probe can run in the initializer
   const [mode, setMode] = useState<Mode>(() => (typeof window !== "undefined" && hasWebGL2() ? "webgl" : "poster"));
+  const glass = useGlass();
+  const facesRef = useRef<CardFace[] | null>(null);
+  /** The captions now on the glass (a face is redrawn only when its caption changed). */
+  const appliedRef = useRef<string[]>([]);
+  const pulsedRef = useRef<number | null>(null);
   const [reduced] = useState(() => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
   useEffect(() => {
@@ -95,7 +102,9 @@ export default function Immersive() {
       await fontsReady(fonts);
       if (!alive) return;
       try {
-        s = createImmersive(canvas, { cards: baseFaces(), mobile, fonts });
+        const faces = facesRef.current ?? baseFaces();
+        s = createImmersive(canvas, { cards: faces, mobile, fonts });
+        appliedRef.current = faces.map((f) => f.caption);
       } catch {
         setMode("poster");
         return;
@@ -122,6 +131,26 @@ export default function Immersive() {
     };
   }, [mode, reduced, router]);
 
+  // P2.1: live captions on the glass, redrawn when they change (the poll runs every 30 s)
+  useEffect(() => {
+    facesRef.current = glass.faces; // a scene still waiting on its fonts starts with these
+    const s = sceneRef.current;
+    if (!s || !glass.faces) return;
+    glass.faces.forEach((f, i) => {
+      if (appliedRef.current[i] === f.caption) return;
+      s.setCard(i, f);
+      appliedRef.current[i] = f.caption;
+    });
+  }, [glass.faces]);
+
+  // P2.2: a new public event flashes the key light in its department's colour (not the first read)
+  useEffect(() => {
+    const t = glass.ticker;
+    if (!t) return;
+    if (pulsedRef.current !== null && t.id > pulsedRef.current) sceneRef.current?.pulse(t.color);
+    pulsedRef.current = t.id;
+  }, [glass.ticker]);
+
   if (mode === "poster") return <ImmersivePoster />;
 
   return (
@@ -141,6 +170,10 @@ export default function Immersive() {
             {a.body}
           </div>
         ))}
+        <Link href="/office" className={`imm-ticker${glass.ticker ? "" : " off"}`} aria-live="polite">
+          <i aria-hidden="true" />
+          <span>{glass.ticker ? `LIVE · ${glass.ticker.text}` : glass.open === false ? "the firm is resting · open the office" : "the firm, live · open the office"}</span>
+        </Link>
       </div>
     </section>
   );
