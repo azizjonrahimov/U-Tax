@@ -1,4 +1,4 @@
-# API contract (v1.11): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.12): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -230,6 +230,21 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/dev/inject-email` `{from, subject, body}` → local MailPort only; produces
   `email.received` exactly as a real inbound mail would. Refused unless `ADAPTER_MAIL=local`.
 - `POST /hooks/agentmail` (Saturday): AgentMail webhook; idempotency key = message id.
+
+## 5a. Product shell routes (v1.12, design D32)
+
+- `POST /api/signup` `{name, company, email, request_id?}`. It's public, with the /talk per-IP
+  limits, plus at most 3 sign-ups per email per day, and the public daily case cap.
+  - It opens a case exactly like an inbound email (`email.received`, with `source: "signup"` in
+    the payload and the sender masked), and wakes the crew ("New case case_N").
+  - It sends one welcome email (template `signup-welcome`, trust type `email`) asking for the
+    numbers. The reply threads onto the case.
+  - Returns `{case_id, masked_name}`.
+  - Refusals: `400 bad_input` (invalid email or empty fields), `429 rate_limited`,
+    `429 at_capacity`.
+- Event `tool.called` (actor = the seat): `{tool, status: "done"|"needs_approval"|"refused"|"error",
+  order_id?}`, written by the gateway for **every** MCP tool call, reads included. No args or data,
+  so nothing private. It's what the department workspaces animate.
 
 ## 5b. CEO voice console (v1.8, design D28)
 
@@ -619,6 +634,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.12 (2026-11-07, design D32): §5a `POST /api/signup`, event `tool.called`; template `signup-welcome`.
 
 - v1.11.3 (2026-11-07, owner's calendar link): HR_BOOKING_URL in hr-outreach.
 
