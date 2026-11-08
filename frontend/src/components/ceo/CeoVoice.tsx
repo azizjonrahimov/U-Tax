@@ -57,7 +57,8 @@ import {
 import { parseTalkReply, replyLine, spokenPart, TALK_GIVE_UP_MS, TALK_LATE_MS, TALK_POLL_MS, TALK_RETRY_MS, TALK_SLOW_POLL_MS, TALK_TEXT_MAX, undoLine, type TalkAction, type TalkReply } from "@/ceo/talk";
 import { MicIcon } from "@/components/MicIcon";
 import { Speaker } from "@/lib/tts";
-import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition } from "@/lib/recognition";
+import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition, type RecognitionCtor } from "@/lib/recognition";
+import { canRecord, serverRecognition, STT_LIMITED, STT_UNAVAILABLE } from "@/lib/stt";
 import { API, authJson } from "./gateway";
 
 const MINT_MS = 8000;
@@ -86,6 +87,8 @@ type Flow = "listening" | "thinking" | "speaking" | "idle";
 type Line = { who: "you" | "firm" | "alert"; text: string; n: number; actions?: TalkAction[] };
 /** A failed STOP from a console that unmounted mid-STOP, for the next console in this tab to show. */
 const STOP_FAILED_KEY = "utax.ceo.stopFailed";
+/** D36: after the gateway's STT says no (503, 429, refused), the browser recognizer listens for this long. */
+const STT_RETRY_MS = 10 * 60_000;
 /** A talk turn waits this long at most per request (the gateway holds it up to 25 s). */
 const TALK_REQUEST_MS = 35_000;
 interface Card extends Proposal {
@@ -377,6 +380,20 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
   /** The browser can't listen (no recognition, mic blocked, or it keeps failing): hands-free still reads alerts. */
   const deaf = useRef(false);
   const earErrors = useRef(0);
+  /**
+   * D36: the ear. The gateway's STT (recorded utterances, reliable transcripts) while this browser
+   * can record and the gateway hasn't said no lately; otherwise the browser's own recognizer.
+   */
+  const sttDownAt = useRef(0);
+  const serverEar = useRef<RecognitionCtor | null>(null);
+  const earCtor = useCallback((): RecognitionCtor | null => {
+    if (canRecord() && Date.now() - sttDownAt.current > STT_RETRY_MS) {
+      serverEar.current ??= serverRecognition("ceo", () => tokenRef.current);
+      return serverEar.current;
+    }
+    return recognitionCtor();
+  }, []);
+  const canHear = () => canRecord() || recognitionCtor() !== null;
   const goDeaf = useCallback((why: string | null) => {
     deaf.current = true;
     setCanListen(false);
@@ -387,7 +404,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
 
   const listen = useCallback(() => {
     if (recRef.current || speaking.current > 0 || otherAudio.current > 0 || linkRef.current !== "fallback" || deaf.current) return;
-    const Ctor = recognitionCtor();
+    const Ctor = earCtor();
     if (!Ctor) return goDeaf(null);
     const r = new Ctor();
     r.lang = "en-US";
@@ -409,6 +426,16 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     };
     let failed = false;
     r.onerror = (e) => {
+      if (e.error === STT_UNAVAILABLE || e.error === STT_LIMITED || e.error === "not-allowed-stt") {
+        // The gateway's STT said no: the browser's recognizer takes over (a restart, not a failure).
+        sttDownAt.current = Date.now();
+        if (recognitionCtor()) {
+          if (!handsRef.current) setNotice("Transcription is busy right now, so the browser listens instead. Say it again.");
+        } else {
+          setNotice(e.error === STT_LIMITED ? "Transcription is busy right now: type below for a moment." : "Transcription isn't available here: type below.");
+        }
+        return;
+      }
       if (isBlockedError(e.error)) {
         goDeaf("The microphone is blocked for this page. Type commands below; hands-free still reads alerts aloud.");
       } else if (!isQuietError(e.error)) {
@@ -435,7 +462,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     } catch {
       recRef.current = null; // already running elsewhere, or refused: the next tap retries
     }
-  }, [goDeaf]);
+  }, [earCtor, goDeaf]);
   useEffect(() => {
     listenRef.current = listen;
   }, [listen]);
@@ -1039,7 +1066,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
       go("fallback");
       setFlow("idle");
       vs.current = agentAudio(vs.current, "model", false, Date.now());
-      const ear = recognitionCtor() !== null;
+      const ear = canHear();
       if (!ear) deaf.current = true;
       setCanListen(ear && !deaf.current);
       if (why !== null) setNotice(`${why} ${ear ? "The browser listens instead; answers are read aloud." : "Type commands below; answers are read aloud."}`);
@@ -1069,7 +1096,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     hangUp();
     // D34: the conversation listens with the browser and answers with TTS; the Realtime model is
     // only the path when the assistant is down or this browser can't listen.
-    if (Date.now() - talkDownAt.current > TALK_RETRY_MS && recognitionCtor() !== null && !deaf.current) return toFallback(null);
+    if (Date.now() - talkDownAt.current > TALK_RETRY_MS && canHear() && !deaf.current) return toFallback(null);
     const mine = attempt.current;
     const stale = () => mine !== attempt.current || !alive.current;
     go("connecting");

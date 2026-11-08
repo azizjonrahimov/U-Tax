@@ -251,7 +251,9 @@ let candidates = 0;
 
 /** The CEO's order on the log, then the firm acting on it, one step every PACE ms. */
 // D34: the conversation's threads and undos.
-let talkDownDev = false; // POST /api/dev/talk-down {down} (dev only): the assistant goes away mid-run
+let talkDownDev = false;
+/** D36: the mock STT's mode ("ok", "503", "429"); MOCK_STT sets it, POST /api/dev/stt {mode} changes it. */
+let sttMode = process.env.MOCK_STT || "ok"; // POST /api/dev/talk-down {down} (dev only): the assistant goes away mid-run
 const talks = new Map(); // conversation_id -> { pending: null | { ready, reply } , last }
 const undos = new Map(); // undo_id -> { kind, ... , used }
 let undoSeq = 0;
@@ -548,6 +550,21 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
   };
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
+  // D36 (v1.16.1): POST /api/stt?purpose=ceo|talk&seconds=n, the raw recording as the body.
+  // MOCK_STT=503|429 answers that; otherwise the text is MOCK_STT_TEXT (a mock can't listen).
+  if (req.method === "POST" && url.pathname === "/api/stt") {
+    const purpose = url.searchParams.get("purpose");
+    const reply = (status, json) => {
+      console.log(JSON.stringify({ t: Date.now(), method: "POST", path: "/api/stt", body: { purpose, seconds: url.searchParams.get("seconds"), type: req.headers["content-type"], bytes: raw.length, auth: Boolean(req.headers.authorization) }, status }));
+      res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
+    };
+    if (purpose !== "ceo" && purpose !== "talk") return reply(400, { error: { code: "bad_input", message: "purpose" } });
+    if (purpose === "ceo" && !isAdmin(req)) return reply(401, { error: { code: "unauthorized", message: "admin token or a CEO session required" } });
+    if (!/^audio\/(webm|ogg|wav|mp4|mpeg|flac)$/.test(String(req.headers["content-type"] || ""))) return reply(415, { error: { code: "bad_input", message: "not audio" } });
+    if (sttMode === "503") return reply(503, { error: { code: "voice_unavailable", message: "no STT" } });
+    if (sttMode === "429") return reply(429, { error: { code: "rate_limited", message: "too many" } });
+    return reply(200, { text: process.env.MOCK_STT_TEXT || "advertise our firm on linkedin" });
+  }
   // D33: the CEO sign-in. Never logs the password (the line says only whether each field matched).
   if (req.method === "POST" && url.pathname === "/api/auth/login") {
     const now = Date.now();
@@ -670,6 +687,10 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && p === "/api/ceo/talk") return out(...talk(body));
   if (req.method === "GET" && p.startsWith("/api/ceo/talk/")) return out(...talkCheck(decodeURIComponent(p.slice("/api/ceo/talk/".length))));
   if (req.method === "POST" && p === "/api/ceo/undo") return out(...undo(body));
+  if (req.method === "POST" && p === "/api/dev/stt") {
+    sttMode = ["ok", "503", "429"].includes(body.mode) ? body.mode : "ok";
+    return out(200, { mode: sttMode });
+  }
   if (req.method === "POST" && p === "/api/dev/talk-down") {
     talkDownDev = body.down !== false;
     return out(200, { down: talkDownDev });

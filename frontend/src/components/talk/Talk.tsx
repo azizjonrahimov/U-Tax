@@ -13,7 +13,19 @@ import { ApiError, apiFetch, API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
 import { formatCents } from "@/theater/format";
 import { ECHO_TAIL_MS, Speaker, type TalkPhrase } from "@/lib/tts";
-import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition } from "@/lib/recognition";
+import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition, type RecognitionCtor } from "@/lib/recognition";
+import { canRecord, serverRecognition, STT_LIMITED, STT_UNAVAILABLE } from "@/lib/stt";
+
+/** D36: after the gateway's STT says it isn't available (503), the browser recognizer listens for this long. */
+const STT_RETRY_MS = 10 * 60_000;
+/** The public STT (purpose "talk", no sign-in): reliable transcripts, from the visitors' shared budget. */
+let talkEar: RecognitionCtor | null = null;
+let sttDownAt = 0;
+const earCtorFor = (): RecognitionCtor | null => {
+  if (canRecord() && Date.now() - sttDownAt > STT_RETRY_MS) return (talkEar ??= serverRecognition("talk", () => null));
+  return recognitionCtor();
+};
+const canHear = () => canRecord() || recognitionCtor() !== null;
 import { stateUrl, streamUrl, seedFromState, type Endpoints } from "@/theater/live";
 import {
   addTurn,
@@ -123,7 +135,7 @@ export function Talk() {
   /** The firm is full for today (v1.7.6): the gateway's sentence (it names the inbox); Send stays off. */
   const [atCapacity, setAtCapacity] = useState<string | null>(null);
   /** Speaking answers through the browser's speech recognition (D30's main path): off, on, or not possible here. */
-  const [ear, setEar] = useState<"off" | "on" | "paused" | "unsupported" | "blocked" | "failing">("off");
+  const [ear, setEar] = useState<"off" | "on" | "paused" | "unsupported" | "blocked" | "failing" | "limited">("off");
   /** Stream start: the last event id before our case opened (so we don't replay the night). */
   const [followFrom, setFollowFrom] = useState(0);
   /** The turns as of the last change: handlers read this, never a state updater with side effects. */
@@ -213,7 +225,7 @@ export function Talk() {
   const earStart = useCallback(() => {
     if (!earWanted.current || recRef.current) return;
     if (pageSpeaking.current) return setEar("paused");
-    const Ctor = recognitionCtor();
+    const Ctor = earCtorFor();
     if (!Ctor) {
       earWanted.current = false;
       return setEar("unsupported");
@@ -232,6 +244,21 @@ export function Talk() {
       }
     };
     r.onerror = (e) => {
+      if (e.error === STT_LIMITED) {
+        // D36: the visitors' shared transcription budget is used up for now: type instead.
+        earWanted.current = false;
+        setEar("limited");
+        return;
+      }
+      if (e.error === STT_UNAVAILABLE) {
+        // No STT on the gateway: the browser's recognizer takes over (onend restarts it), or typing.
+        sttDownAt = Date.now();
+        if (!recognitionCtor()) {
+          earWanted.current = false;
+          setEar("unsupported");
+        }
+        return;
+      }
       if (isBlockedError(e.error)) {
         earWanted.current = false;
         setEar("blocked");
@@ -387,8 +414,8 @@ export function Talk() {
       const code = e instanceof ApiError ? e.code : "network_error";
       if (status === 503 && !stale()) {
         // D30: no Realtime voice. The browser listens, U-Tax speaks; typing works too.
-        startTyped(recognitionCtor() ? "U-Tax listens through your browser: speak your answers, or type them." : "This browser can't listen, so let's type. U-Tax still reads the questions aloud.");
-        earWanted.current = recognitionCtor() !== null;
+        startTyped(canHear() ? "U-Tax listens through your browser: speak your answers, or type them." : "This browser can't listen, so let's type. U-Tax still reads the questions aloud.");
+        earWanted.current = canHear();
         if (earWanted.current) earStart();
         return;
       }
@@ -763,7 +790,7 @@ export function Talk() {
                   className={`secondary ear${ear === "on" || ear === "paused" ? " on" : ""}`}
                   aria-pressed={ear === "on" || ear === "paused"}
                   onClick={earToggle}
-                  disabled={full || phase === "sending" || mayHaveLanded || ear === "blocked" || ear === "failing"}
+                  disabled={full || phase === "sending" || mayHaveLanded || ear === "blocked" || ear === "failing" || ear === "limited"}
                 >
                   Speak answers
                 </button>
@@ -774,11 +801,13 @@ export function Talk() {
                 {ear === "on" ? "Listening. Answer out loud, or tap Speak answers to stop." : "U-Tax is speaking. Listening resumes after."}
               </p>
             )}
-            {mode === "typed" && (ear === "blocked" || ear === "unsupported" || ear === "failing") && (
+            {mode === "typed" && (ear === "blocked" || ear === "unsupported" || ear === "failing" || ear === "limited") && (
               <p className="hint" role="status">
                 {ear === "blocked"
                   ? "The microphone is blocked for this page, so type your answers."
-                  : ear === "failing"
+                  : ear === "limited"
+                    ? "Lots of people are talking to U-Tax right now, so type your answers for a moment."
+                    : ear === "failing"
                     ? "Listening isn't working on this network or device. Type your answers."
                     : "This browser can't listen. Type your answers."}
               </p>
