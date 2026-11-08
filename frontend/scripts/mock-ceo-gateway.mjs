@@ -3,6 +3,10 @@
 // can prove what the console sent (e.g. that no /api/ceo/confirm followed a model "confirmed").
 //
 //   PORT=8020 ADMIN_TOKEN=admin-test MOCK_VOICE=0 node scripts/mock-ceo-gateway.mjs
+// D34 (v1.14 §5a-ter): POST /api/ceo/talk {text, conversation_id?} acts directly (no card) and
+// answers {conversation_id, say, actions:[{tool, summary, undo_id?}]}; text containing "slow" answers
+// {pending: true} first (GET /api/ceo/talk/{id} has it ~3 s later); stops run at once with an undo.
+// POST /api/ceo/undo {undo_id} (once). MOCK_TALK=503 answers assistant_unavailable (the console falls back).
 // Task 36/39: POST /api/stream-ticket (Bearer) → {ticket, expires_at}, 60 s single use, for
 // GET /api/events/stream?ticket=; a session is never accepted from a URL.
 //
@@ -218,6 +222,88 @@ let ads = 0;
 let candidates = 0;
 
 /** The CEO's order on the log, then the firm acting on it, one step every PACE ms. */
+// D34: the conversation's threads and undos.
+let talkDownDev = false; // POST /api/dev/talk-down {down} (dev only): the assistant goes away mid-run
+const talks = new Map(); // conversation_id -> { pending: null | { ready, reply } , last }
+const undos = new Map(); // undo_id -> { kind, ... , used }
+let undoSeq = 0;
+function newUndo(rec) {
+  const id = `undo_${++undoSeq}`;
+  undos.set(id, { ...rec, used: false });
+  return id;
+}
+function talkTurn(text) {
+  const w = words(text).trim();
+  if (has(text, "everything") && (has(text, "stop") || has(text, "pause"))) {
+    const before = { ...trust };
+    const summary = pause("everything", "voice");
+    return { say: summary, actions: [{ tool: "pause", summary, undo_id: newUndo({ kind: "pause", before }) }] };
+  }
+  if (has(text, "stop posting") || has(text, "pause posting")) {
+    const before = { ...trust };
+    const summary = pause("social_post", "voice");
+    return { say: summary, actions: [{ tool: "pause", summary, undo_id: newUndo({ kind: "pause", before }) }] };
+  }
+  if (/^(?:(?:hey|hi|hello|test|testing|okay)\s*)+$/.test(w) || /can you hear me|are you there/.test(w)) return { say: "I'm here. What should the firm do?", actions: [] };
+  if (has(text, "money") || has(text, "overnight") || has(text, "how are we")) return { say: `${cases.length} clients so far, ${pending.size} approvals waiting on you.`, actions: [] };
+  if (has(text, "approve")) return { say: "Approving needs your click on the card, so I left it for you.", actions: [] };
+  const id = order(text.slice(0, 200), "voice");
+  const summary = `Told the Chief of Staff: ${text.slice(0, 120)}`;
+  return { say: `On it. ${summary}.`, actions: [{ tool: "order", summary, undo_id: newUndo({ kind: "order", order_id: id }) }] };
+}
+function talk(body) {
+  if (process.env.MOCK_TALK === "503" || talkDownDev) return [503, { error: { code: "assistant_unavailable", message: "The assistant can't be reached right now. Stops still work: say stop." } }];
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (!text) return [400, { error: { code: "bad_input", message: "text is required" } }];
+  let cid = typeof body.conversation_id === "string" && talks.has(body.conversation_id) ? body.conversation_id : null;
+  if (!cid) {
+    cid = `conv_${randomUUID().slice(0, 8)}`;
+    talks.set(cid, { pending: null, last: null });
+  }
+  const conv = talks.get(cid);
+  emit("ceo.said", { conversation_id: cid, text_len: text.length }, { actor: "ceo" });
+  if (/slow/i.test(text)) {
+    conv.pending = { ready: Date.now() + 3000, text: text.replace(/slow(ly)?/gi, "").trim() || "hire 1 person" };
+    return [200, { conversation_id: cid, say: "Still working on it…", pending: true }];
+  }
+  const out = { conversation_id: cid, ...talkTurn(text) };
+  emit("ceo.replied", { conversation_id: cid, actions: out.actions }, { actor: "ceo_assistant" });
+  conv.last = out;
+  return [200, out];
+}
+function talkCheck(cid) {
+  const conv = talks.get(cid);
+  if (!conv) return [404, { error: { code: "not_found", message: "no such conversation" } }];
+  if (conv.pending) {
+    if (Date.now() < conv.pending.ready) return [200, { conversation_id: cid, say: "Still working on it…", pending: true }];
+    const out = { conversation_id: cid, ...talkTurn(conv.pending.text) };
+    conv.pending = null;
+    conv.last = out;
+    emit("ceo.replied", { conversation_id: cid, actions: out.actions }, { actor: "ceo_assistant" });
+    return [200, out];
+  }
+  return [200, conv.last ?? { conversation_id: cid, say: "", actions: [] }];
+}
+function undo(body) {
+  const rec = undos.get(String(body.undo_id ?? ""));
+  if (!rec) return [404, { error: { code: "not_found", message: "no such undo (each undo works once)" } }];
+  if (rec.used) return [409, { error: { code: "used", message: "already undone" } }];
+  rec.used = true;
+  if (rec.kind === "pause") {
+    const back = [];
+    for (const t of TYPES) {
+      if (trust[t] === "PAUSED" && rec.before[t] !== "PAUSED") {
+        emit("trust.changed", { action_type: t, from: "PAUSED", to: rec.before[t], reason: "ceo" });
+        trust[t] = rec.before[t];
+        back.push(t);
+      }
+    }
+    return [200, { kind: "done", summary: back.length ? `Resumed ${back.join(", ")}.` : "Nothing was paused any more." }];
+  }
+  emit("touch.operating", { note: `cancel order ${rec.order_id}`, approval_id: null, channel: "voice" }, { actor: "ceo" });
+  return [200, { kind: "done", summary: "Cancelled that order." }];
+}
+
 function order(text, via) {
   const o = emit("voice.command", { text, channel: via === "voice" ? "voice" : "typed", speaker: "ceo", case_id: null, masked_name: null }, { actor: "ceo" });
   const ref = `order_${o.id}`;
@@ -479,6 +565,13 @@ const server = createServer(async (req, res) => {
   }
   if (req.method === "POST" && p === "/api/ceo/tool") return out(...tool(String(body.name ?? ""), body.args, "realtime"));
   if (req.method === "POST" && p === "/api/ceo/command") return out(...command(String(body.text ?? "")));
+  if (req.method === "POST" && p === "/api/ceo/talk") return out(...talk(body));
+  if (req.method === "GET" && p.startsWith("/api/ceo/talk/")) return out(...talkCheck(decodeURIComponent(p.slice("/api/ceo/talk/".length))));
+  if (req.method === "POST" && p === "/api/ceo/undo") return out(...undo(body));
+  if (req.method === "POST" && p === "/api/dev/talk-down") {
+    talkDownDev = body.down !== false;
+    return out(200, { down: talkDownDev });
+  }
   if (req.method === "POST" && p === "/api/ceo/confirm") return out(...confirm(body));
   if (req.method === "POST" && p === "/api/trust") {
     if (body.state === "PAUSED") return out(200, { ok: true, summary: pause(body.action_type, "click") });

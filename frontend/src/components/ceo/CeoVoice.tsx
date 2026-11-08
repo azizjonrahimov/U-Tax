@@ -52,6 +52,7 @@ import {
   type VoiceEffect,
   type VoiceState,
 } from "@/ceo/voice";
+import { parseTalkReply, replyLine, TALK_GIVE_UP_MS, TALK_POLL_MS, TALK_TEXT_MAX, undoLine, type TalkAction } from "@/ceo/talk";
 import { MicIcon } from "@/components/MicIcon";
 import { Speaker } from "@/lib/tts";
 import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition } from "@/lib/recognition";
@@ -79,7 +80,10 @@ const RESPONSE_STALE_MS = 15000;
 
 type Link = "off" | "connecting" | "realtime" | "fallback";
 type Flow = "listening" | "thinking" | "speaking" | "idle";
-type Line = { who: "you" | "firm" | "alert"; text: string; n: number };
+/** A transcript line; a D34 reply carries the actions the assistant took (chips, with Undo). */
+type Line = { who: "you" | "firm" | "alert"; text: string; n: number; actions?: TalkAction[] };
+/** A talk turn waits this long at most per request (the gateway holds it up to 25 s). */
+const TALK_REQUEST_MS = 35_000;
 interface Card extends Proposal {
   expired: boolean;
   sending: boolean;
@@ -196,6 +200,13 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const alive = useRef(true);
   /** Bumped by STOP EVERYTHING: a tool call or confirm that started before it never acts after it. */
   const stopEpoch = useRef(0);
+  /**
+   * D34 conversation: the assistant's thread for this sign-in, and whether /api/ceo/talk is down
+   * (503: then the console falls back to /api/ceo/command and its confirm card for this session).
+   */
+  const convo = useRef<string | null>(null);
+  const talkDown = useRef(false);
+  const [undoState, setUndoState] = useState<Record<string, "undoing" | "undone" | "failed">>({});
   /** Function calls still at the gateway: the model is asked to speak once, after the last. */
   const inflight = useRef(0);
   /** A model response is running (or was just asked for): a second response.create would be refused. */
@@ -226,10 +237,10 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     setLink(l);
   }, []);
 
-  const addLine = useCallback((who: Line["who"], text: string) => {
+  const addLine = useCallback((who: Line["who"], text: string, actions?: TalkAction[]) => {
     lineNo.current += 1;
     const n = lineNo.current;
-    setLines((ls) => [...ls, { who, text, n }].slice(-MAX_LINES));
+    setLines((ls) => [...ls, { who, text, n, ...(actions?.length ? { actions } : {}) }].slice(-MAX_LINES));
   }, []);
 
   /** Realtime client events, only while the channel is open. */
@@ -655,6 +666,83 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     [handle, post, respond, send, unauthorized],
   );
 
+  /**
+   * D34: one turn of the conversation. The assistant acts directly (no confirm card) and says what
+   * it did; a pending turn is polled. False when /api/ceo/talk is down (503): the caller then uses
+   * the old command path. A STOP while the turn is on its way silences its answer.
+   */
+  const talk = useCallback(
+    async (t: string): Promise<boolean> => {
+      const epoch = stopEpoch.current;
+      const quiet = () => !alive.current || epoch !== stopEpoch.current;
+      try {
+        const body = { text: t.slice(0, TALK_TEXT_MAX), ...(convo.current ? { conversation_id: convo.current } : {}) };
+        let r = parseTalkReply(await authJson<unknown>(token, `${API}/ceo/talk`, { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(TALK_REQUEST_MS) }));
+        if (!r) throw new ApiError(0, "bad_answer", "The gateway's answer wasn't readable.");
+        if (r.conversationId) convo.current = r.conversationId;
+        if (r.pending && r.conversationId) {
+          if (!quiet()) {
+            addLine("firm", r.say);
+            speak(r.say, undefined, `pending:${t}`);
+          }
+          const until = Date.now() + TALK_GIVE_UP_MS;
+          const id = r.conversationId;
+          while (r.pending) {
+            if (Date.now() > until) {
+              if (!quiet()) addLine("firm", "It's taking too long. Ask me again in a moment.");
+              return true;
+            }
+            await new Promise((res) => setTimeout(res, TALK_POLL_MS));
+            if (quiet()) return true;
+            const next = parseTalkReply(await authJson<unknown>(token, `${API}/ceo/talk/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(TALK_REQUEST_MS) }));
+            if (!next) throw new ApiError(0, "bad_answer", "The gateway's answer wasn't readable.");
+            r = next;
+          }
+        }
+        if (quiet()) return true;
+        const line = replyLine(r);
+        addLine("firm", line, r.actions);
+        if (r.actions.length) refresh();
+        speak(line, undefined, `reply:${t}`);
+        return true;
+      } catch (e) {
+        if (!alive.current || unauthorized(e)) return true;
+        if (e instanceof ApiError && e.status === 503) {
+          talkDown.current = true;
+          setNotice("The assistant can't be reached, so orders go through a confirm card for now.");
+          return false;
+        }
+        if (quiet()) return true;
+        const msg = voiceError(e);
+        addLine("firm", msg);
+        speak(msg, undefined, `error:${t}`);
+        return true;
+      }
+    },
+    [addLine, refresh, speak, token, unauthorized],
+  );
+
+  /** D34 Undo on an action chip: POST /api/ceo/undo; each undo works once. */
+  const undo = useCallback(
+    async (undoId: string) => {
+      setUndoState((u) => ({ ...u, [undoId]: "undoing" }));
+      try {
+        const line = undoLine(await authJson<unknown>(token, `${API}/ceo/undo`, { method: "POST", body: JSON.stringify({ undo_id: undoId }) }));
+        if (!alive.current) return;
+        setUndoState((u) => ({ ...u, [undoId]: "undone" }));
+        addLine("firm", line);
+        setOutcome({ ok: true, text: line });
+        refresh();
+      } catch (e) {
+        if (!alive.current || unauthorized(e)) return;
+        const gone = e instanceof ApiError && (e.code === "used" || e.code === "not_found");
+        setUndoState((u) => ({ ...u, [undoId]: gone ? "undone" : "failed" }));
+        setOutcome({ ok: gone, text: gone ? "That was already undone." : voiceError(e) });
+      }
+    },
+    [addLine, refresh, token, unauthorized],
+  );
+
   /** Words from the CEO outside Realtime (browser speech, or typed): a confirm word decides the card, else a command. */
   const command = useCallback(
     async (text: string, via: "voice" | "click") => {
@@ -666,6 +754,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         void stopRef.current("voice");
         return;
       }
+      // D34: a conversation, no confirm card (a card left from the command path is decided first).
+      if (!talkDown.current && !vs.current.proposal && (await talk(t))) return;
       const d = decideTyped(vs.current, t, Date.now(), via === "voice");
       if (d?.type === "ignored") {
         setOutcome({ ok: false, text: IGNORED });
@@ -697,7 +787,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         speak(msg, undefined, `error:${t}`);
       }
     },
-    [addLine, handle, post, settle, speak, unauthorized],
+    [addLine, handle, post, settle, speak, talk, unauthorized],
   );
   useEffect(() => {
     spokenRef.current = (text) => void command(text, "voice");
@@ -768,7 +858,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
 
   /** Without a session: browser speech (when there is one) or typing. */
   const toFallback = useCallback(
-    (why: string) => {
+    (why: string | null) => {
       hangUp();
       go("fallback");
       setFlow("idle");
@@ -776,7 +866,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       const ear = recognitionCtor() !== null;
       if (!ear) deaf.current = true;
       setCanListen(ear && !deaf.current);
-      setNotice(`${why} ${ear ? "The browser listens instead; answers are read aloud." : "Type commands below; answers are read aloud."}`);
+      if (why !== null) setNotice(`${why} ${ear ? "The browser listens instead; answers are read aloud." : "Type commands below; answers are read aloud."}`);
+      else if (!ear) setNotice("This browser can't listen: type below; answers are read aloud.");
       if (ear && (micRef.current || handsRef.current)) listenRef.current();
       else if (!ear) {
         micRef.current = false;
@@ -800,6 +891,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   /** First mic press or hands-free: mint a CEO session, then ask for the mic (only now), then connect. */
   const connect = useCallback(async () => {
     hangUp();
+    // D34: the conversation listens with the browser and answers with TTS; the Realtime model is
+    // only the path when the assistant is down or this browser can't listen.
+    if (!talkDown.current && recognitionCtor() !== null) return toFallback(null);
     const mine = attempt.current;
     const stale = () => mine !== attempt.current || !alive.current;
     go("connecting");
@@ -1299,6 +1393,26 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           {lines.map((l) => (
             <li key={l.n} className={l.who}>
               <b>{l.who === "you" ? "You" : l.who === "alert" ? "Alert" : "U-Tax"}</b> {l.text}
+              {l.actions && (
+                <span className="chips">
+                  {l.actions.map((a, i) => {
+                    const st = a.undoId ? undoState[a.undoId] : undefined;
+                    return (
+                      <span key={i} className={`chip${st === "undone" ? " undone" : ""}`}>
+                        <span className="chip-text">{a.summary}</span>
+                        {a.undoId &&
+                          (st === "undone" ? (
+                            <span className="chip-note">Undone</span>
+                          ) : (
+                            <button className="ghost undo" disabled={st === "undoing"} onClick={() => a.undoId && void undo(a.undoId)}>
+                              {st === "undoing" ? "Undoing…" : st === "failed" ? "Retry undo" : "Undo"}
+                            </button>
+                          ))}
+                      </span>
+                    );
+                  })}
+                </span>
+              )}
             </li>
           ))}
         </ol>
@@ -1321,7 +1435,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           value={draft}
           maxLength={500}
           autoComplete="off"
-          placeholder="Or type: what happened overnight? · approve the memo for Team 7 · stop posting"
+          placeholder="Or type to U-Tax: what happened overnight? · hire 2 people for the tax gig · stop posting"
           onChange={(e) => setDraft(e.target.value)}
         />
         <button className="secondary" type="submit" disabled={!draft.trim()}>
