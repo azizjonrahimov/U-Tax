@@ -15,7 +15,8 @@ import { friendlyError } from "@/talk/talk";
 import { SEAT_NAME, SEAT_ROLE, SEATS } from "@/office/workspace";
 import "./site.css";
 
-const SEAT_COLOR: Readonly<Record<string, string>> = { cos: "#e5372a", intake: "#2f7fd6", tax: "#c27a00", qa: "#1f9d5a", acct: "#9b4fd6", mkt: "#d6407f", hr: "#0f9b91" };
+/** DESIGN.md seat colors, identical to the office and the theater (the dots sit beside each name, never alone). */
+const SEAT_COLOR: Readonly<Record<string, string>> = { cos: "#ff4d3d", intake: "#4da3ff", tax: "#ffb547", qa: "#3ddc84", acct: "#c77dff", mkt: "#ff6fb5", hr: "#2ee6d6" };
 const DISCLAIMER = "Educational estimate — not tax advice.";
 
 function Top() {

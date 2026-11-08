@@ -67,7 +67,7 @@
 .site .pipe li::after { content: "→"; position: absolute; right: -9px; top: 18px; color: var(--faint); background: var(--surface); font-size: 13px; line-height: 1; z-index: 1; }
 .site .pipe li:last-child::after { content: none; }
 .site .pipe b { display: flex; align-items: center; gap: 8px; font-size: 15px; margin-bottom: 6px; }
-.site .pipe b i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+.site .pipe b i { width: 10px; height: 10px; border-radius: 50%; background: var(--c); box-shadow: inset 0 0 0 1px rgba(14, 20, 32, .25); flex-shrink: 0; }
 .site .pipe span { font-size: 13px; color: var(--muted); }
 .site .how .after { margin-top: 24px; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; font-size: 15px; }
 .site .how .after a { color: var(--primary); font-weight: 600; }
