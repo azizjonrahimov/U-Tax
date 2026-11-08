@@ -3,7 +3,7 @@
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (2 min, Stripe payments): in backend/, run `.venv\Scripts\python -m app.devtools stripe-webhook https://regular-corporation-northeast-banana.trycloudflare.com` (an account change; it was blocked for me). Then tell me, and I restart the gateway.
+- A: done (the Stripe webhook is live; preflight 14/14 green).
 - B (optional): for the D38 sell side to show in Stripe, create a Stripe test-mode business profile and paste its `profile_test_…` id.
 - C (after the event): rotate every key pasted in chat (OpenAI, Apify, Stripe, …); pause the Naïve schedule; delete the testnet wallet keys.
 
