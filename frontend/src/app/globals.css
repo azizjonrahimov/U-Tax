@@ -18,3 +18,26 @@ body {
   color: var(--foreground);
   font-family: var(--font-inter), system-ui, sans-serif;
 }
+
+/* D40 (INSIDE-BRIEF §2): the Night Lime tokens for the inside pages (same names as the landing's .nl).
+   Pages with their own scoped vars (.theater, .office, .ceo) keep them; these are the shared values. */
+:root {
+  --nl-bg: #050505; --nl-panel: rgba(18, 20, 16, .78); --nl-panel-2: #13150f; --nl-line: rgba(255, 255, 255, .08); --nl-line-2: rgba(255, 255, 255, .14);
+  --nl-text: #f2f3ee; --nl-dim: #a1a39b; --nl-faint: #83857d; --nl-lime: #bef243; --nl-lime-2: #d4ff6a; --nl-on-lime: #0b0d06;
+  --nl-sans: var(--font-geist), var(--font-inter), system-ui, sans-serif; --nl-mono: var(--font-geist-mono), var(--font-jetbrains-mono), ui-monospace, monospace;
+  --nl-serif: var(--font-instrument-serif), Georgia, serif; --nl-tmono: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+}
+
+/* D40 primitives */
+.ui-av { display: block; flex-shrink: 0; }
+.ui-empty { height: 100%; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; padding: 4px; }
+.ui-empty svg { width: 112px; max-width: 70%; height: auto; max-height: 45%; flex-shrink: 1; min-height: 0; }
+.ui-empty b { font: 500 calc(13.5px * var(--k, 1) * var(--s, 1)) var(--nl-sans); color: var(--text, var(--nl-text)); }
+.ui-empty span { font: calc(11.5px * var(--k, 1) * var(--s, 1))/1.45 var(--nl-mono); color: var(--faint, var(--nl-faint)); max-width: 240px; }
+.ui-switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; border-radius: 999px; border: 1px solid var(--nl-line-2); background: rgba(255, 255, 255, .08); cursor: pointer; padding: 0; transition: background-color .2s, border-color .2s; }
+.ui-switch i { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: var(--nl-dim); transition: transform .2s, background-color .2s; }
+.ui-switch.on { background: var(--nl-lime); border-color: var(--nl-lime); }
+.ui-switch.on i { transform: translateX(18px); background: var(--nl-on-lime); }
+.ui-switch:focus-visible { outline: 2px solid var(--nl-lime); outline-offset: 2px; }
+.ui-switch:disabled { opacity: .45; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .ui-switch, .ui-switch i { transition: none; } }

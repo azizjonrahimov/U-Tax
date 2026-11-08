@@ -305,3 +305,125 @@
 .theater .earlier { margin-top: 6px; color: var(--faint); font-size: calc(11px * var(--k) * var(--s)); display: grid; gap: 2px; }
 @keyframes market-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .theater .coin.flying, .theater .job .contractor, .theater .job .thumb { animation: none; } .theater .coin.flying { opacity: 0; } }
+
+/* ---------------------------------------------------------------- D40 (INSIDE-BRIEF §4): Night Lime.
+   A skin only: the same grid, panes, camera and cursor targets; new tokens, type and chrome.
+   Seat colors stay department identity; lime marks actions and the numbers that matter. */
+.theater {
+  --bg: #050505; --panel: #10120e; --panel2: #13150f; --panel3: #1a1d16;
+  --line: rgba(255, 255, 255, .08); --line-2: rgba(255, 255, 255, .14);
+  --text: #f2f3ee; --dim: #a1a39b; --faint: #83857d; /* on --panel: dim ≈ 7.3:1, faint ≈ 4.9:1 */
+  --lime: #bef243; --on-lime: #0b0d06;
+  --sans: var(--font-geist), var(--font-inter), system-ui, sans-serif;
+  --gmono: var(--font-geist-mono), var(--font-jetbrains-mono), ui-monospace, monospace;
+  --tmono: var(--font-jetbrains-mono), "JetBrains Mono", monospace;
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  caret-color: var(--lime);
+  background: radial-gradient(ellipse 50% 40% at 70% 0%, rgba(190, 242, 67, .05), transparent 70%), var(--bg);
+}
+.theater ::selection { background: rgba(190, 242, 67, .3); }
+.theater main[data-focus] .pane:not(.focus) { --text: #c4c6bd; --line: rgba(255, 255, 255, .05); }
+.theater main[data-focus] aside .pane:not(.focus) { --text: #f2f3ee; --line: rgba(255, 255, 255, .08); }
+.theater.stage { --dim: #c9cbc2; --faint: #a3a59c; }
+
+/* Header */
+.theater header { gap: 14px; }
+.theater .logo { background: var(--lime); color: var(--on-lime); border-radius: 8px; padding: 0; width: calc(28px * var(--k)); height: calc(28px * var(--k)); display: inline-grid; place-items: center; font-weight: 700; }
+.office .theater .logo { display: none; }
+.theater .title { margin: 0; font: 500 calc(26px * var(--k)) var(--sans); letter-spacing: -.03em; white-space: nowrap; }
+.theater .title em { font-family: var(--font-instrument-serif), Georgia, serif; font-style: italic; font-weight: 400; letter-spacing: -.01em; }
+.theater .sub { font: calc(12.5px * var(--k)) var(--gmono); color: var(--faint); }
+.theater .pill { font-family: var(--gmono); }
+.theater .live, .theater .source, .theater .pill .hint { border: 1px solid var(--line-2); border-radius: 999px; padding: calc(5px * var(--k)) calc(12px * var(--k)); color: var(--text); }
+.theater .source { border-style: dashed; border-color: var(--amber); color: var(--amber); }
+.theater .source.gateway { border-style: solid; border-color: var(--line-2); color: var(--dim); }
+.theater .pill .hint { color: var(--dim); font-size: calc(12px * var(--k)); }
+.theater .dot { background: var(--lime); box-shadow: 0 0 10px var(--lime); }
+.theater .clock { font: 600 calc(13px * var(--k)) var(--tmono); color: var(--dim); padding: 0 4px; font-variant-numeric: tabular-nums; }
+
+/* Panes */
+.theater .pane { background: var(--panel); border-color: var(--line); border-radius: 14px; transition: filter calc(.5s * var(--t)), border-color .3s, box-shadow .3s; }
+.theater .pane.focus { border-color: rgba(255, 255, 255, .22); box-shadow: 0 0 0 1px rgba(190, 242, 67, .12), 0 24px 60px -30px rgba(0, 0, 0, .9); }
+.theater .ph { gap: 8px; padding: calc(9px * var(--k)) calc(14px * var(--k)); text-transform: none; letter-spacing: 0; color: var(--faint); }
+.theater .ph .ico { width: calc(22px * var(--k) * var(--s)); height: calc(22px * var(--k) * var(--s)); }
+.theater .ph b { font-weight: 500; font-size: calc(13.5px * var(--k) * var(--s)); white-space: nowrap; }
+.theater .ph .tag { font: calc(11px * var(--k) * var(--s)) var(--gmono); color: var(--faint); white-space: nowrap; }
+.theater .pb { padding: calc(12px * var(--k)) calc(14px * var(--k)); }
+.theater .pb > .ui-empty { height: 100%; }
+.theater .ui-empty.after-q { height: calc(100% - 40px * var(--k) * var(--s)); }
+.theater .ui-empty.over { position: absolute; inset: calc(40px * var(--k) * var(--s)) 0 0 0; background: var(--panel); }
+.theater .q { border-color: var(--line-2); border-radius: 10px; font-family: var(--gmono); background: rgba(0, 0, 0, .25); }
+.theater .res { border-left-color: var(--a-tax); }
+.theater .post { border-color: var(--line); border-radius: 12px; background: var(--panel2); padding: calc(10px * var(--k)); }
+.theater .post img { display: block; max-width: 100%; max-height: calc(110px * var(--k) * var(--s)); border-radius: 8px; border: 1px solid var(--line); margin-bottom: 8px; }
+.theater .btn { background: var(--lime); color: var(--on-lime); border-radius: 999px; font-weight: 600; }
+.theater .sent { color: var(--lime); }
+.theater .from { font-family: var(--gmono); }
+.theater .cal .h { font-family: var(--gmono); }
+.theater .block { border-radius: 8px; }
+
+/* Sheet: tabular numbers; the winning method and the total in lime, the losing one struck through */
+.theater td { border-bottom-color: var(--line); padding: calc(5px * var(--k)) 2px; }
+.theater td.v { font: 500 calc(13px * var(--k) * var(--s)) var(--tmono); font-variant-numeric: tabular-nums; }
+.theater td.v.win { color: var(--lime); }
+.theater td:has(> b) { color: var(--text); }
+.theater td:has(> b) + td.v { color: var(--lime); font-weight: 600; }
+.theater td.v .tick { color: var(--lime); }
+.theater .qa { display: inline-flex; font: 500 calc(10.5px * var(--k) * var(--s)) var(--gmono); color: var(--a-qa); border: 1px solid rgba(61, 220, 132, .4); border-radius: 5px; padding: 0 5px; }
+.theater .qa.bad { color: var(--red); border-color: rgba(255, 77, 61, .5); }
+
+/* Rail */
+.theater aside .ph { font: 500 calc(11px * var(--k) * var(--s)) var(--gmono); color: var(--faint); }
+.theater .big { font: 600 calc(30px * var(--k) * var(--s)) var(--tmono); letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.theater [data-target="rail.money"] .big { color: var(--lime); }
+.theater .k { flex-wrap: wrap; row-gap: 2px; }
+.theater .case, .theater .chip, .theater .st { border-color: var(--line-2); }
+.theater .stagebox { border-radius: 14px; }
+.theater .stagebox b.g { color: var(--lime); }
+
+/* Orders */
+.theater .ot { font: 500 calc(11px * var(--k) * var(--s)) var(--gmono); letter-spacing: 0; text-transform: none; color: var(--faint); }
+.theater .desk { border-color: var(--line-2); font-family: var(--sans); }
+.theater .order { background: var(--panel); border-radius: 14px; padding: calc(12px * var(--k)) calc(14px * var(--k)); }
+.theater .order.newest { border-color: rgba(190, 242, 67, .45); box-shadow: 0 0 0 1px rgba(190, 242, 67, .15), 0 18px 50px -24px rgba(190, 242, 67, .45); }
+.theater .order header { font: calc(11.5px * var(--k) * var(--s)) var(--gmono); letter-spacing: 0; text-transform: none; color: var(--faint); }
+.theater .said { font-weight: 500; font-size: calc(15.5px * var(--k) * var(--s)); letter-spacing: -.01em; overflow-wrap: break-word; }
+.theater .order li { color: var(--dim); align-items: flex-start; }
+.theater svg.dept { min-width: 0; padding: 0; width: calc(22px * var(--k) * var(--s)); height: calc(22px * var(--k) * var(--s)); background: none; border-radius: 0; }
+
+/* Bottom bar */
+.theater footer { background: var(--panel); border-color: var(--line); border-radius: 16px; padding: 0 14px; flex-wrap: nowrap; }
+.theater .avs .av { width: calc(26px * var(--k)); height: calc(26px * var(--k)); border: 0; border-radius: 9px; margin-left: -6px; box-shadow: 0 0 0 2px var(--bg); background: var(--bg); }
+.theater .avs .av:first-child { margin-left: 0; }
+.theater .firmline { font: 500 calc(13px * var(--k)) var(--tmono); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.theater .firmline b { font-weight: 500; }
+.theater .bar i { background: linear-gradient(90deg, var(--a-intake), var(--lime)); }
+.theater .ctl { align-items: center; gap: 8px; flex-shrink: 0; }
+.theater .ctl button { background: transparent; border: 1px solid var(--line-2); color: var(--dim); border-radius: 10px; font: 500 calc(12.5px * var(--k)) var(--sans); white-space: nowrap; }
+.theater .ctl button:hover:not(:disabled) { color: var(--text); border-color: var(--lime); background: transparent; }
+.theater .ctl button.on, .theater .ctl button.on:hover { background: rgba(190, 242, 67, .12); color: var(--lime); border-color: rgba(190, 242, 67, .5); filter: none; }
+.theater .ctl .seg { display: inline-flex; border: 1px solid var(--line-2); border-radius: 10px; overflow: hidden; }
+.theater .ctl .seg button { border: 0; border-radius: 0; font-family: var(--tmono); }
+.theater .ctl .seg button.on, .theater .ctl .seg button.on:hover { background: var(--lime); color: var(--on-lime); }
+.theater .ctl button.replay { background: var(--lime); color: var(--on-lime); border-color: var(--lime); font-weight: 600; }
+.theater .ctl button.replay:hover:not(:disabled) { background: #d4ff6a; color: var(--on-lime); }
+.theater .ctl button:focus-visible { outline-color: var(--lime); }
+
+/* Cursors: the name tag gets a soft shadow (targets and timing unchanged) */
+.theater .cur span { border-radius: 6px; box-shadow: 0 4px 14px -4px rgba(0, 0, 0, .6); font-family: var(--sans); }
+.theater .caption { border-radius: 14px; border-color: var(--line-2); }
+.theater .failnote { border-radius: 8px; }
+@media (max-width: 900px) {
+  .theater .sub, .theater .pill .hint { display: none; }
+  .theater .title { font-size: 20px; }
+}
+/* Empty states fit whatever room the camera leaves a pane: the art goes first, then the line. */
+.theater main .col .pb { container-type: size; }
+.theater .ui-empty { overflow: hidden; }
+.theater .ui-empty span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+@container (max-height: 170px) { .theater .ui-empty svg { display: none; } }
+@container (max-width: 150px) { .theater .ui-empty span { display: none; } }
+.theater .ui-empty { justify-content: safe center; }
+.theater .ui-empty.after-q svg { display: none; }
+@container (max-height: 120px) { .theater .ui-empty span { display: none; } }

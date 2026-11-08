@@ -354,3 +354,9 @@ Fold the whole log from id 0 and treat that fold as the only truth; never seed i
 - a watchdog comparing a state snapshot taken after the stream had moved on.
 
 The fix each time was to derive from the event log and to check, after each await, that the result still belonged to the current session.
+
+## D40 F43a+F43b (/office in Night Lime), lane/frontend-inside
+- F43a: `components/ui/` DeptAvatar (inline SVG from docs/designs/inside/illustrations, flat tint instead of id gradients so a hidden copy never blanks the others), EmptyState, Switch (role=switch, caller handler); `--nl-*` tokens in globals.css. No primitives page (per the compressed clock).
+- F43b: theater + office sidebar re-skin only. Avatars in the sidebar (with activity bars), pane headers, order steps and the bottom-bar stack; EmptyState in Mail, Sheet, Search, Calendar, Social and Phone; short sheet labels; lime winner/total and QA chip; segmented speeds and a lime Replay; "The firm, *live.*" header. Empty states fit by container queries (art drops first, then the line).
+- Not touched: script.ts, live.ts, screen.ts, voice, API calls, every data-target/data-pane (diff checked). Cursor parking is computed in Theater.tsx script, so left as is (brief §4).
+- Checked at 1440x900 and 1920x1080 (normal and stage) on the fixture: no clipped chrome, Replay visible. Skipped for time: order status chips (no status field to bind), the Social "N posts waiting" line, the rail funnel and training pills.

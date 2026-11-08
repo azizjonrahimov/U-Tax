@@ -33,6 +33,7 @@ import { appendEvents, buildScript, startScript, type CursorStep, type Pane, typ
 import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
 import { CalendarPane, MailPane, MarketPane, OrdersStrip, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
 import { PaneBoundary } from "./PaneBoundary";
+import { DeptAvatar } from "@/components/ui/DeptAvatar";
 import "./theater.css";
 
 /** Agents in desk order: id, cursor label, color token (theater.css owns the hexes). */
@@ -830,9 +831,13 @@ export function Theater() {
   return (
     <div className={`theater${stage ? " stage" : ""}${finale?.lined ? " lined" : ""}${hasOrders ? " has-orders" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
       <header>
-        <span className="logo">U</span>
-        <span className="title">U-Tax</span>
-        <span className="sub">the firm, live · every move rendered from the action log</span>
+        <span className="logo" aria-hidden>
+          U
+        </span>
+        <h1 className="title">
+          The firm, <em>live.</em>
+        </h1>
+        <span className="sub">every move rendered from the action log</span>
         <div className="pill">
           <span
             className={`source${source === "live" ? " gateway" : ""}`}
@@ -846,10 +851,11 @@ export function Theater() {
             <span className={`dot${blinking ? "" : " idle"}`} aria-hidden />
             {statusLabel[status]}
           </span>
-          <span className="mono" title="time of the current event">
+          <span className="mono clock" title="time of the current event">
             <span className="sr-only">Time of the current event: </span>
             {clock}
           </span>
+          <span className="hint">S · stage</span>
         </div>
       </header>
 
@@ -883,8 +889,8 @@ export function Theater() {
 
       <footer>
         <div className="avs" aria-hidden>
-          {AGENTS.filter(([id]) => id !== "ceo").map(([id, label, color]) => (
-            <span key={id} className="av" style={{ background: color }} title={label} />
+          {AGENTS.filter(([id]) => id !== "ceo").map(([id]) => (
+            <DeptAvatar key={id} seat={id} size={26} className="av" />
           ))}
         </div>
         <span className="mono firmline">
@@ -895,20 +901,21 @@ export function Theater() {
         <div className="bar" role="progressbar" aria-label="log progress" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
           <i style={{ width: `${progress * 100}%` }} />
         </div>
-        <span className="hint">S = stage mode</span>
         <div className="ctl" role="group" aria-label="playback">
-          {SPEEDS.map((s) => (
-            <button key={s} className={speed === s ? "on" : ""} aria-pressed={speed === s} onClick={() => setSpeed(s)}>
-              {s}×
-            </button>
-          ))}
+          <span className="seg">
+            {SPEEDS.map((s) => (
+              <button key={s} className={speed === s ? "on" : ""} aria-pressed={speed === s} onClick={() => setSpeed(s)}>
+                {s}×
+              </button>
+            ))}
+          </span>
           <button className={sound ? "on" : ""} aria-pressed={sound} onClick={() => setSound((v) => !v)} title="Play spoken briefs and CEO orders">
             {sound ? "Sound on" : "Sound off"}
           </button>
           <button className={stage ? "on" : ""} aria-pressed={stage} onClick={() => setStage((v) => !v)} title="Stage mode (S)">
             Stage
           </button>
-          <button onClick={onReplay} disabled={status === "loading"} title={source === "live" ? "Replay the whole night from the gateway log" : "Play the log again"}>
+          <button className="replay" onClick={onReplay} disabled={status === "loading"} title={source === "live" ? "Replay the whole night from the gateway log" : "Play the log again"}>
             Replay
           </button>
           {HAS_GATEWAY && source !== "live" && (

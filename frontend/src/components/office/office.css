@@ -265,3 +265,38 @@
 .office .art.job .job-steps .ok { color: var(--green, #4ade80); }
 .office .art.job .job-steps .bad { color: #ff8a7d; }
 .office .art.job .job-steps a { color: inherit; }
+
+/* ---------------------------------------------------------------- D40 (INSIDE-BRIEF §4): Night Lime.
+   Skin only. Seat colors stay; lime marks the current view and actions. */
+.office {
+  --bg: #050505; --panel: #10120e; --panel2: #161812; --line: rgba(255, 255, 255, .08); --line-2: rgba(255, 255, 255, .14);
+  --text: #f2f3ee; --dim: #a1a39b; --faint: #83857d; --lime: #bef243; --on-lime: #0b0d06;
+  font-family: var(--font-geist), var(--font-inter), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.office .mono { font-family: var(--font-geist-mono), var(--font-jetbrains-mono), monospace; }
+.office :focus-visible { outline-color: var(--lime); }
+.office .side { background: linear-gradient(#070807, #050505); padding: 18px 14px; gap: 10px; }
+.office .side-brand { font: 600 17px var(--font-geist), var(--font-inter), sans-serif; padding: 2px 6px 10px; }
+.office .side-brand small { font: 12px var(--font-geist-mono), monospace; }
+.office .mark { background: var(--lime); color: var(--on-lime); border-radius: 9px; width: 30px; height: 30px; padding: 0; display: inline-grid; place-items: center; font-weight: 700; }
+.office .side-item { grid-template-columns: 30px minmax(0, 1fr) auto; padding: 7px 8px; border-radius: 10px; font: 500 13.5px var(--font-geist), var(--font-inter), sans-serif; min-height: 44px; }
+.office .side-item:hover { background: rgba(255, 255, 255, .04); }
+.office .side-item.on { background: rgba(190, 242, 67, .08); box-shadow: inset 2px 0 0 var(--lime); color: var(--text); }
+.office .side-ov { width: 20px; height: 20px; justify-self: center; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.office .side-item.on .side-ov { stroke: var(--lime); }
+.office .side-h { font-size: 11px; color: var(--faint); padding: 10px 8px 4px; }
+.office .side-av { display: block; width: 30px; height: 30px; }
+.office .side-av.pulse { animation: of-pulse .6s ease-out; }
+.office .side-name { color: var(--text); }
+.office .side-bar { display: block; height: 3px; border-radius: 2px; margin-top: 5px; background: var(--line); overflow: hidden; position: relative; }
+.office .side-bar::after { content: ""; position: absolute; inset: 0 auto 0 0; width: var(--w); background: var(--c); }
+.office .side-meta { font-size: 11.5px; }
+.office .side-out { border-color: var(--line-2); border-radius: 10px; font: 500 13px var(--font-geist), var(--font-inter), sans-serif; }
+.office .side-out:hover { border-color: var(--lime); background: transparent; }
+.office .follow { border-color: var(--line-2); background: transparent; border-radius: 10px; font: 500 13px var(--font-geist), var(--font-inter), sans-serif; }
+.office .follow.on { background: rgba(190, 242, 67, .12); color: var(--lime); border-color: rgba(190, 242, 67, .5); }
+.office .feed { font-family: var(--font-geist-mono), monospace; }
+.office .feed.live .dot { background: var(--lime); box-shadow: 0 0 10px var(--lime); }
+.office .of-dept .win { border-radius: 14px; }
+@media (prefers-reduced-motion: reduce) { .office .side-av.pulse { animation: none; } }
