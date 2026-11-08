@@ -122,14 +122,14 @@ def test_bad_input_is_400(site, body):
     assert r.status_code == 400 and r.json()["error"]["code"] == "bad_input"
 
 
-def test_three_signups_per_email_a_day_and_a_retry_is_the_same(site):
+def test_a_retry_is_the_same_and_a_second_signup_creates_nothing(site):
     h, client = site
+    h.ok("set_trust", action_type="email", state="AUTO")
     first = client.post("/api/signup", json={**FORM, "request_id": "r1"}).json()
     assert client.post("/api/signup", json={**FORM, "request_id": "r1"}).json() == first
-    for _ in range(2):
-        assert client.post("/api/signup", json=FORM).status_code == 200
-    r = client.post("/api/signup", json=FORM)
-    assert r.status_code == 429 and r.json()["error"]["code"] == "rate_limited"
+    again = client.post("/api/signup", json={**FORM, "email": "Jane+x@AcmeRockets.dev"})
+    assert again.status_code == 200 and again.json() == {"ok": True}  # the same client
+    assert len(h.events("email.received")) == 1 and len(h.outbox()) == 1
 
 
 def test_the_public_case_cap_covers_signups(make_harness):
@@ -140,12 +140,43 @@ def test_the_public_case_cap_covers_signups(make_harness):
     assert r.status_code == 429 and r.json()["error"]["code"] == "at_capacity"
 
 
-def test_a_signup_never_joins_another_clients_case(site):
+def test_an_existing_clients_address_gets_the_generic_answer_and_nothing_else(site):
     h, client = site
+    h.ok("set_trust", action_type="email", state="AUTO")
     h.new_case(sender=FORM["email"])  # this address already owns case_1
-    r = client.post("/api/signup", json=FORM).json()
-    assert r["case_id"] == "case_2"
-    assert h.gw.state.cases["case_1"].status != "CLOSED"
+    before = (len(h.events("email.received")), len(h.outbox()))
+    r = client.post("/api/signup", json=FORM)
+    assert r.status_code == 200 and r.json() == {"ok": True}  # no case id, no name
+    assert (len(h.events("email.received")), len(h.outbox())) == before
+
+
+@pytest.mark.parametrize("own", ["hello@u-tax.test", "Hello+x@U-Tax.test", "ceo@u-tax.test"])
+def test_the_firms_own_addresses_cant_sign_up(make_harness, own):
+    h = make_harness(inbox_clients="hello@u-tax.test", ceo_email="ceo@u-tax.test")
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        r = client.post("/api/signup", json={**FORM, "email": own})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "bad_input"
+
+
+@pytest.mark.parametrize("name,greeting", [("Jane Roe", "Jane Roe"), ("Jane2", "there"),
+                                           ("<b>Jane</b>", "there"), ("x" * 41, "there")])
+def test_the_welcome_greets_by_a_clean_name_only(site, name, greeting):
+    h, client = site
+    h.ok("set_trust", action_type="email", state="AUTO")
+    client.post("/api/signup", json={**FORM, "name": name})
+    body = json.loads(h.outbox()[-1].read_text(encoding="utf-8"))["body"]
+    assert body.startswith(f"Hi {greeting},") and "Team #" not in body
+
+
+def test_list_open_cases_says_a_signup_waits_on_the_client(site):
+    h, client = site
+    client.post("/api/signup", json=FORM)
+    [row] = h.ok("list_open_cases")["cases"]
+    assert row["waiting_reason"] == "waiting on the client's reply"
+    h.ok("inject_email", **{"from": FORM["email"], "subject": "Re: check",
+                            "body": "Delaware C-corp, 10,000,000 authorized."})
+    [row] = h.ok("list_open_cases")["cases"]
+    assert row["waiting_reason"] != "waiting on the client's reply"
 
 
 def test_the_site_may_post_a_signup_from_the_theater_origin(make_harness, monkeypatch):

@@ -255,6 +255,15 @@ def _when(iso: str) -> str:
     return f"{local.strftime('%A, %B')} {local.day} at {hour} Pacific"
 
 
+def _form_greeting(name: str) -> str:
+    """v1.12: a sign-up's greeting from the form's name: letters, spaces, ' and - only,
+    whitespace collapsed, at most 40 characters; anything else is "there"."""
+    text = " ".join((name or "").split())
+    if not text or len(text) > 40 or not re.fullmatch(r"[^\W\d_]+(?:[ '\-][^\W\d_]+)*", text):
+        return "there"
+    return text
+
+
 def _cap(text: str) -> str:
     """Uppercase the first letter only ("first memo..." -> "First memo...")."""
     return text[:1].upper() + text[1:]
@@ -1216,6 +1225,11 @@ class Gateway:
             raise Refused("bad_input", "name and company are required")
         if not _EMAIL_RE.match(email):
             raise Refused("bad_input", "email must be an email address")
+        identity = mail_identity(email)
+        own = {mail_identity(a) for a in (self.settings.ceo_email, self.settings.inbox_clients,
+                                          self.settings.inbox_hiring) if a}
+        if identity in own:  # never a case (or a welcome mail) to the firm itself
+            raise Refused("bad_input", "that address can't sign up")
         request_id = _str(args, "request_id", required=False, max_len=80)
         key = f"signup:{request_id}" if request_id else None
         if key:
@@ -1225,17 +1239,18 @@ class Gateway:
                         "duplicate": True}
         day = iso_ts(self._now())[:10]
         sender = email.lower()
-        if self.state.signups_by_day.get((day, sender), 0) >= self.SIGNUPS_PER_EMAIL_PER_DAY:
+        if self.state.signups_by_day.get((day, identity), 0) >= self.SIGNUPS_PER_EMAIL_PER_DAY:
             raise Refused("rate_limited", "this email has signed up 3 times today; reply to "
                                           "our welcome email instead")
+        # an address that already belongs to a client: the same generic answer, nothing
+        # created, nothing mailed (never a way to test or re-mail an existing client)
+        if any(mail_identity(k) == identity for k in self.state.case_by_sender):
+            return {"ok": True}
         self._public_cap()  # the public daily case cap (raises at_capacity)
         number = self._new_case_number()
         case_id = f"case_{number}"
         masked_name = f"Team #{number}"
-        # like /talk: a public form never joins (or reveals) a case another mail owns; the
-        # reply threads onto this case only when no case owns that address yet
-        owned = sender in self.state.case_by_sender
-        sender_key = f"signup:{case_id}" if owned else sender
+        sender_key = sender
         body = "Signed up on the U-Tax site for a free Delaware franchise tax check."
         events = [NewEvent(
             type="email.received", actor="intake", case_id=case_id, provider="local",
@@ -1243,7 +1258,9 @@ class Gateway:
                      "subject": "Sign-up", "body": body, "source": "signup"},
             idempotency_key=key,
             private={"reply_to": email, "sender_key": sender_key, "masked_name": masked_name,
-                     "company": company, "message_id": f"signup-{case_id}", "redactions": 0,
+                     "company": company, "greeting_name": _form_greeting(name),
+                     "identity": identity, "message_id": f"signup-{case_id}",
+                     "redactions": 0,
                      "agent_text": agent_text(f"{body} Waiting for their numbers by email."),
                      "agent_subject": "Sign-up"},
         )]
@@ -1271,8 +1288,7 @@ class Gateway:
             sent = self._with_retry("welcome email", lambda: self.ports.mail.send(
                 OutMail(to=case.reply_to, subject=self.SIGNUP_SUBJECT,
                         body=self.templates.render("signup-welcome", {
-                            "greeting_name": self._greeting(case),
-                            "masked_name": case.masked_name})), key))
+                            "greeting_name": self._greeting(case)})), key))
         except ToolError as err:
             log.warning("welcome email for %s failed: %s", case_id, err)
             return "failed"
@@ -1663,6 +1679,8 @@ class Gateway:
     def _waiting_reason(self, case: Case) -> str:
         if case.status == "BLOCKED":
             return case.blocked_reason or "blocked: needs a human"
+        if case.case_id in self.state.signup_cases and len(case.message_ids) <= 1:
+            return "waiting on the client's reply"  # v1.12: the welcome asked for the numbers
         if case.status == "INTAKE_PENDING" and case.missing:
             if case.asks and case.asked_after_text == len(case.texts):
                 return "waiting on the client's reply"
@@ -2620,6 +2638,8 @@ class Gateway:
     def _greeting(case: Case) -> str:
         """v1.6 {{greeting_name}}: the client's own company name if known, else "there".
         Only the outgoing mail uses it; every event copy keeps the masked name."""
+        if case.greeting_name:  # v1.12: the sign-up form's name, already cleaned
+            return case.greeting_name
         if case.priority or not case.company:  # /talk and webmail: "there"
             return "there"
         label = re.sub(r"[^A-Za-z0-9 ]+", " ", case.company).strip()

@@ -259,6 +259,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         _talk_limit(signup_limiter, SEND_LIMITS)
         signup_limiter.check(_client_ip(request))
         out = act("signup", _pick(body, "name", "company", "email", "request_id"))
+        if "case_id" not in out:  # an existing client's address: the same generic answer
+            return {"ok": True}
         return {"case_id": out["case_id"], "masked_name": out["masked_name"]}
 
     @router.post("/api/voice")

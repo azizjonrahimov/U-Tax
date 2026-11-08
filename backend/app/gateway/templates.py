@@ -148,7 +148,7 @@ SPECS: dict[str, Spec] = {
         + AI_SCREEN_LINE + "\n\nWe've sent a calendar invite for a {{minutes}}-minute intro "
         "call on {{slot_time}}.\n{{booking_url}}\n\n" + SIGN_OFF)),
     # v1.12 (D32): the sign-up's welcome; the agents lane's file replaces this built-in
-    "signup-welcome": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,), builtin=(
+    "signup-welcome": Spec(("greeting_name",), lines=(DISCLAIMER,), builtin=(
         "Hi {{greeting_name}},\n\nThanks for signing up with U-Tax! We check your Delaware "
         "franchise tax for free and show you the cheaper method.\n\nReply to this email "
         "with:\n1. Is the company a Delaware corporation?\n2. How many shares are "

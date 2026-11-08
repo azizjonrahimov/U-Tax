@@ -59,6 +59,7 @@ class Case:
     priority: bool = False
     reply_to: str | None = None  # real address (from private); never served
     company: str | None = None
+    greeting_name: str | None = None  # v1.12: the sign-up form's name, cleaned (greeting only)
     subject: str = ""
     texts: list[str] = field(default_factory=list)  # masked client texts, oldest first
     agent_texts: list[str] = field(default_factory=list)  # v1.6: names kept, contacts/ids gone
@@ -274,7 +275,7 @@ class State:
         if signup and e.case_id and e.case_id not in self.cases:  # v1.12: a public case
             day = e.ts[:10]
             self.public_cases_by_day[day] = self.public_cases_by_day.get(day, 0) + 1
-            sender = (e.private or {}).get("reply_to", "").lower()
+            sender = (e.private or {}).get("identity", "")
             self.signups_by_day[(day, sender)] = self.signups_by_day.get((day, sender), 0) + 1
             self.signup_cases.add(e.case_id)
         self._open_case(e, text=e.payload["body"], subject=e.payload["subject"])
@@ -312,6 +313,7 @@ class State:
             case.conversation = list(private["turns"])
         case.reply_to = private.get("reply_to") or case.reply_to
         case.company = private.get("company") or case.company
+        case.greeting_name = private.get("greeting_name") or case.greeting_name
         if private.get("message_id"):
             case.message_ids.append(private["message_id"])
 
