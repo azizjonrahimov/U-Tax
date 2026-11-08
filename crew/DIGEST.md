@@ -1,4 +1,4 @@
-# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 07:30 local · D41 fixes; merges stop 09:30; rehearsal T1–T6; freeze 10:00
+# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 08:42 local · D41 live; D42 building; FREEZE 10:30 (owner); hacking ends 11:00
 
 ## Needs you
 

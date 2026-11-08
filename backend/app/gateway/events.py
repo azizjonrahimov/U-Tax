@@ -106,6 +106,13 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "order.done": ("order_id", "of", "done", "waiting_on_you", "other"),
     # v1.20 §10.1 (D41 §E): a test-mode Stripe record of a Tempo contractor payment
     "payment.recorded": ("job_id", "tx_hash", "stripe_id", "mode", "dashboard_url"),
+    # v1.21 §11 (D42): the income-tax estimates, the draft Form 1120 and the returns
+    # workbook, built live. DRAFT, estimate for review, not filed. No EIN or address.
+    "tax.return_computed": ("jurisdiction", "tax", "form", "due", "amount_usd", "status",
+                            "steps", "source"),
+    "tax.summary": ("total_usd", "assumptions"),
+    "form.step": ("doc", "n", "of", "key", "label", "value", "page", "rect", "image"),
+    "sheet.cell": ("book", "n", "of", "sheet", "cell", "label", "value", "formula"),
 }
 ORDER_LINK_KEYS = frozenset({"order_id", "task_no"})  # any event may carry them (v1.11.1, v1.20)
 VIA_KEY = "via"  # v1.21 (D42 M3): any step the autopilot ran says via: "autopilot"
