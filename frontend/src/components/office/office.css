@@ -50,7 +50,7 @@
 .office .of-dept .dept-head h1 { margin: 0; display: flex; align-items: center; gap: 10px; font: 800 clamp(22px, 2.2vw, 30px) var(--font-display), var(--font-inter), sans-serif; letter-spacing: -0.01em; }
 .office .of-dept .dept-head h1 .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--c); }
 .office .of-dept .dept-head p { margin: 4px 0 0; color: var(--dim); font-size: 14px; }
-.office .of-dept .dept-state { margin-left: auto; font-size: 13px; color: var(--dim); border: 1px solid var(--line); border-radius: 99px; padding: 5px 12px; }
+.office .of-dept .dept-state { margin-left: auto; font-size: 13px; color: var(--dim); border: 1px solid var(--line); border-radius: 4px; padding: 4px 12px; }
 .office .of-dept .dept-state.on { color: var(--ink); background: var(--c); border-color: var(--c); }
 .office .of-dept .dept-follow { font-size: 12px; color: var(--faint); }
 .office .of-dept .dept-grid { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 2fr) minmax(280px, 1fr); gap: 16px; }
@@ -66,7 +66,7 @@
 .office .of-dept .win-addr { display: flex; align-items: center; gap: 10px; margin: 10px 12px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .office .of-dept .lock { color: var(--c); }
 .office .of-dept .addr { font-size: 14px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.office .of-dept .badge { margin-left: auto; font-size: 12px; padding: 2px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+.office .of-dept .badge { margin-left: auto; font-size: 12px; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
 .office .of-dept .badge.done { color: var(--green); border-color: var(--green); }
 .office .of-dept .badge.needs_approval { color: var(--amber); border-color: var(--amber); }
 .office .of-dept .badge.refused, .office .of-dept .badge.error { color: var(--red); border-color: var(--red); }

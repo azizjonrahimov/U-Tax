@@ -46,7 +46,7 @@
 .site .live { margin-top: 24px; font-size: 14px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .site .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); }
 .site .math { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 28px; box-shadow: 0 1px 2px rgba(14, 20, 32, .06), 0 8px 24px rgba(14, 20, 32, .08); }
-.site .math h2 { margin: 0 0 4px; font: 700 15px var(--font-inter), sans-serif; }
+.site .math h2 { margin: 0 0 4px; font: 700 16px var(--font-display), var(--font-inter), sans-serif; }
 .site .math .sub { margin: 0 0 20px; font-size: 14px; color: var(--muted); }
 .site .was { font-size: clamp(28px, 3vw, 40px); color: var(--faint); text-decoration: line-through; text-decoration-thickness: 2px; }
 .site .now { font-size: clamp(40px, 4.4vw, 64px); font-weight: 700; color: var(--primary); line-height: 1.05; }
