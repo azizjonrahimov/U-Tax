@@ -184,6 +184,22 @@ function put(st: Studio, seat: Seat, desk: Partial<Desk>, live?: string): Studio
 
 const emptyBook = (file: string): Book => ({ file, cells: {}, sheets: [], lines: [], verified: null });
 
+const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const INT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+/**
+ * A workbook cell as Excel shows it (v1.18.2 `fmt`): "usd" → $#,##0.00, "int" → 10,000,000,
+ * "par" as is at full precision (0.00001), "text" or anything else as written.
+ */
+export function cellText(value: unknown, fmt: string): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (fmt === "usd") return USD.format(value);
+    if (fmt === "int") return INT.format(value);
+    if (fmt === "par") return value.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 21 });
+    return String(value);
+  }
+  return typeof value === "string" ? value : "";
+}
+
 /** An artifact a tool opened that never got any content (the tool needed approval, was refused or failed). */
 export function empty(a: Artifact | null): boolean {
   if (!a || a.state !== "drafting") return false;
@@ -342,7 +358,7 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
             const sheet = line(str(c, "sheet"), 40) || "Sheet1";
             const ref = str(c, "cell").toUpperCase();
             if (!/^[A-Z]{1,2}[0-9]{1,4}$/.test(ref)) continue;
-            const value = line(typeof c.value === "number" ? String(c.value) : str(c, "value"), 80);
+            const value = line(cellText(c.value, str(c, "fmt")), 80);
             if (!sheets.includes(sheet)) sheets.push(sheet);
             const had = all[sheet]?.[ref];
             all[sheet] = { ...(all[sheet] ?? {}), [ref]: value };
