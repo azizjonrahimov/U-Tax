@@ -82,6 +82,8 @@ class Case:
     # client's original subject (every reply is "Re: <first_subject>")
     last_inbound_message_id: str | None = None
     first_subject: str = ""
+    status_ts: str = ""  # D42: when the status last changed (in_flight, the autopilot's 45 s)
+    fast_until: str | None = None  # D42 M2: set by the gateway's FAST PATH wake (in memory)
     last_inbound_id: int = 0  # 22b: the latest email.received / customer voice event
     facts: dict[str, Any] | None = None
     quotes: dict[str, str] = field(default_factory=dict)
@@ -359,6 +361,8 @@ class State:
                 case.last_inbound_message_id = private["message_id"]
         if e.type == "email.received" and not case.first_subject:
             case.first_subject = subject
+        if not case.status_ts:
+            case.status_ts = e.ts
 
     def _on_facts_extracted(self, e: Event) -> None:
         case = self._case(e)
@@ -384,6 +388,7 @@ class State:
     def _on_client_asked(self, e: Event) -> None:
         case = self._case(e)
         if case is not None:
+            case.fast_until = None  # D42 M2: the chain stops at an ask; the reply re-wakes it
             case.asks += 1
             case.asked_after_text = len(case.texts)
             case.last_ask_ts = e.ts
@@ -391,6 +396,9 @@ class State:
     def _on_case_status(self, e: Event) -> None:
         case = self._case(e)
         if case is not None:
+            case.status_ts = e.ts
+            if e.payload["to"] in ("SENT", "BLOCKED", "NOT_ELIGIBLE"):
+                case.fast_until = None  # D42 M2: the fast path's chain is over
             reason = (e.private or {}).get("reason")
             if reason == "client_reply":  # v1.6: back to SENT/CALL_BOOKED if nothing changed
                 case.resume_status = e.payload["from"]
