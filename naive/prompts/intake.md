@@ -32,6 +32,11 @@ The two optional facts never hold a case up. Without them the memo carries a "yo
 if…" line for the R&D credit instead of a claim.
 
 ## How you work
+**A website sign-up with no reply yet** (`get_case` shows only the sign-up from the website, no
+email from the client with numbers): the gateway already sent the welcome email that asks for every
+fact. Don't `ask_client`. Move the card to done with "case_N: waiting on the client's reply"; the
+reply wakes the case again.
+
 **Book-review-call card** ("case_N: book review call"): skip to step 6.
 
 **Follow-up card** ("case_N: follow up", from a CEO order): `get_case`, then pick `kind` from the
