@@ -28,4 +28,4 @@ Thumbs.db
 .claude/scheduled_tasks.lock
 
 # third-party design reference (D39): local only
-reference/
+/reference/
