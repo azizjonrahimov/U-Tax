@@ -96,6 +96,14 @@ export interface Studio {
   desks: Record<Seat, Desk>;
   /** The files a case's memo attaches (the workpaper and the memo, latest version). */
   files: Record<string, Partial<Record<"workpaper" | "memo", string>>>;
+  /**
+   * D35: the files the gateway actually serves, per case: it lists a version's workpaper and memo
+   * only once all three documents (workpaper, memo, books) passed their checks; an earlier
+   * version stays served if a newer one fails. Never for a flagged case.
+   */
+  served: Record<string, string[]>;
+  /** The current build's checks, per case (reset when a new build starts). */
+  checks: Record<string, Partial<Record<DocName, boolean>>>;
   /** The desk a live artifact-opening event moved last (auto-follow), and that event's key. */
   lastSeat: Seat | null;
   lastKey: string;
@@ -104,6 +112,8 @@ export interface Studio {
 export const emptyStudio = (): Studio => ({
   desks: Object.fromEntries(SEATS.map((s): [Seat, Desk] => [s, { art: null, act: null, notes: null }])) as unknown as Record<Seat, Desk>,
   files: {},
+  served: {},
+  checks: {},
   lastSeat: null,
   lastKey: "",
 });
@@ -226,7 +236,8 @@ export function empty(a: Artifact | null): boolean {
 }
 
 /** Fold one event into the studio. Unknown or malformed events change nothing. */
-export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
+export function applyStudio(st0: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
+  let st = st0;
   const p: P = isObj(ev.payload) ? ev.payload : {};
   const key = `${ev.id}`;
   const base = { key, ts: ev.ts, caseId: ev.case_id };
@@ -346,6 +357,7 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
       if (doc !== "workpaper" && doc !== "memo" && doc !== "books") return st;
       const detail = line(str(p, "detail"), 200);
       const fresh = doc === "workpaper" && num(p, "step") === 1;
+      if (fresh && ev.case_id) st = { ...st, checks: { ...st.checks, [ev.case_id]: {} } };
       const reuse = prev?.kind === "docs" && (prev.caseId === ev.case_id || (prev.caseId === null && prev.units.length === 0)) && !(fresh && prev.units.length > 0);
       const cur: Artifact & DocsArt = reuse && prev?.kind === "docs" ? { ...prev, caseId: ev.case_id } : { ...base, kind: "docs", workpaper: null, memo: null, books: null, units: [], state: "drafting" };
       const units = [...cur.units];
@@ -403,7 +415,16 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
     }
     case "doc.verified": {
       const doc = str(p, "doc");
-      if (prev?.kind !== "docs" || prev.caseId !== ev.case_id || (doc !== "workpaper" && doc !== "memo" && doc !== "books")) return st;
+      if (doc !== "workpaper" && doc !== "memo" && doc !== "books") return st;
+      // What the gateway will serve: all three of this build passed (and the case isn't flagged).
+      const cid = ev.case_id;
+      if (cid) {
+        const checks = { ...(st.checks[cid] ?? {}), [doc]: p.ok === true };
+        st = { ...st, checks: { ...st.checks, [cid]: checks } };
+        const f = st.files[cid];
+        if (!hide && checks.workpaper && checks.memo && checks.books && f?.workpaper && f.memo) st = { ...st, served: { ...st.served, [cid]: [f.workpaper, f.memo] } };
+      }
+      if (prev?.kind !== "docs" || prev.caseId !== ev.case_id) return st;
       const d = prev[doc];
       if (!d) return st;
       const next = { ...prev, [doc]: { ...d, verified: p.ok === true } };

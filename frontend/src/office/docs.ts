@@ -6,7 +6,7 @@
 // in a log. The firm's books stay in the firm (no route serves them).
 
 import { API_URL } from "@/lib/api";
-import { writeSession } from "@/ceo/session";
+import { readSession, writeSession } from "@/ceo/session";
 
 /** Only names the gateway can serve (its own check, mirrored so no request is wasted). */
 export const docName = (caseId: string | null, file: string | null | undefined): boolean =>
@@ -28,12 +28,18 @@ export async function downloadDoc(session: string, caseId: string, file: string,
     return { ok: false, message: "Can't reach the firm right now. Try again in a moment." };
   }
   if (r.status === 401 || r.status === 403) {
-    writeSession(null); // the session is dead at the gateway: sign this tab out
+    // The session is dead at the gateway: sign this tab out (unless it already signed in again).
+    if (readSession()?.session === session) writeSession(null);
     return { ok: false, message: "Your sign-in expired. Sign in again to download." };
   }
   if (r.status === 404) return { ok: false, message: "That file isn't there (a newer version may have replaced it)." };
   if (!r.ok) return { ok: false, message: `The firm couldn't send the file (HTTP ${r.status}).` };
-  const blob = await r.blob();
+  let blob: Blob;
+  try {
+    blob = await r.blob();
+  } catch {
+    return { ok: false, message: "The download was interrupted. Try again." };
+  }
   const url = URL.createObjectURL(blob);
   try {
     const a = document.createElement("a");

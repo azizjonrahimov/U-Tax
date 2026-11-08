@@ -255,3 +255,4 @@
 .office .of-dept button.file:hover:not(:disabled) { background: color-mix(in srgb, var(--c) 20%, var(--panel2)); }
 .office .of-dept button.file:disabled { opacity: .7; cursor: progress; }
 .office .of-dept .dl-err { color: var(--red); font-size: 13px; }
+.office .of-dept button.file { overflow-wrap: anywhere; text-align: left; max-width: 100%; }

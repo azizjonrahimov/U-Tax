@@ -163,7 +163,7 @@ export function Office() {
             {theater}
           </div>
         ) : (
-          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} />
+          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} served={studio.served} />
         )}
       </div>
       {session && panelReady && (
@@ -308,7 +308,7 @@ function FeedDot({ status }: { status: FeedStatus }) {
 
 // ------------------------------------------------------------------ one department
 
-function Department({ desk, studio, numbers, working, following, now, session }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null }) {
+function Department({ desk, studio, numbers, working, following, now, session, served }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null; served: Record<string, string[]> }) {
   const seat = desk.seat;
   const step = desk.steps[0];
   return (
@@ -324,7 +324,7 @@ function Department({ desk, studio, numbers, working, following, now, session }:
         {following && <span className="dept-follow">Auto-following the firm</span>}
       </header>
       <div className="dept-grid">
-        <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} studio={studio} now={now} session={session} />
+        <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} studio={studio} now={now} session={session} served={served} />
         <aside className="dept-side">
           <Kpis desk={desk} numbers={numbers} />
           <section className="steps" aria-label={`${SEAT_NAME[seat]} steps`}>
@@ -370,7 +370,9 @@ function showsArtifact(studio: Desk, step: WsStep | undefined, now: number): boo
   return !Number.isFinite(s) || (step.kind === "tool" && step.status === "done") || a >= s - 2000;
 }
 
-function Window({ seat, step, tabs, trail, studio, now, session }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[]; studio: Desk; now: number; session: string | null }) {
+const NONE: readonly string[] = [];
+
+function Window({ seat, step, tabs, trail, studio, now, session, served }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[]; studio: Desk; now: number; session: string | null; served: Record<string, string[]> }) {
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number; press: number }>({ x: 24, y: 24, press: 0 });
   const [typed, setTyped] = useState<number>(Infinity);
@@ -451,7 +453,7 @@ function Window({ seat, step, tabs, trail, studio, now, session }: { seat: Seat;
       <div key={art?.key ?? step?.key ?? "none"} className="win-load" aria-hidden />
       <div className="win-body" ref={body}>
         {art ? (
-          <ArtifactView key={art.key} art={art} session={session} />
+          <ArtifactView key={art.key} art={art} session={session} served={art.caseId ? (served[art.caseId] ?? NONE) : NONE} />
         ) : !step ? (
           <div className="win-empty">
             <p>Waiting for {SEAT_NAME[seat]}&rsquo;s next step.</p>

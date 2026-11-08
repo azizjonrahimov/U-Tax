@@ -214,3 +214,27 @@ describe("D35: a document can be downloaded once the gateway built it", () => {
     expect(art?.kind === "docs" ? [art.workpaper?.built, art.workpaper?.file, art.memo?.built] : []).toEqual([true, "Delaware_Franchise_Tax_Workpaper_case_7_v1.xlsx", undefined]);
   });
 });
+
+describe("D35: downloads only for what the gateway serves", () => {
+  const build = (ok: [boolean, boolean, boolean], cid = "case_9") => [
+    ev("doc.step", { doc: "workpaper", step: 1, of: 5, detail: "Inputs: x" }, { actor: "acct", case_id: cid }),
+    ev("doc.created", { doc: "workpaper", file_name: `W_${cid}_v1.xlsx` }, { actor: "acct", case_id: cid }),
+    ev("doc.step", { doc: "memo", step: 1, of: 3, detail: "Memo: summary" }, { actor: "acct", case_id: cid }),
+    ev("doc.created", { doc: "memo", file_name: `M_${cid}_v1.docx` }, { actor: "acct", case_id: cid }),
+    ev("doc.verified", { doc: "workpaper", ok: ok[0] }, { actor: "acct", case_id: cid }),
+    ev("doc.verified", { doc: "memo", ok: ok[1] }, { actor: "acct", case_id: cid }),
+    ev("doc.verified", { doc: "books", ok: ok[2] }, { actor: "acct", case_id: cid }),
+  ];
+  it("all three checks passed: the workpaper and the memo are served", () => {
+    expect(fold(build([true, true, true])).served).toEqual({ case_9: ["W_case_9_v1.xlsx", "M_case_9_v1.docx"] });
+  });
+  it("any check failed (the books included), or not yet checked: nothing is served", () => {
+    expect(fold(build([true, true, false])).served).toEqual({});
+    expect(fold(build([true, true, true]).slice(0, 5)).served).toEqual({});
+  });
+  it("a flagged case is never served", () => {
+    flagged.add("case_5");
+    expect(fold(build([true, true, true], "case_5")).served).toEqual({});
+    flagged.delete("case_5");
+  });
+});
