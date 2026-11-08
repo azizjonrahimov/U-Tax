@@ -58,6 +58,7 @@ import {
 } from "@/ceo/voice";
 import { parseTalkReply, replyLine, spokenPart, TALK_GIVE_UP_MS, TALK_LATE_MS, TALK_POLL_MS, TALK_RETRY_MS, TALK_SLOW_POLL_MS, TALK_TEXT_MAX, undoLine, type TalkAction, type TalkReply } from "@/ceo/talk";
 import { MicIcon } from "@/components/MicIcon";
+import { FirmOrb } from "@/components/ui/FirmOrb";
 import { Speaker } from "@/lib/tts";
 import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition, type RecognitionCtor } from "@/lib/recognition";
 import { canRecord, serverRecognition, STT_LIMITED, STT_NOISY, STT_RECORD_FAILED, STT_UNAVAILABLE, STT_UNREADABLE } from "@/lib/stt";
@@ -1786,7 +1787,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
           )}
         {slots?.alerts ? createPortal(alerts, slots.alerts) : <div className="voice-alerts">{alerts}</div>}
         <div className="kicker">talk to the firm</div>
-        <button type="button" className={micOn ? "orb on" : "orb"} aria-pressed={micOn} disabled={micDisabled} {...holdProps}>
+        <button type="button" className={micOn ? "orb on has-gl" : "orb has-gl"} aria-pressed={micOn} disabled={micDisabled} {...holdProps}>
+          {/* D42 P3: the Firm Orb draws the orb (the same button and handlers); it listens while the mic is open */}
+          <FirmOrb className="orb-gl" mode={micOn ? "listening" : "idle"} />
           <MicIcon size={44} />
           <span className="sr-only">{micOn ? "Talking… tap to finish" : "Talk"}</span>
         </button>

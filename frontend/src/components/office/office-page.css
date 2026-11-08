@@ -143,3 +143,11 @@
 .ox .dept.tour-press::after{content:"";position:absolute;inset:0;border-radius:inherit;border:1px solid var(--lime);animation:tourRing .65s ease-out forwards}
 @keyframes tourRing{from{opacity:.9;transform:scale(.96)}to{opacity:0;transform:scale(1.04)}}
 @media (prefers-reduced-motion:reduce){.ox .dept.tour-press,.ox .dept.tour-press::after{animation:none;transform:none}}
+/* D42 P3: the immersive language on /office (added classes only; the D41 layout is unchanged) */
+.office .theater{background:transparent}
+.ox .brand .mark.emblem-mark{background:none;box-shadow:none;width:30px;height:30px}
+.ox .pane.glass::before,.ox .ord.glass::before,.ox .bar.glass::before{inset:0}
+.ox .head .head-orb{width:56px;height:56px;flex-shrink:0;margin:-8px -4px -8px -8px}
+.ox .head h1.dot-display,.ox .head h1.title.dot-display{font-family:var(--font-doto),var(--font-geist-mono),monospace;font-weight:800;letter-spacing:.01em;text-transform:uppercase}
+.ox .head h1.dot-display em{font-family:var(--font-instrument-serif),Georgia,serif;font-weight:400;text-transform:none}
+.office .of-dept .dept-head h1.dot-display{font-family:var(--font-doto),var(--font-geist-mono),monospace;font-weight:800;text-transform:uppercase;letter-spacing:.01em}

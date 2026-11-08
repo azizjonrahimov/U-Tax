@@ -51,7 +51,7 @@ function Pane(props: {
   const { k, screen } = props;
   const failure = screen.failure?.pane === k ? screen.failure : undefined;
   return (
-    <section className={cx("pane", k, props.className, screen.camera === k && "focus")} data-pane={k} data-target={k} aria-label={props.label}>
+    <section className={cx("pane", "glass", k, props.className, screen.camera === k && "focus")} data-pane={k} data-target={k} aria-label={props.label}>
       <div className="ph">
         <DeptAvatar seat={PANE_SEAT[k] ?? "ceo"} size={22} className="ico" />
         <b>{props.label}</b>
@@ -488,7 +488,7 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           </div>
         )}
       </div>
-      <section className="pane metric" data-target="rail.touches" aria-label="Human touches">
+      <section className="pane metric glass" data-target="rail.touches" aria-label="Human touches">
         <h4>
           human touches <span>operating</span>
         </h4>
@@ -543,7 +543,7 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           ))}
         </div>
       </section>
-      <section className="pane metric" data-target="rail.money" aria-label="Money">
+      <section className="pane metric glass" data-target="rail.money" aria-label="Money">
         <h4>money</h4>
         <div className="mb">
           <div className="big lime">{saved}</div>
@@ -571,7 +571,7 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           </a>
         </div>
       </section>
-      <section className="pane metric" data-target="rail.hiring" aria-label="Hiring">
+      <section className="pane metric glass" data-target="rail.hiring" aria-label="Hiring">
         <h4>
           hiring <span>HR</span>
         </h4>
@@ -612,7 +612,7 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           )}
         </div>
       </section>
-      <section className="pane metric" data-target="rail.cases" aria-label="Cases">
+      <section className="pane metric glass" data-target="rail.cases" aria-label="Cases">
         <h4>
           cases {screen.rail.crm && <span>{screen.rail.crm}</span>}
         </h4>
@@ -688,7 +688,7 @@ export const OrdersStrip = memo(function OrdersStrip({ screen }: { screen: Scree
       {shown.map((o, i) => {
         const newest = i === shown.length - 1;
         return (
-          <article key={o.id} className={cx("ord", newest && "live")} data-target={`orders.${o.id}`}>
+          <article key={o.id} className={cx("ord", "glass", newest && "live")} data-target={`orders.${o.id}`}>
             {/* The CEO's cursor lands on the newest order's head when an order is spoken (rail.voice). */}
             <div className="ord-h" data-target={newest ? "rail.voice" : undefined}>
               order {o.n} · <time>{formatClock(o.ts)}</time>

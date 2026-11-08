@@ -49,3 +49,16 @@ body {
   letter-spacing: 0.01em;
   text-transform: uppercase;
 }
+
+/* D42 P3 (runbook §P3.3, verbatim): glass panels, added as a class to the existing cards, panes and windows */
+.glass{position:relative;background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));border:1px solid rgba(255,255,255,.08);border-radius:16px;backdrop-filter:blur(14px) saturate(140%)}
+.glass::before{content:"";position:absolute;inset:-1px;border-radius:inherit;padding:1px;pointer-events:none;
+  background:conic-gradient(from 180deg at 50% 50%,rgba(190,242,67,.0),rgba(139,92,246,.35),rgba(46,230,214,.25),rgba(190,242,67,.35),rgba(190,242,67,0));
+  -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;opacity:.55}
+.glass.focus::before,.glass:hover::before{opacity:1}
+/* §P3.5: the faint violet stage glow behind /ceo and /office */
+.stage-glow.stage-glow{background:radial-gradient(1200px 700px at 85% -10%, rgba(139,92,246,.10), transparent 60%), radial-gradient(900px 600px at 0% 110%, rgba(190,242,67,.06), transparent 60%), #050505}
+/* §P3.2: the Firm Orb (WebGL point sphere) and its no-WebGL stand-in */
+.firm-orb{display:block;width:100%;height:100%;pointer-events:none}
+.firm-orb.still{border-radius:50%;background:radial-gradient(circle at 35% 30%,#e7ff9c,#bef243 45%,#5c7a14 100%);box-shadow:0 0 30px -6px rgba(190,242,67,.6)}
+.emblem{display:block;flex-shrink:0}

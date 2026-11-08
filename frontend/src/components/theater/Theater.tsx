@@ -34,6 +34,7 @@ import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
 import { CalendarPane, MailPane, MarketPane, OrdersStrip, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
 import { PaneBoundary } from "./PaneBoundary";
 import { DeptAvatar } from "@/components/ui/DeptAvatar";
+import { FirmOrb } from "@/components/ui/FirmOrb";
 import "./theater.css";
 
 /** Agents in desk order: id, cursor label, color token (theater.css owns the hexes). */
@@ -837,7 +838,11 @@ export function Theater() {
         <span className="logo" aria-hidden>
           U
         </span>
-        <h1 className="title">
+        {/* D42 P3: the Firm Orb beside the title, a ripple per event */}
+        <span className="head-orb" aria-hidden>
+          <FirmOrb pulseKey={screen.lastEventId} points={2500} size={2} />
+        </span>
+        <h1 className="title dot-display">
           The firm, <em>live.</em>
         </h1>
         <p className="sub">every move rendered from the action log</p>
@@ -886,7 +891,7 @@ export function Theater() {
         </section>
       </PaneBoundary>
 
-      <footer className="bar">
+      <footer className="bar glass">
         <div className="avs" aria-hidden>
           {AGENTS.filter(([id]) => id !== "ceo").map(([id]) => (
             <DeptAvatar key={id} seat={id} size={28} className="av" />

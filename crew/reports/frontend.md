@@ -441,3 +441,15 @@ The fix each time was to derive from the event log and to check, after each awai
   - Mock: /api/dev/event takes case_id.
 - Verified on the mock: 22 fields at exactly 450 ms each (~10 s), and 41 cells with the formula bar and tab switching.
 - Not done: the CEO console card line (/ceo belongs to the voice lane).
+
+## D42 P3 the immersive language inside (/ceo, /office)
+- ui/Emblem.tsx: our own SVG (an iridescent violet→cyan→lime ring and a dotted U), in the office sidebar brand and the console top bar.
+- ui/firm-orb.js is a verbatim copy of docs/designs/immersive/firm-orb.js, with types; ui/FirmOrb.tsx loads three on demand, falls back to a static sphere without WebGL, and gives one still frame under reduced motion.
+  - In the console voice card it draws inside the same orb button with the same handlers ("listening" while the mic is open).
+  - In the office .head it is a 56px orb that pulses per event.
+  - One WebGL canvas per page (checked: /office 1, /ceo 1); the docked panel gets no orb.
+- .glass (runbook CSS verbatim) is in globals.css and added as a class to panes, order cards, rail metrics, the bottom bar, the desk windows (Form, Excel) and the console cards.
+- .dot-display (Doto) is on "The firm, live.", the desk names, the brief headline and the console section titles; the serif em stays.
+- .stage-glow is the faint violet background on /ceo and /office (the theater background is transparent so it shows).
+- No D41 layouts, handlers, data-targets or class names were removed; STOP is unchanged.
+- Not done: the login Emblem (components/site belongs to frontend-3d) and setLevel from an STT meter (the console has no level meter to read).

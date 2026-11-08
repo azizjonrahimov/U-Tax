@@ -62,7 +62,7 @@ export function FormView({ form, client, base, session }: { form: FormDoc; clien
   }, [active, reduce]);
 
   return (
-    <section className="win fv" aria-label={`Form 1120 draft for ${client}`}>
+    <section className="win fv glass" aria-label={`Form 1120 draft for ${client}`}>
       <div className="win-bar">
         <span className="lights" aria-hidden>
           <i />

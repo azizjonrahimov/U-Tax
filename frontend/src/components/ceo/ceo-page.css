@@ -314,3 +314,13 @@
 .cx .pay-open:hover{text-decoration:underline}
 /* D41 F47: the read-back waits for the CEO to finish */
 .cx .voice .waiting-more{color:var(--lime);font:12px var(--mono)}
+
+/* D42 P3: the immersive language inside. The Firm Orb draws the voice orb (same button); the emblem in
+   the top bar; Doto titles; glass cards (globals.css .glass); the violet stage glow (.stage-glow). */
+.cx .orb.has-gl{background:radial-gradient(circle,rgba(190,242,67,.10),rgba(5,5,5,0) 70%);box-shadow:none;color:var(--lime);isolation:isolate}
+.cx .orb.has-gl.on{box-shadow:0 0 0 10px rgba(190,242,67,.10),0 20px 60px -10px rgba(190,242,67,.5)}
+.cx .orb .orb-gl{position:absolute;inset:-30px;width:calc(100% + 60px);height:calc(100% + 60px);z-index:-1}
+.cx .orb.has-gl svg{position:relative;filter:drop-shadow(0 0 10px rgba(0,0,0,.8))}
+.cx .brand .mark.emblem-mark{background:none;box-shadow:none;padding:0;width:30px;height:30px;display:grid;place-items:center}
+.cx .dot-display.dot-display{font-family:var(--font-doto),var(--font-geist-mono),monospace;font-weight:800;letter-spacing:.01em;text-transform:uppercase}
+.cx .dot-display em{font-family:var(--font-instrument-serif),Georgia,serif;font-weight:400;text-transform:none}

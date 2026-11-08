@@ -26,7 +26,7 @@ export function ExcelView({ book, base }: { book: Book; base: number }) {
   const sel = active && active.sheet === sheet ? active : undefined;
 
   return (
-    <section className="win xv" aria-label={`${book.book} (draft)`}>
+    <section className="win xv glass" aria-label={`${book.book} (draft)`}>
       <div className="win-bar">
         <span className="lights" aria-hidden>
           <i />
