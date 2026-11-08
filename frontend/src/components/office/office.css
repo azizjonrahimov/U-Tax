@@ -357,3 +357,27 @@
 .office .ml-body.hidden-body { color: #ffb547; font-style: italic; }
 .office .ml-meta { font-size: 11px; color: var(--faint); margin-top: 6px !important; }
 @media (max-width: 900px) { .office .mailapp { grid-template-columns: minmax(0, 1fr); } .office .ml-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 200px; } }
+
+/* D41 F50 (runbook §E.1): the Accounting desk's Payments ledger */
+.office .payapp { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; overflow: hidden; }
+.office .payapp.empty-pay { align-items: center; justify-content: center; }
+.office .pay-totals { margin: 0; color: var(--dim); font-size: 14px; }
+.office .pay-totals b { color: var(--lime); font: 600 14px var(--font-jetbrains-mono), monospace; }
+.office .pay-note { color: var(--faint); font-size: 11.5px; margin-left: 8px; }
+.office .pay-scroll { flex: 1; min-height: 0; overflow: auto; }
+.office .pay-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.office .pay-table th { text-align: left; font: 500 11px var(--font-geist-mono), monospace; color: var(--faint); padding: 6px 8px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+.office .pay-table td { padding: 9px 8px; border-bottom: 1px solid var(--line); color: var(--dim); vertical-align: middle; }
+.office .pay-table td b { color: var(--text); font-weight: 500; }
+.office .pay-what { display: inline-flex; align-items: center; gap: 8px; }
+.office .pay-table td.pay-amt { color: var(--lime); white-space: nowrap; }
+.office .pay-proof { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.office .pay-proof a { color: var(--lime); text-decoration: none; }
+.office .pay-proof a:hover { text-decoration: underline; }
+.office .pay-chip { display: inline-block; border: 1px solid var(--line-2); border-radius: 999px; padding: 1px 8px; font: 11.5px var(--font-geist-mono), monospace; color: var(--dim); white-space: nowrap; }
+.office .pay-chip.ok { color: #3ddc84; border-color: rgba(61, 220, 132, .45); }
+.office .pay-chip.bad { color: #ff8a7d; border-color: rgba(255, 77, 61, .5); }
+.office .pay-chip.stripe { color: #a5b4ff; border-color: rgba(165, 180, 255, .45); }
+.office .pay-table tr.new td { animation: pay-flash 1.6s ease-out; }
+@keyframes pay-flash { from { background: rgba(190, 242, 67, .22); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .office .pay-table tr.new td { animation: none; } }

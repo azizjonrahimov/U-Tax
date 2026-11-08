@@ -463,3 +463,7 @@
 .theater .stage .wallets .wallet { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .theater .stage .job { gap: 6px; padding: 10px 12px; }
 .theater .stage .job .paid { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.theater .rail .paylink { color: var(--dim); text-decoration: none; }
+.theater .rail .paylink b { color: var(--lime); }
+.theater .rail .paylink:hover span { color: var(--text); }
+.theater .rail .paylink:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
