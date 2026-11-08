@@ -134,6 +134,10 @@ def test_income_tax_only_for_a_non_delaware_c_corp(h):
     _send(h, case_id)
     memo = h.events("memo.sent")[-1].payload
     assert "$89,520" in memo["body"] and "Delaware franchise" not in memo["body"]
+    # M1/M2: the mail threads on the client's subject; the public payload keeps ours
+    assert memo["subject"] == "Your tax estimate (draft)"
+    mail = json.loads(h.outbox()[-1].read_text(encoding="utf-8"))
+    assert mail["subject"] == "Re: income tax?" and mail["in_reply_to"]
 
 
 def test_franchise_only_outside_delaware_is_still_not_eligible(h):

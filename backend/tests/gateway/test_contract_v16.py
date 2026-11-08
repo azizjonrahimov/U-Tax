@@ -52,7 +52,7 @@ def test_client_replied_reextracts_and_only_a_changed_fact_makes_memo_v2(h):
     assert h.gw.state.cases[case_id].status == "SENT" and wakes == before
     # numbers again, unchanged: re-read, back to SENT, no second memo
     h.new_case(body="To confirm: 10,000,000 authorized shares, 8,000,000 issued, $500k.")
-    assert wakes[-1] == f"Client replied {case_id}"
+    assert wakes[-1] == f"FAST PATH {case_id}"  # D42 M2: was "Client replied"
     texts = h.gw.state.cases[case_id].agent_texts
     data = h.ok("extract_facts", case_id=case_id, quotes=HAPPY_QUOTES,
                 incorporated_delaware=True, foreign_owner_25=False)
@@ -75,7 +75,9 @@ def test_outgoing_mail_greets_the_company_the_event_stays_masked(h):
     event_body = h.events("memo.sent")[0].payload["body"]
     assert event_body.startswith("Hi Team #1,")
     mailed = [json.loads(p.read_text(encoding="utf-8")) for p in h.outbox()]
-    memo = [m for m in mailed if m["subject"] == "Your Delaware franchise tax estimate"][0]
+    # D42: the memo replies in the client's thread ("Re: <their subject>")
+    memo = [m for m in mailed if m["message_id"] == h.events("memo.sent")[0].payload[
+        "message_id"]][0]
     assert memo["body"].startswith("Hi Team7,")  # founder@team7.dev
     other = h.to_qa_passed(h.new_case(sender="me@gmail.com"))
     h.ok("send_memo", case_id=other)

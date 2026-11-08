@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Instrument_Serif, Inter, JetBrains_Mono, Schibsted_Grotesk } from "next/font/google";
+import { Doto, Geist, Geist_Mono, Instrument_Serif, Inter, JetBrains_Mono, Schibsted_Grotesk } from "next/font/google";
 import "./globals.css";
 
 const inter = Inter({
@@ -23,6 +23,8 @@ const jetbrainsMono = JetBrains_Mono({
 const geist = Geist({ subsets: ["latin"], variable: "--font-geist", display: "swap" });
 const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", display: "swap" });
 const instrumentSerif = Instrument_Serif({ subsets: ["latin"], weight: "400", style: ["normal", "italic"], variable: "--font-instrument-serif", display: "swap" });
+// D42 P1: Doto, the dot-matrix display face of the immersive landing (`.dot-display`, the card textures).
+const doto = Doto({ subsets: ["latin"], weight: ["700", "800"], variable: "--font-doto", display: "swap" });
 
 export const metadata: Metadata = {
   title: "U-Tax · Your Delaware franchise tax, checked free",
@@ -31,7 +33,7 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} ${schibsted.variable} ${geist.variable} ${geistMono.variable} ${instrumentSerif.variable} h-full antialiased`}>
+    <html lang="en" className={`${inter.variable} ${jetbrainsMono.variable} ${schibsted.variable} ${geist.variable} ${geistMono.variable} ${instrumentSerif.variable} ${doto.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );

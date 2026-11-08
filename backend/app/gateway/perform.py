@@ -1242,6 +1242,25 @@ class Gateway:
             return {"ok": True, "next": f"task {a[1].no}/{o.of} starts now"}
         return {"ok": True, "next": "that was the last task"}
 
+    @staticmethod
+    def _re(case: Case) -> str:
+        """D42 M1: a reply's subject, "Re: <the client's first subject>" (never "Re: Re:")."""
+        subject = (case.first_subject or case.subject or "").strip()
+        return subject if re.match(r"(?i)re:", subject) else f"Re: {subject}".strip()
+
+    @staticmethod
+    def _memo_subject(case: Case, fallback: str = MEMO_SUBJECT) -> str:
+        """D42 (owner test R1): "Re: <first_subject>" when the client emailed us, so Gmail
+        keeps the memo in their thread; MEMO_SUBJECT otherwise (a /talk case). The public
+        memo.sent payload keeps MEMO_SUBJECT: the client's own subject stays private."""
+        return Gateway._re(case) if case.first_subject else fallback
+
+    @staticmethod
+    def _thread(case: Case) -> str | None:
+        """D42 M1: the Message-ID a client mail replies to: the client's newest email, else
+        our memo (a /talk case after its memo), else none (nothing to thread on)."""
+        return case.last_inbound_message_id or case.memo_message_id or None
+
     def _case(self, args: dict) -> Case:
         case_id = _str(args, "case_id", max_len=64)
         case = self.state.cases.get(case_id)
@@ -1532,12 +1551,32 @@ class Gateway:
         if inbox == "hiring":
             return self._receive_applicant(mail)
         result = self._receive(mail, provider=self.ports.mail.provider)
-        if result.get("client_replied"):
-            self._wake(f"Client replied {result['case_id']}")
-        elif not result.get("duplicate") and not result.get("quiet") \
-                and not result.get("blocked"):
-            self._wake(f"New case {result['case_id']}")
+        # D42 M2: every client email runs the fast path (a new case, a reply after an ask,
+        # a reply with numbers after the memo); a "thanks!" or a duplicate wakes nobody
+        if result.get("client_replied") or not (
+                result.get("duplicate") or result.get("quiet") or result.get("blocked")):
+            self._wake_fast(result["case_id"])
         return result
+
+    FAST_FOR = timedelta(minutes=10)
+
+    def _wake_fast(self, case_id: str) -> None:
+        """D42 M2: FAST PATH case_N, and the case is in flight for 10 minutes (the board
+        skips it). case.priority is never changed: it also means a /talk case."""
+        case = self.state.cases.get(case_id)
+        if case is not None:
+            case.fast_until = iso_ts(self._now() + self.FAST_FOR)
+        self._wake(f"FAST PATH {case_id}")
+
+    def _in_flight(self, case: Case) -> bool:
+        """D42 M2: the fast path has the case: a FAST PATH wake in the last 10 minutes whose
+        chain hasn't ended (SENT, BLOCKED, NOT_ELIGIBLE or an ask clears it)."""
+        if not case.fast_until:
+            return False
+        try:
+            return self._now() < parse_ts(case.fast_until)
+        except ValueError:
+            return False
 
     # ------------------------------------------------------------ hiring inbox (§6c)
 
@@ -1935,7 +1974,7 @@ class Gateway:
         )]
         events += self._reopen(None, case_id)
         self._emit(events)
-        self._wake(f"FAST PATH {case_id}")
+        self._wake_fast(case_id)  # D42 M2: in flight for 10 minutes too
         return {"case_id": case_id, "masked_name": masked_name, "priority": True}
 
     # ------------------------------------------------------------ approvals
@@ -2144,6 +2183,7 @@ class Gateway:
         # hint contradicted it, e.g. ask_client on a STALLED case)
         return {"cases": [{"case_id": c.case_id, "masked_name": c.masked_name,
                            "status": c.status, "priority": c.priority,
+                           "in_flight": self._in_flight(c),  # D42 M2: the fast path has it
                            "waiting_reason": self._waiting_reason(c)} for c in open_cases]}
 
     def _get_case(self, args: dict) -> dict:
@@ -2479,13 +2519,13 @@ class Gateway:
         outgoing = self.templates.render("ask-client", ask_values(
             case.masked_name, missing, case.problems, greeting_name=self._greeting(case)))
         sent = self._with_retry("ask email", lambda: self.ports.mail.send(
-            OutMail(to=case.reply_to, subject=f"Re: {case.subject}".strip(), body=outgoing),
-            key))
+            OutMail(to=case.reply_to, subject=self._re(case), body=outgoing,
+                    in_reply_to=self._thread(case)), key))  # D42 M1: in the client's thread
         events = [NewEvent(type="client.asked", actor="intake", case_id=case.case_id,
                            provider=self.ports.mail.provider,
                            payload={"missing": missing, "body": body}, idempotency_key=key,
                            private={"message_id": sent.message_id, "public": case.priority,
-                                    "sent": self._sent(f"Re: {case.subject}".strip(), outgoing,
+                                    "sent": self._sent(self._re(case), outgoing,
                                                        case.reply_to)})]
         if stalled:  # the nudge went out: back to waiting (the sweep can stall it once more)
             events.append(NewEvent(type="case.status", actor="system", case_id=case.case_id,
@@ -2504,10 +2544,11 @@ class Gateway:
                    _cap(f"{self._first('email')}not-eligible reply: {case.masked_name}"),
                    case.case_id, public=case.priority)
         sent = self._with_retry("not-eligible email", lambda: self.ports.mail.send(
-            OutMail(to=case.reply_to, subject=f"Re: {case.subject}".strip(),
+            OutMail(to=case.reply_to, subject=self._re(case),
                     body=self.templates.render(f"not-eligible-{reason}", {
                         "masked_name": case.masked_name,
-                        "greeting_name": self._greeting(case)})), key))
+                        "greeting_name": self._greeting(case)}),
+                    in_reply_to=self._thread(case)), key))  # D42 M1
         events = [NewEvent(type="case.not_eligible", actor="intake", case_id=case.case_id,
                            provider=self.ports.mail.provider, payload={"reason": reason},
                            idempotency_key=key,
@@ -3508,7 +3549,10 @@ class Gateway:
         else:  # D42: income tax only
             summary = (f"{self._first('email')}memo email: {case.masked_name}, income tax "
                        f"${(case.returns_summary or {}).get('total_usd', 0):,} (draft)")
+        # the public memo.sent subject: MEMO_SUBJECT, or the income-only one (D42 T2); the
+        # mail itself threads as "Re: <first_subject>" when the client emailed us (M2)
         subject = MEMO_SUBJECT if self._de_franchise(case) else RETURNS_SUBJECT
+        real_subject = self._memo_subject(case, subject)
         self._gate("email", key, _cap(summary), case.case_id, public=case.priority)
         payment_url = self._payment_link(case) if self._de_franchise(case) else None  # 40b
         if payment_url:
@@ -3516,8 +3560,9 @@ class Gateway:
                                                       payment_url=payment_url), memo_ref)
         try:
             sent = self._with_retry("memo email", lambda: self.ports.mail.send(
-                OutMail(to=case.reply_to, subject=subject, body=outgoing,
-                        bcc=self.settings.mail_qa_bcc or None, attachments=attachments), key))
+                OutMail(to=case.reply_to, subject=real_subject, body=outgoing,
+                        bcc=self.settings.mail_qa_bcc or None, attachments=attachments,
+                        in_reply_to=self._thread(case)), key))  # D42 M1
         except ToolError as err:
             self._block(case, f"memo email failed: {err.code}")
             raise
@@ -3532,7 +3577,7 @@ class Gateway:
                               "seconds_since_last_fact": seconds, "memo_ref": memo_ref},
                      idempotency_key=key, private={
                          "public": case.priority,
-                         "sent": self._sent(subject, outgoing, case.reply_to)}),
+                         "sent": self._sent(real_subject, outgoing, case.reply_to)}),
             self._status(case, "SENT"),
             NewEvent(type="crm.sync_requested", actor="system", case_id=case.case_id,
                      payload={"object": "deal", "stage": "memo_sent"},
@@ -4625,14 +4670,13 @@ class Gateway:
             f"{self._first('email')}follow-up ({kind.replace('_', ' ')}): {case.masked_name}"),
             case.case_id, public=case.priority)
         body = self.templates.render(f"follow-up-{kind}", values)
-        thread = case.message_ids[-1] if case.message_ids else None
         self._with_retry("follow-up email", lambda: self.ports.mail.send(
-            OutMail(to=case.reply_to, subject=f"Re: {case.subject}".strip(), body=body,
-                    in_reply_to=thread), key))
+            OutMail(to=case.reply_to, subject=self._re(case), body=body,
+                    in_reply_to=self._thread(case)), key))  # D42 M1
         self._emit([NewEvent(type="client.followed_up", actor="intake", case_id=case.case_id,
                              provider=self.ports.mail.provider, payload={"kind": kind},
                              idempotency_key=key,
-                             private={"sent": self._sent(f"Re: {case.subject}".strip(), body,
+                             private={"sent": self._sent(self._re(case), body,
                                                          case.reply_to)})])
         return {"kind": kind}
 

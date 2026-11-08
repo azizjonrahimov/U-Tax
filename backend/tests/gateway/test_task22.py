@@ -110,7 +110,7 @@ def test_a_new_email_wakes_the_naive_chief_of_staff_off_the_lock(h):
     h.gw.on_wake(waker_for(fake))
     h.ok("inject_email", **{"from": "founder@team9.dev", "subject": "Delaware tax",
                             "body": "We're a Delaware C-corp with 10,000,000 shares."})
-    assert [p["message"] for p in fake.posts] == ["New case case_1"]
+    assert [p["message"] for p in fake.posts] == ["FAST PATH case_1"]  # D42 M2
     assert fake.lock_free == [True]
 
 
@@ -120,7 +120,7 @@ def test_a_failed_wake_goes_to_the_backoff_retry(h):
     h.gw.on_wake(waker_for(fake))
     h.ok("inject_email", **{"from": "founder@team9.dev", "subject": "Delaware tax",
                             "body": "We're a Delaware C-corp with 10,000,000 shares."})
-    assert h.gw.pending_wake_retries() == ["New case case_1"]
+    assert h.gw.pending_wake_retries() == ["FAST PATH case_1"]  # D42 M2
 
 
 def test_the_server_registers_the_waker_only_for_the_real_crew(make_harness, monkeypatch):
@@ -224,7 +224,7 @@ def test_a_second_email_on_an_open_case_starts_a_new_session(h):
             "body": "We're a Delaware C-corp with 10,000,000 shares."}
     h.ok("inject_email", **mail)
     h.ok("inject_email", **{**mail, "body": "Also: 8,000,000 issued, $500k in assets."})
-    new_case = [p for p in fake.posts if p["message"] == "New case case_1"]
+    new_case = [p for p in fake.posts if p["message"] == "FAST PATH case_1"]  # D42 M2
     assert len(new_case) >= 2 and len({p["key"] for p in new_case}) == len(new_case)
 
 

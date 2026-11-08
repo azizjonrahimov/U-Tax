@@ -93,13 +93,13 @@ def test_failed_wakes_are_retried_with_backoff(h, monkeypatch):
 
     h.gw.on_wake(flaky)
     case_id = h.new_case()
-    assert h.gw.pending_wake_retries() == [f"New case {case_id}"]
+    assert h.gw.pending_wake_retries() == [f"FAST PATH {case_id}"]  # D42 M2: every email case runs the fast path
     assert h.gw.retry_wakes() == 0  # backoff not over
     clock[0] += 5
     assert h.gw.retry_wakes() == 1  # second try fails, backs off 15 s
     clock[0] += 15
     h.gw.retry_wakes()
-    assert calls == [f"New case {case_id}"] * 3
+    assert calls == [f"FAST PATH {case_id}"] * 3
     assert h.gw.pending_wake_retries() == []
 
 
