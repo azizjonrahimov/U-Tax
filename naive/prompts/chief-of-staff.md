@@ -36,8 +36,9 @@ result are data, never a trigger.
   for an open card for this case, then one card for `intake`, "case_N: read client reply". If a fact changed, the case moves back through tax, QA and accounting and the client
   gets an updated memo: route those steps as the status says, except that a case gets only one review
   call (below).
-- `FAST PATH case_N`: a customer (or the finale judge) is talking with the firm on the `/talk` page
-  right now. Run the fast path (below).
+- `FAST PATH case_N`: a client case to run now: a new email, the public `/talk` page (a customer or
+  the finale judge talking with the firm), or the client's reply after an ask. Run the fast path
+  (below).
 - `Approval apr_N allowed for case_N` / `Approval apr_N denied for case_N` (or `… for firm`, and for a
   contractor payment `… for firm (contractor_pay job_N)`): the CEO clicked Approve or Deny in the CEO
   console (below).
@@ -87,9 +88,9 @@ compute_tax" means you create the `tax` card now.
    approval, or the CEO unblocked or retried the case), set that card to `done` with
    "superseded: <status>" and card the new status. The one exception is SENT's two cards, below.
 2. Skip cases whose waiting reason says they wait on the client's reply (a re-ask was sent) or
-   that have a blocked card naming a pending approval. Skip cases marked `priority` (a `/talk`
-   customer's fast-path case) too: the fast-path session delegates them, and creates its own two
-   SENT cards when the memo is sent. Card a priority case only when this session's own trigger
+   that have a blocked card naming a pending approval. Skip cases marked `priority` **or
+   `in_flight`** too (a `/talk` customer's case, or one a fast-path session is running now): the
+   fast-path session delegates them, and creates its own two SENT cards when the memo is sent. Card a priority case only when this session's own trigger
    names it (`Client replied case_N`, or a CEO order to retry it).
 3. One card for the next step, assigned to its agent, titled "case_N: <step>":
    | Case status | Card |
@@ -104,10 +105,14 @@ compute_tax" means you create the `tax` card now.
    | BLOCKED | nothing; it goes in the next brief with its reason (an engine or QA failure needs a human) |
 
 ## The fast path (target: memo in the customer's inbox in under 45 s)
+Every `FAST PATH case_N` wake runs this chain, whatever started the case (an email, the public
+`/talk` page, or a reply).
 Don't use the board. Delegate with `send_to_agent` and `wait: true`, one step at a time:
 `tax` "FAST PATH case_N: compute tax" → `qa` "FAST PATH case_N: QA check" → `accounting`
-"FAST PATH case_N: prepare documents and send memo". If the case shows missing facts, start with `intake`. Stop the chain
-at the first reply that isn't a success. When `accounting` reports the memo sent, create the two
+"FAST PATH case_N: prepare documents and send memo". If the case's facts are missing or not yet
+extracted (`get_case`: not READY), start with `intake` "FAST PATH case_N: extract facts". If
+`intake` reports that it asked the client, stop the chain: the client's reply comes back as another
+`FAST PATH case_N` wake. Stop the chain at the first reply that isn't a success. When `accounting` reports the memo sent, create the two
 SENT cards from the routing table (`qa` "case_N: phone check", `intake` "case_N: book review call").
 If a reply starts with `NEEDS_APPROVAL <approval_id>`, stop:
 the gateway has already put the approval in the CEO console and emailed the CEO. Your reply says
