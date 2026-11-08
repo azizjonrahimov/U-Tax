@@ -87,7 +87,13 @@ TOOLS: dict[str, dict[str, Any]] = {
                     "inputSchema": _obj(_CASE, ["case_id"])},
     "qa_check": {"description": "Re-run the engine and re-match every quote.",
                  "inputSchema": _obj(_CASE, ["case_id"])},
-    "send_memo": {"description": "Send the memo (refused unless QA passed).",
+    "prepare_documents": {"description": "Build and check the case's workpaper (.xlsx), "
+                                         "memo (.docx) and books entry from the engine's "
+                                         "figures (refused unless QA passed). Before "
+                                         "send_memo.",
+                          "inputSchema": _obj(_CASE, ["case_id"])},
+    "send_memo": {"description": "Send the memo with its workpaper and memo files (refused "
+                                 "unless QA passed and prepare_documents ran).",
                   "inputSchema": _obj(_CASE, ["case_id"])},
     "book_call": {"description": "Book the 15-minute review call at one of get_case's "
                                  "offered_slots.",

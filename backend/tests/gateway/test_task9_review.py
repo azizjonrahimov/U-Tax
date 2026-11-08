@@ -90,6 +90,7 @@ def test_a_late_result_for_an_old_memo_never_overwrites_the_new_one(h):
          incorporated_delaware=True, foreign_owner_25=False)
     h.ok("compute_tax", case_id=case_id)
     h.ok("qa_check", case_id=case_id)
+    h.ok("prepare_documents", case_id=case_id)  # v1.15
     h.ok("send_memo", case_id=case_id)  # memo v2 has a new reference
     h.gw.advance_phone_jobs()  # memo v1's result lands late
     assert h.events("phone.checked")[0].payload["rendered_ok"] is False

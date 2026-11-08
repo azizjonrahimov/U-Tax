@@ -480,6 +480,23 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         return Response(content=path.read_bytes(), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=3600"})
 
+    @router.get("/api/docs/{case_id}/{file_name}")
+    def case_document(case_id: str, file_name: str, authorization: str | None = Header(None)):
+        """v1.15: a case's verified workpaper or memo, for the CEO (ADMIN_TOKEN or a session
+        as the bearer: fetch it and save the blob; never a ?token= link that lands in logs).
+        Only a file prepare_documents built and checked can be named."""
+        require_admin(authorization)
+        if not re.fullmatch(r"case_[0-9]{1,6}", case_id) or not re.fullmatch(
+                r"[A-Za-z0-9_]{1,80}\.(xlsx|docx)", file_name):
+            raise APIError(404, "not_found", "no such document")
+        path = gw().doc_file(case_id, file_name)
+        if path is None:
+            raise APIError(404, "not_found", "no such document")
+        return Response(content=path.read_bytes(),
+                        media_type=gw().DOC_TYPES["." + file_name.rsplit(".", 1)[1]],
+                        headers={"Content-Disposition": f'attachment; filename="{file_name}"',
+                                 "Cache-Control": "private, no-store"})
+
     @router.get("/api/brief/audio")
     def brief_audio(request: Request, event_id: int = Query(..., ge=1),
                     token: str | None = Query(None), authorization: str | None = Header(None)):

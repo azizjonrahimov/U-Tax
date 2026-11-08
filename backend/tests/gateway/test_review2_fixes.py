@@ -113,6 +113,7 @@ def test_unblocked_case_runs_to_the_end(h):
     h.ok("unblock", case_id=case_id, to="READY")
     h.ok("compute_tax", case_id=case_id)
     h.ok("qa_check", case_id=case_id)
+    h.ok("prepare_documents", case_id=case_id)  # v1.15
     h.ok("send_memo", case_id=case_id)
     assert h.gw.state.cases[case_id].status == "SENT"
 

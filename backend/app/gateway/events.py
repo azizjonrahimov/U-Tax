@@ -63,6 +63,10 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "ad.created": ("kind", "headline", "image_url"),
     "hr.sourced": ("count", "source"),
     "hr.outreach": ("candidate_id", "label", "slot"),
+    # v1.15 (D35): the tax documents, built live (no client names: file names use case ids)
+    "doc.step": ("doc", "step", "detail"),  # step: 1, 2, ... (optional "of": the count)
+    "doc.created": ("doc", "file_name", "sha256", "pages_or_sheets"),
+    "doc.verified": ("doc", "ok"),  # one per document (optional "failed": the checks)
     "client.followed_up": ("kind",),
     "approval.requested": ("approval_id", "action_type", "summary"),
     "touch.training": _TOUCH,
@@ -85,6 +89,7 @@ FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "sta
 OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"}),
                          "call.booked": frozenset({"kind"}),  # v1.11.1: "candidate"
                          "email.received": frozenset({"source"}),  # v1.12: "signup"
+                         "doc.step": frozenset({"of"}), "doc.verified": frozenset({"failed"}),
                          **{t: frozenset({"channel"})
                             for t in ("touch.training", "touch.operating", "touch.engineering")}}
 OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only

@@ -252,7 +252,12 @@ class LocalCrew:
                                                    "kind": "unrealistic_inputs"})
                 done = result.status == "done"
             elif status == "QA_PASSED":
-                done = self._call("acct", "send_memo", {"case_id": case_id}).status == "done"
+                sent = self._call("acct", "send_memo", {"case_id": case_id})
+                if sent.status == "refused" and (sent.error or {}).get("code") == "docs_missing":
+                    if self._call("acct", "prepare_documents",
+                                  {"case_id": case_id}).status == "done":
+                        sent = self._call("acct", "send_memo", {"case_id": case_id})
+                done = sent.status == "done"
             elif status == "SENT":
                 if case.phone is None:
                     self._call("qa", "phone_check", {"case_id": case_id})

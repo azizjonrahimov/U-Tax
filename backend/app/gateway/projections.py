@@ -97,6 +97,8 @@ class Case:
     memo_result: dict | None = None  # v1.7.1: the result the latest memo was sent with
     phone_attempts: dict[str, list[str]] = field(default_factory=dict)  # memo_ref -> statuses
     memo_ts: str | None = None
+    docs: dict | None = None  # v1.15: {"key", "files"} of the verified documents
+    docs_building: dict = field(default_factory=dict)  # v1.15: the version being built
     call: dict[str, Any] | None = None
     blocked_reason: str | None = None
     not_eligible_reason: str | None = None
@@ -417,6 +419,32 @@ class State:
             case.qa_version = case.facts_version
 
     _on_qa_failed = _on_qa_passed
+
+    # v1.15: doc.created names each file, doc.verified passes it; once the workpaper, the
+    # memo and the books of one memo version all pass, the case's documents are ready
+    def _on_doc_created(self, e: Event) -> None:
+        case = self._case(e)
+        if case is not None and e.idempotency_key:
+            version = e.idempotency_key.rsplit(":", 2)[0]
+            building = case.docs_building if case.docs_building.get("key") == version else {
+                "key": version, "files": {}, "ok": set()}
+            building["files"][e.payload["doc"]] = e.payload["file_name"]
+            case.docs_building = building
+
+    def _on_doc_verified(self, e: Event) -> None:
+        case = self._case(e)
+        if case is None or not e.idempotency_key:
+            return
+        building = case.docs_building
+        if building.get("key") != e.idempotency_key.rsplit(":", 2)[0]:
+            return
+        if not e.payload.get("ok"):
+            building["ok"] = set()
+            return
+        building["ok"].add(e.payload["doc"])
+        if {"workpaper", "memo", "books"} <= building["ok"]:
+            case.docs = {"key": building["key"],
+                         "files": [building["files"]["workpaper"], building["files"]["memo"]]}
 
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)
