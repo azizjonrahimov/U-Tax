@@ -291,6 +291,30 @@ If either page can't hear you at all: check Chrome's site permission (the lock i
 - **Known:** downloads live on the desk's current artifact, so once the desk moves on there is no per-case file list yet. A case list in the CEO panel would close that.
 - **Backend ask:** `documents.py` writes the client's verbatim quotes with openpyxl, so a quote starting with "=" becomes a live formula in the downloaded .xlsx. Write user-derived strings as literal text.
 
+## Reliable voice transcripts (D36, contract v1.16.1)
+
+- **Both ears:** `/ceo` (purpose ceo, Bearer) and `/talk` (purpose talk, public) listen through the gateway's STT whenever the browser can record. The mic is recorded, cut into utterances by a level detector, and each utterance goes to `POST /api/stt` as the raw body. The text comes back like a browser-recognizer final, so all the console's ear logic is unchanged.
+- **Recording:**
+  - Two overlapping recorders give every clip 1.4–3 s of pre-roll, so the first word ("stop") is never cut.
+  - The detector learns the room from its quietest moments, counts real time, follows a soft voice, and filters on voiced length.
+- **Delivery and STOP:**
+  - When the console speaks, the ear closes but still delivers what was already said.
+  - Nothing said before a STOP runs after it.
+  - Results arrive in spoken order.
+- **Taps:** a tap ends after 8 s of silence; letting go sends what was said; a second tap works while the first is still uploading.
+- **Fallbacks:**
+  - A 503 means the browser recognizer for the session.
+  - A 429, the network (retried once), a noisy room or a recording failure mean the browser recognizer for 2 minutes, or a retry when the browser has none.
+  - An unreadable clip means "say it again".
+  - On `/talk`, a busy minute shows "type for a moment" and comes back.
+- **Decisions taken with the recommended option:**
+  - Pre-roll by overlapping recorders, rather than an AudioWorklet WAV encoder.
+  - Clips are booked including their pre-roll, about +2 s each.
+- **Known:**
+  - On `/talk`, an answer split into two clips across a long pause can have its second half land after the next question.
+  - Each ear reopens the mic (Bluetooth headsets switch profile).
+- **Backend ask:** `/api/stt` books the client-declared `seconds` when the provider reports tokens instead of a duration, so a direct caller can under-declare on the public budget.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
