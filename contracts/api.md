@@ -822,7 +822,9 @@ everything below.
 
 - `PROVIDERS += {"tempo"}`.
 - The same payment also writes `cost.booked` (`provider tempo|local`, `model "contractor:share_card"`,
-  `estimated false`), so the money panel's spend includes it. The gateway books money; no agent does.
+  `estimated false`), so the log keeps every payment. The gateway books money; no agent does.
+- **Testnet tokens are not dollars:** contractor payments count only in `contractor_paid_usd` (shown as
+  "Contractors paid (testnet)"), never in the dollar spend total or "Firm spent".
 - `public_state` adds `contractor_paid_usd` (Σ `payment.sent` ok) and `agent_sales_usd` (Σ `agent.sale`).
 
 **9.2 MCP tools (Marketing, `mkt`, only):**
