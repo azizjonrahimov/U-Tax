@@ -72,7 +72,11 @@ from app.gateway.projections import money_text
 from app.gateway.settings import Settings
 from app.gateway.templates import (
     MEMO_REF,
+    RETURNS_SUBJECT,
+    returns_memo,
+    returns_table,
     with_reference,
+    with_returns,
     FACT_LABELS,
     MEMO_SUBJECT,
     NOT_ELIGIBLE_REASONS,
@@ -86,6 +90,13 @@ from app.gateway.templates import (
 )
 
 log = logging.getLogger("utax.perform")
+
+
+def dollars_of(cents: int) -> int:
+    """Whole dollars, half up (the forms' rounding)."""
+    from app.tax_returns.engine import dollars
+
+    return dollars(Decimal(cents) / 100)
 
 FEE_CACHE_SECONDS = 6 * 3600
 FEE_REFRESH_SECONDS = 5 * 3600  # v1.7 §6f: refreshed before the 6 h TTL, outside the lock
@@ -641,6 +652,8 @@ class Gateway:
 
     ADMIN_ONLY_TYPES = frozenset({"agent.activity"})  # task 42: never on the theater
     ADMIN_EXTRAS = ("sent", "cells")  # task 42: what was really sent / written, admin only
+    # v1.21 (D42): theater readers get only these keys of a form.step
+    THEATER_KEYS = {"form.step": frozenset({"doc", "n", "of", "label"})}
 
     def public_event(self, event: Event, *, admin: bool = False) -> dict[str, Any] | None:
         """An event as theater readers see it (v1.7.1): once QA flags a case as a possible
@@ -651,6 +664,9 @@ class Gateway:
         if not admin and event.type in self.ADMIN_ONLY_TYPES:
             return None
         out = event.public()
+        if not admin and event.type in self.THEATER_KEYS:  # v1.21: no form image, no value
+            keep = self.THEATER_KEYS[event.type]
+            out = {**out, "payload": {k: v for k, v in out["payload"].items() if k in keep}}
         if admin:
             extras = {k: event.private[k] for k in self.ADMIN_EXTRAS
                       if isinstance(event.private, dict) and k in event.private}
@@ -1243,11 +1259,11 @@ class Gateway:
         return subject if re.match(r"(?i)re:", subject) else f"Re: {subject}".strip()
 
     @staticmethod
-    def _memo_subject(case: Case) -> str:
+    def _memo_subject(case: Case, fallback: str = MEMO_SUBJECT) -> str:
         """D42 (owner test R1): "Re: <first_subject>" when the client emailed us, so Gmail
         keeps the memo in their thread; MEMO_SUBJECT otherwise (a /talk case). The public
         memo.sent payload keeps MEMO_SUBJECT: the client's own subject stays private."""
-        return Gateway._re(case) if case.first_subject else MEMO_SUBJECT
+        return Gateway._re(case) if case.first_subject else fallback
 
     @staticmethod
     def _thread(case: Case) -> str | None:
@@ -2386,18 +2402,38 @@ class Gateway:
         if not isinstance(quotes, dict) or not all(isinstance(k, str) and isinstance(v, str)
                                                     for k, v in quotes.items()):
             raise Refused("bad_input", "quotes must map fact names to verbatim spans")
-        unknown = set(quotes) - set(intake.NUMERIC) - set(intake.BOOLEAN)
+        unknown = set(quotes) - set(intake.NUMERIC) - set(intake.BOOLEAN) \
+            - set(intake.INCOME_FACTS)
         if unknown:
             raise Refused("bad_input", f"unknown facts: {sorted(unknown)}")
         inc = _bool(args, "incorporated_delaware")
         foreign = _bool(args, "foreign_owner_25")
-        if inc is False:
+        services = self._services(args, quotes, inc)
+        if inc is False and "de_franchise" in services:
             raise Refused("not_eligible", "not a Delaware corporation: call mark_not_eligible")
+        income = {"entity_type": _str(args, "entity_type", required=False, max_len=60),
+                  "state": _str(args, "state", required=False, max_len=20),
+                  **{b: _bool(args, b) for b in intake.INCOME_BOOLEAN}}
         digest = _digest({"q": quotes, "inc": inc, "f": foreign, "t": len(case.texts),
-                          "r": case.reopens})
+                          "r": case.reopens,
+                          # D42: a Delaware-only call keeps the digest it always had
+                          **({"s": services, "i": income} if services != ["de_franchise"]
+                             else {})})
         texts = self._fact_texts(case)
-        check = intake.check_facts(quotes=quotes, incorporated_delaware=inc,
-                                   foreign_owner_25=foreign, texts=texts)
+        if "de_franchise" in services:
+            check = intake.check_facts(quotes=quotes, incorporated_delaware=inc,
+                                       foreign_owner_25=foreign, texts=texts)
+        else:  # D42: income tax only (a C-corp based anywhere): no franchise facts
+            check = intake.FactCheck()
+        if "income_tax" in services:  # D42 §T1: the union of the services' facts
+            more = intake.check_income_facts(
+                quotes=quotes, entity_type=income["entity_type"], state=income["state"],
+                booleans={b: income[b] for b in intake.INCOME_BOOLEAN}, texts=texts)
+            check.missing += [m for m in more.missing if m not in check.missing]
+            check.problems += more.problems
+            check.facts.update(more.facts)
+            check.quotes.update(more.quotes)
+            check.facts["services"] = services
         if not check.ok:
             self._emit([NewEvent(type="facts.missing", actor="intake", case_id=case.case_id,
                                  provider="local",
@@ -2448,6 +2484,23 @@ class Gateway:
             events.append(self._status(case, "READY"))
         self._emit(events)
         return {"facts": check.facts, "assumed": check.assumed, "next": "compute_tax"}
+
+    @staticmethod
+    def _services(args: dict, quotes: dict, inc: bool | None) -> list[str]:
+        """D42 §T1: which services this case gets (v1.21 `services[]`). Default: the
+        Delaware franchise tax, plus the income tax when the call carries an income-tax
+        fact; a company not incorporated in Delaware gets only the income tax."""
+        raw = args.get("services")
+        if raw is None:
+            wants = any((quotes.get(f) or "").strip() for f in intake.INCOME_FACTS) or any(
+                args.get(f) not in (None, "") for f in intake.INCOME_TEXT)
+            if not wants:
+                return ["de_franchise"]
+            return ["income_tax"] if inc is False else ["de_franchise", "income_tax"]
+        if not isinstance(raw, list) or not raw or not all(
+                isinstance(x, str) and x in intake.SERVICES for x in raw):
+            raise Refused("bad_input", f"services must list some of {list(intake.SERVICES)}")
+        return [x for x in intake.SERVICES if x in raw]
 
     def _ask_client(self, args: dict) -> dict:
         case = self._case(args)
@@ -3010,22 +3063,84 @@ class Gateway:
     def _compute_tax(self, args: dict) -> dict:
         case = self._case(args)
         key = f"tax:{case.case_id}:v{case.facts_version}r{case.reopens}"
-        done = self._done_from(key)
+        done = self._done_from(key) or self._done_from(f"{key}:summary")
         if done is not None:
             return {"result": done.payload, "duplicate": True}
         self._require_status(case, "READY")
         if not case.facts:
             raise Refused("no_facts", "extract_facts first")
-        fee = self._fee()
-        try:
-            payload = self._engine_result(case.facts, fee)
-        except EngineError as err:
-            self._block(case, f"engine refused the facts: {err}")
-            raise ToolError("engine_error", str(err)) from err
-        self._emit([NewEvent(type="tax.computed", actor="tax", case_id=case.case_id,
-                             provider="local", payload=payload, idempotency_key=key),
-                    self._status(case, "COMPUTED")])
-        return {"result": payload, "next": "qa_check"}
+        payload = None
+        computed = []
+        if self._de_franchise(case):
+            fee = self._fee()
+            try:
+                payload = self._engine_result(case.facts, fee)
+            except EngineError as err:
+                self._block(case, f"engine refused the facts: {err}")
+                raise ToolError("engine_error", str(err)) from err
+            computed = [NewEvent(type="tax.computed", actor="tax", case_id=case.case_id,
+                                 provider="local", payload=payload, idempotency_key=key)]
+        returns = self._returns_events(case, key, payload)
+        self._emit([*computed, *returns, self._status(case, "COMPUTED")])
+        if not returns:
+            return {"result": payload, "next": "qa_check"}
+        rows = [e.payload for e in returns if e.type == "tax.return_computed"]
+        review = [f"{r['jurisdiction']}: {r['steps'][-1]}" for r in rows
+                  if r["status"] == "human_review"]
+        if review:  # outside the engine's scope: a person prepares it
+            self._block(case, "a person prepares this: " + "; ".join(review))
+            return {"result": payload, "returns": rows, "blocked": review,
+                    "next": "firm_brief"}
+        return {"result": payload, "returns": rows,
+                "total_usd": returns[-1].payload["total_usd"], "next": "qa_check"}
+
+    @staticmethod
+    def _income_tax(case: Case) -> bool:
+        return "income_tax" in ((case.facts or {}).get("services") or ())
+
+    @staticmethod
+    def _de_franchise(case: Case) -> bool:
+        """Every case before D42 (no services in its facts) is a franchise-tax case."""
+        return "de_franchise" in ((case.facts or {}).get("services") or ("de_franchise",))
+
+    def _returns(self, case: Case):
+        """D42: the income-tax engine on the stored facts (pure; QA calls it again)."""
+        from app.tax_returns.engine import compute_returns
+
+        return compute_returns(intake.engine_facts(case.facts or {}))
+
+    @staticmethod
+    def _de_total_usd(result: dict | None) -> int:
+        """The franchise tax total in whole dollars (it is in the memo's table and the
+        summary's total); its own figures stay in tax.computed."""
+        return dollars_of(result["total_cents"]) if result else 0
+
+    def _returns_events(self, case: Case, key: str, de_result: dict | None) -> list[NewEvent]:
+        """D42 §T1: one tax.return_computed per income-tax result (federal, the state), then
+        tax.summary, whose total also counts the Delaware franchise tax when computed.
+        DRAFT estimates, never filed."""
+        if not self._income_tax(case):
+            return []
+        r = self._returns(case)
+        rows = [{"jurisdiction": x.jurisdiction, "tax": x.tax, "form": x.form, "due": x.due,
+                 "amount_usd": x.amount, "status": x.status, "steps": list(x.steps),
+                 "source": x.source} for x in r.results]
+        if r.missing:  # can't happen after extract_facts; a person looks if it does
+            rows = [{"jurisdiction": "Federal", "tax": "income tax", "form": None, "due": None,
+                     "amount_usd": 0, "status": "human_review",
+                     "steps": [f"missing facts: {', '.join(r.missing)}"], "source": ""}]
+        events = [NewEvent(type="tax.return_computed", actor="tax", case_id=case.case_id,
+                           provider="local", payload=row, idempotency_key=f"{key}:ret{i}")
+                  for i, row in enumerate(rows)]
+        total = sum(x["amount_usd"] for x in rows if x["status"] != "human_review") \
+            + self._de_total_usd(de_result)
+        events.append(NewEvent(
+            type="tax.summary", actor="tax", case_id=case.case_id, provider="local",
+            payload={"total_usd": total, "assumptions": list(r.assumptions) or [
+                "This is an estimate for review, drafted on the 2025 forms. It is not a "
+                "filed return."]},
+            idempotency_key=f"{key}:summary"))
+        return events
 
     def _qa_check(self, args: dict) -> dict:
         case = self._case(args)
@@ -3038,41 +3153,50 @@ class Gateway:
         texts = self._fact_texts(case)
         checks: list[dict] = []
         quote_problem = False
-        for fact in ("authorized_shares", "issued_shares", "gross_assets", "stated_par"):
-            if fact == "stated_par" and fact not in case.quotes:
-                continue
-            quote = case.quotes.get(fact, "")
-            fact_key = "gross_assets_cents" if fact == "gross_assets" else fact
-            stored = case.facts.get(fact_key)
-            ok, note = True, "quote found verbatim"
-            if not intake.quote_found(quote, texts):
-                ok, note = False, "quote not found in the client's message"
-            else:
-                try:
-                    parsed = intake._parse_fact(fact, quote)
-                    if fact == "stated_par":
-                        ok = Decimal(str(parsed)) == Decimal(str(stored))
-                    else:
-                        ok = parsed == stored
-                    if not ok:
-                        note = "quote parses to a different number"
-                    elif fact != "stated_par" and not intake.matches_mentions(
-                            fact, Decimal(parsed) / (100 if fact == "gross_assets" else 1),
-                            texts):
-                        ok, note = False, "number isn't the one the client wrote for it"
-                except EngineError:
-                    ok, note = False, "quote no longer parses"
-            quote_problem |= not ok
-            checks.append({"field": fact, "ok": ok, "note": note})
-        try:
-            fee = FeeQuote(case.result["annual_report_fee_cents"], case.result["fee_source"])
-            rerun = self._engine_result(case.facts, fee)
-            same = rerun == case.result
-            checks.append({"field": "total", "ok": same,
-                           "note": "engine re-run matches" if same else "engine re-run differs"})
-        except EngineError as err:
-            same = False
-            checks.append({"field": "total", "ok": False, "note": f"engine refused: {err}"})
+        same = True
+        if self._de_franchise(case):
+            for fact in ("authorized_shares", "issued_shares", "gross_assets", "stated_par"):
+                if fact == "stated_par" and fact not in case.quotes:
+                    continue
+                quote = case.quotes.get(fact, "")
+                fact_key = "gross_assets_cents" if fact == "gross_assets" else fact
+                stored = case.facts.get(fact_key)
+                ok, note = True, "quote found verbatim"
+                if not intake.quote_found(quote, texts):
+                    ok, note = False, "quote not found in the client's message"
+                else:
+                    try:
+                        parsed = intake._parse_fact(fact, quote)
+                        if fact == "stated_par":
+                            ok = Decimal(str(parsed)) == Decimal(str(stored))
+                        else:
+                            ok = parsed == stored
+                        if not ok:
+                            note = "quote parses to a different number"
+                        elif fact != "stated_par" and not intake.matches_mentions(
+                                fact, Decimal(parsed) / (100 if fact == "gross_assets" else 1),
+                                texts):
+                            ok, note = False, "number isn't the one the client wrote for it"
+                    except EngineError:
+                        ok, note = False, "quote no longer parses"
+                quote_problem |= not ok
+                checks.append({"field": fact, "ok": ok, "note": note})
+            try:
+                fee = FeeQuote(case.result["annual_report_fee_cents"], case.result["fee_source"])
+                rerun = self._engine_result(case.facts, fee)
+                same = rerun == case.result
+                checks.append({"field": "total", "ok": same,
+                               "note": "engine re-run matches" if same else "engine re-run differs"})
+            except EngineError as err:
+                same = False
+                checks.append({"field": "total", "ok": False, "note": f"engine refused: {err}"})
+        if self._income_tax(case):  # D42 §T1: the four income-tax checks
+            more, bad_quote = self._income_checks(case, texts)
+            checks += more
+            quote_problem |= bad_quote
+            same = same and all(c["ok"] for c in more if c["field"] not in intake.INCOME_MONEY
+                                and c["field"] not in intake.INCOME_TEXT
+                                and c["field"] not in intake.INCOME_BOOLEAN)
         if case.unrealistic:
             checks.append({"field": "inputs", "ok": False,
                            "note": "unrealistic: " + ", ".join(case.unrealistic) + " (human review)"})
@@ -3114,6 +3238,69 @@ class Gateway:
                              key=f"ceo:blocked:{written[0].id}")
         return {"passed": False, "checks": checks,
                 "next": "ask_client" if reask else "firm_brief"}
+
+    def _income_checks(self, case: Case, texts: list[str]) -> tuple[list[dict], bool]:
+        """D42 §T1: every income-tax fact's quote again, then federal line 30, the 21% tax,
+        each result against a fresh engine run, and the total."""
+        checks: list[dict] = []
+        bad_quote = False
+        facts = case.facts or {}
+        for fact in (*intake.INCOME_MONEY, *intake.INCOME_TEXT, *intake.INCOME_BOOLEAN):
+            stored_key = f"{fact}_cents" if fact in intake.INCOME_MONEY else fact
+            if stored_key not in facts:
+                continue
+            quote = case.quotes.get(fact, "")
+            ok, note = True, "quote found verbatim"
+            if not intake.quote_found(quote, texts):
+                ok, note = False, "quote not found in the client's message"
+            elif fact in intake.INCOME_MONEY:
+                try:
+                    parsed = intake.parse_dollars_to_cents(quote)
+                except EngineError:
+                    parsed = 0 if intake._zero_amount(quote) else None
+                if parsed != facts[stored_key]:
+                    ok, note = False, "quote parses to a different number"
+            bad_quote |= not ok
+            checks.append({"field": fact, "ok": ok, "note": note})
+        stored = {r["jurisdiction"]: r for r in case.returns}
+        try:
+            fresh = self._returns(case)
+            fed = next((r for r in fresh.results if r.jurisdiction == "Federal"), None)
+            ef = intake.engine_facts(facts)
+            from app.tax_returns.engine import dollars
+
+            if fed is not None and fed.lines:
+                line30 = (dollars(ef["gross_receipts"]) - dollars(ef.get("returns_allowances", 0))
+                          - dollars(ef["cost_of_goods"]) + dollars(ef.get("other_income", 0))
+                          - dollars(ef["total_deductions"]))
+                ok = fed.lines["30"] == line30
+                checks.append({"field": "federal_line_30", "ok": ok,
+                               "note": "gross - returns - cogs + other - deductions"
+                                       + ("" if ok else " differs")})
+                tax = dollars(Decimal(max(line30, 0)) * Decimal("0.21"))
+                ok = fed.amount == tax == fed.lines["31"] \
+                    and stored.get("Federal", {}).get("amount_usd") == tax
+                checks.append({"field": "federal_tax", "ok": ok,
+                               "note": "21% of line 30, rounded" + ("" if ok else " differs")})
+            for r in fresh.results:
+                if r.jurisdiction == "Federal":
+                    continue
+                row = stored.get(r.jurisdiction) or {}
+                ok = row.get("amount_usd") == r.amount and row.get("status") == r.status
+                checks.append({"field": "state_amount", "ok": ok,
+                               "note": f"{r.jurisdiction}: engine re-run "
+                                       + ("matches" if ok else "differs")})
+            want = sum(r["amount_usd"] for r in case.returns if r["status"] != "human_review") \
+                + self._de_total_usd(case.result if self._de_franchise(case) else None)
+            got = (case.returns_summary or {}).get("total_usd")
+            ok = got == want and fresh.total == sum(
+                r["amount_usd"] for r in case.returns if r["status"] != "human_review")
+            checks.append({"field": "returns_total", "ok": ok,
+                           "note": "the sum of every tax" + ("" if ok else " differs")})
+        except (KeyError, TypeError, ValueError, ArithmeticError) as err:
+            checks.append({"field": "returns_total", "ok": False,
+                           "note": f"income-tax engine refused: {type(err).__name__}"})
+        return checks, bad_quote
 
     # ------------------------------------------------------------ accounting tools
 
@@ -3316,10 +3503,19 @@ class Gateway:
         if not MEMO_REF.fullmatch(memo_ref or ""):
             raise Refused("template_invalid", "memo_ref must be UTX- plus 8-16 capitals/digits")
         facts = case.facts or {}
+        table = ""
+        if self._income_tax(case) and case.returns_summary:
+            table = returns_table(
+                case.returns, franchise=case.result if self._de_franchise(case) else None,
+                total_usd=case.returns_summary["total_usd"],
+                assumptions=case.returns_summary["assumptions"])
+        if not self._de_franchise(case):
+            return returns_memo(greeting_name=self._greeting(case) if outgoing
+                                else case.masked_name, table=table)
         rnd_known = facts.get("gross_receipts_cents") is not None \
             and facts.get("years_with_receipts") is not None
         try:
-            return self.templates.render("memo", memo_values(
+            return with_returns(self.templates.render("memo", memo_values(
                 masked_name=case.masked_name, result=case.result,
                 form5472=bool(case.result.get("form5472_flag")),
                 rnd=bool(case.result.get("rnd_flag")), rnd_known=rnd_known,
@@ -3327,7 +3523,7 @@ class Gateway:
                 memo_ref=memo_ref,
                 # task 40b: the per-case link only in the client's copy; the masked
                 # memo.sent body (theater, event stream) drops the offer's line
-                payment_link=(payment_url or "") if outgoing else ""))
+                payment_link=(payment_url or "") if outgoing else "")), table)
         except TemplateError as err:
             raise Refused("template_invalid", str(err)) from err
 
@@ -3356,17 +3552,25 @@ class Gateway:
         body = with_reference(self._memo_body(case, memo_ref=memo_ref), memo_ref)  # masked
         outgoing = with_reference(self._memo_body(case, outgoing=True, memo_ref=memo_ref),
                                   memo_ref)  # the mail the client receives
-        summary = (f"{self._first('email')}memo email: {case.masked_name}, "
-                   f"{format_usd(case.result['authorized_method_cents'])} → "
-                   f"{format_usd(case.result['total_cents'])}")
+        if self._de_franchise(case):
+            summary = (f"{self._first('email')}memo email: {case.masked_name}, "
+                       f"{format_usd(case.result['authorized_method_cents'])} → "
+                       f"{format_usd(case.result['total_cents'])}")
+        else:  # D42: income tax only
+            summary = (f"{self._first('email')}memo email: {case.masked_name}, income tax "
+                       f"${(case.returns_summary or {}).get('total_usd', 0):,} (draft)")
+        # the public memo.sent subject: MEMO_SUBJECT, or the income-only one (D42 T2); the
+        # mail itself threads as "Re: <first_subject>" when the client emailed us (M2)
+        subject = MEMO_SUBJECT if self._de_franchise(case) else RETURNS_SUBJECT
+        real_subject = self._memo_subject(case, subject)
         self._gate("email", key, _cap(summary), case.case_id, public=case.priority)
-        payment_url = self._payment_link(case)  # task 40b: after the gate; None = no line
+        payment_url = self._payment_link(case) if self._de_franchise(case) else None  # 40b
         if payment_url:
             outgoing = with_reference(self._memo_body(case, outgoing=True, memo_ref=memo_ref,
                                                       payment_url=payment_url), memo_ref)
         try:
             sent = self._with_retry("memo email", lambda: self.ports.mail.send(
-                OutMail(to=case.reply_to, subject=self._memo_subject(case), body=outgoing,
+                OutMail(to=case.reply_to, subject=real_subject, body=outgoing,
                         bcc=self.settings.mail_qa_bcc or None, attachments=attachments,
                         in_reply_to=self._thread(case)), key))  # D42 M1
         except ToolError as err:
@@ -3378,13 +3582,12 @@ class Gateway:
         self._emit([
             NewEvent(type="memo.sent", actor="acct", case_id=case.case_id,
                      provider=self.ports.mail.provider,
-                     payload={"to_masked": mask_email(case.reply_to), "subject": MEMO_SUBJECT,
+                     payload={"to_masked": mask_email(case.reply_to), "subject": subject,
                               "body": body, "message_id": sent.message_id,
                               "seconds_since_last_fact": seconds, "memo_ref": memo_ref},
                      idempotency_key=key, private={
                          "public": case.priority,
-                         "sent": self._sent(self._memo_subject(case), outgoing,
-                                            case.reply_to)}),
+                         "sent": self._sent(real_subject, outgoing, case.reply_to)}),
             self._status(case, "SENT"),
             NewEvent(type="crm.sync_requested", actor="system", case_id=case.case_id,
                      payload={"object": "deal", "stage": "memo_sent"},
@@ -3397,6 +3600,7 @@ class Gateway:
     # ------------------------------------------------------------------ v1.15 (D35)
 
     DOC_TYPES = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 ".pdf": "application/pdf",  # D42: the draft Form 1120
                  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml"
                           ".document"}
 
@@ -3448,11 +3652,10 @@ class Gateway:
             return {"ok": True, "files": list(case.docs["files"]), "duplicate": True,
                     "next": "send_memo"}
         self._require_status(case, "QA_PASSED", code="qa_gate")
+        de = self._de_franchise(case)
         if case.qa_version != case.facts_version or case.result_version != case.facts_version \
-                or not case.result or not case.facts:
+                or (de and not case.result) or not case.facts:
             raise Refused("qa_gate", "QA ran on older facts; run compute_tax and qa_check again")
-        figures = docs.figures(case.facts, case.result)
-        truth = docs.engine_figures(case.facts, figures.fee_cents)
         folder = self.docs_dir(case.case_id)
         label = case.masked_name
         # the memo version is in the name: a v2 builds new files and never touches v1's
@@ -3482,28 +3685,39 @@ class Gateway:
                                           "pages_or_sheets": docs.shape(path)},
                                  idempotency_key=f"{key}:{doc}:created")])
 
+        failed_by: dict[str, list[str]] = {}
+        files: list[str] = []
         try:
-            checks = docs.build_workpaper(folder / sheet, label, case.facts, case.quotes,
-                                          figures, stepper("workpaper"))
-            created("workpaper", folder / sheet)
-            carry = docs.build_memo(folder / memo, label, figures, stepper("memo"))
-            created("memo", folder / memo)
-            row = docs.append_books(books, case.case_id, self._now().date().isoformat(), label,
-                                    figures)
-            stepper("books")(f"Books: {label}, fee $0, tax saved "
-                             f"{format_usd(max(figures.auth_cents, figures.apv_cents) - figures.tax_cents)}",
-                             docs.row_cells(books, row))
-            created("books", books)
-            failed_by = {"workpaper": docs.verify_workpaper(folder / sheet, checks, truth),
-                         "memo": docs.verify_memo(folder / memo, carry, truth),
-                         "books": docs.verify_books(books, row, figures, truth)}
+            if de:
+                figures = docs.figures(case.facts, case.result)
+                truth = docs.engine_figures(case.facts, figures.fee_cents)
+                checks = docs.build_workpaper(folder / sheet, label, case.facts, case.quotes,
+                                              figures, stepper("workpaper"))
+                created("workpaper", folder / sheet)
+                carry = docs.build_memo(folder / memo, label, figures, stepper("memo"))
+                created("memo", folder / memo)
+                row = docs.append_books(books, case.case_id, self._now().date().isoformat(),
+                                        label, figures)
+                stepper("books")(f"Books: {label}, fee $0, tax saved "
+                                 f"{format_usd(max(figures.auth_cents, figures.apv_cents) - figures.tax_cents)}",
+                                 docs.row_cells(books, row))
+                created("books", books)
+                failed_by = {"workpaper": docs.verify_workpaper(folder / sheet, checks, truth),
+                             "memo": docs.verify_memo(folder / memo, carry, truth),
+                             "books": docs.verify_books(books, row, figures, truth)}
+                files = [sheet, memo]
+            if self._income_tax(case):  # D42 §T2: the draft 1120 and the returns workbook
+                built = self._build_returns(case, key, folder)
+                failed_by.update(built)
+                files += [self._returns_names(case)[d] for d in built]
         except OSError as err:  # a file in use (the books open in Excel), a full disk: retry
             log.warning("documents for %s not written: %s", case.case_id, err)
             raise Refused("docs_unavailable", "a document couldn't be written (is "
                                               "U-Tax_Books.xlsx open?); try again") from err
         except (KeyError, ValueError, TypeError) as err:
             log.warning("documents for %s failed: %s", case.case_id, err)
-            failed_by = {"workpaper": [f"build: {type(err).__name__}"], "memo": [], "books": []}
+            failed_by = {"workpaper" if de else "returns": [f"build: {type(err).__name__}"],
+                         **({"memo": [], "books": []} if de else {})}
         # one doc.verified per document; the case's documents are ready once all three pass
         self._emit([NewEvent(type="doc.verified", actor="acct", case_id=case.case_id,
                              payload={"doc": doc, "ok": not bad, **({"failed": bad} if bad else {})},
@@ -3515,7 +3729,139 @@ class Gateway:
             raise Refused("docs_mismatch", "a figure in the documents doesn't match the "
                                            "engine; the case is BLOCKED for the CEO",
                           {"failed": failed})
-        return {"ok": True, "files": [sheet, memo], "next": "send_memo"}
+        return {"ok": True, "files": files, "next": "send_memo"}
+
+    # ------------------------------------------------------------ D42 §T2
+
+    FORM_PAGES = (0, 2)  # Form 1120 page 1 and page 3 (Schedule J)
+
+    @staticmethod
+    def _returns_names(case: Case) -> dict[str, str]:
+        return {"f1120": f"Form_1120_DRAFT_{case.case_id}.pdf",
+                "returns": f"U-Tax_Returns_{case.case_id}.xlsx"}
+
+    def form_assets_dir(self, case_id: str) -> Path:
+        """The page images of a case's draft 1120 (admin/session readers only)."""
+        return self.settings.data_dir / "assets" / "forms" / case_id
+
+    def form_image(self, case_id: str, name: str) -> Path | None:
+        if not re.fullmatch(r"case_[0-9]{1,6}", case_id or "") or \
+                not re.fullmatch(r"f1120_p[0-9]\.png", name or ""):
+            return None
+        path = self.form_assets_dir(case_id) / name
+        return path if path.is_file() else None
+
+    def _build_returns(self, case: Case, key: str, folder: Path) -> dict[str, list[str]]:
+        """The DRAFT Form 1120 (the official 2025 IRS form, filled; never filed or signed),
+        its page images, and the returns workbook, each with its live events and a check
+        against a fresh engine run. The PDF is the cut line: if the form can't be filled,
+        the workbook still goes out. No EIN, no address ever reaches an event."""
+        from app.tax_returns import form1120, workbook
+
+        logging.getLogger("pypdf").setLevel(logging.ERROR)  # the IRS fonts' CFF warnings
+        names = self._returns_names(case)
+        r = self._returns(case)
+        fed, st = r.results[0], r.results[1]
+        facts = intake.engine_facts(case.facts or {})
+        folder.mkdir(parents=True, exist_ok=True)
+        failed_by: dict[str, list[str]] = {}
+
+        def created(doc: str, path: Path, shape: int) -> None:
+            self._emit([NewEvent(type="doc.created", actor="acct", case_id=case.case_id,
+                                 payload={"doc": doc, "file_name": path.name,
+                                          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                          "pages_or_sheets": shape},
+                                 idempotency_key=f"{key}:{doc}:created")])
+
+        pdf = folder / names["f1120"]
+        try:
+            header = {"name": f"{case.masked_name} (DRAFT, not for filing)",
+                      "state": str(facts["state"]).upper()}
+            steps = form1120.fill(form1120.BLANK, pdf, header, fed.lines)
+            out_dir = self.form_assets_dir(case.case_id)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            for png in form1120.render_pages(pdf, out_dir, pages=self.FORM_PAGES):
+                png.replace(out_dir / f"f1120_{png.stem.rsplit('_', 1)[-1]}.png")
+        except Exception as err:  # noqa: BLE001 - cut line: the workbook still goes out
+            log.warning("draft 1120 for %s not built: %s", case.case_id, err)
+            steps = None
+        if steps is not None:
+            of = len(steps)
+            self._emit([NewEvent(
+                type="form.step", actor="tax", case_id=case.case_id, provider="local",
+                payload={"doc": "f1120", "n": i, "of": of, "key": st_["key"],
+                         "label": st_["label"], "value": st_["value"], "page": st_["page"],
+                         "rect": st_["rect"],
+                         "image": f"/assets/forms/{case.case_id}/f1120_p{st_['page'] + 1}.png"},
+                idempotency_key=f"{key}:f1120:step{i}") for i, st_ in enumerate(steps, start=1)])
+            from pypdf import PdfReader
+
+            created("f1120", pdf, len(PdfReader(str(pdf)).pages))
+            failed_by["f1120"] = self._verify_1120(pdf, fed.lines)
+        book = folder / names["returns"]
+        cells = workbook.build(book, facts, r, case.masked_name)
+        of = len(cells)
+        self._emit([NewEvent(
+            type="sheet.cell", actor="acct", case_id=case.case_id, provider="local",
+            payload={"book": book.name, "n": i, "of": of, "sheet": c["sheet"], "cell": c["cell"],
+                     "label": c["label"], "value": c["value"], "formula": c["formula"]},
+            idempotency_key=f"{key}:returns:cell{i}") for i, c in enumerate(cells, start=1)])
+        created("returns", book, 4)
+        failed_by["returns"] = self._verify_returns_book(book, cells, facts, fed, st, r.total)
+        return failed_by
+
+    @staticmethod
+    def _verify_1120(pdf: Path, lines: dict) -> list[str]:
+        """Read the filled form back: line 30 (f1_47) and line 31 (f1_48)."""
+        from pypdf import PdfReader
+
+        got = {k.rsplit(".", 1)[-1]: v.get("/V")
+               for k, v in (PdfReader(str(pdf)).get_fields() or {}).items()}
+        bad = []
+        for field_name, line in (("f1_47[0]", "30"), ("f1_48[0]", "31")):
+            want = f"{lines[line]:,}" if lines[line] >= 0 else f"({-lines[line]:,})"
+            if got.get(field_name) != want:
+                bad.append(f"line_{line}")
+        return bad
+
+    @staticmethod
+    def _verify_returns_book(book: Path, cells: list[dict], facts: dict, fed, st,
+                             total: int) -> list[str]:
+        """Summary!B6 is the engine's total: the inputs are the facts, every formula is the
+        one we wrote, and the chain from the inputs to B6 gives the engine's numbers."""
+        from openpyxl import load_workbook
+
+        from app.tax_returns.engine import dollars
+
+        wb = load_workbook(book)
+        try:
+            bad = []
+            inp, f, sm = wb["Inputs"], wb["Federal 1120"], wb["Summary"]
+            for cell, fact in (("B5", "gross_receipts"), ("B7", "cost_of_goods"),
+                               ("B9", "total_deductions")):
+                if inp[cell].value != int(facts[fact]):
+                    bad.append(f"inputs_{fact}")
+            g, ret, cogs = inp["B5"].value or 0, inp["B6"].value or 0, inp["B7"].value or 0
+            other, ded = inp["B8"].value or 0, inp["B9"].value or 0
+            line30 = g - ret - cogs + other - ded
+            fed_tax = dollars(Decimal(max(line30, 0)) * Decimal("0.21"))
+            if line30 != fed.lines["30"] or fed_tax != fed.amount:
+                bad.append("federal")
+            if f["B8"].value != "=ROUND(MAX(B7,0)*0.21,0)" or sm["B6"].value != "=SUM(B3:B4)":
+                bad.append("formulas")
+            state_ws = wb[f"State {str(facts['state']).upper()}"]
+            state_cells = [c for c in cells
+                           if c["sheet"] == state_ws.title and c["cell"].startswith("B")]
+            state_amount = state_ws[state_cells[-1]["cell"]].value if state_cells else None
+            if state_amount != st.amount:
+                bad.append("state")
+            b6 = next((c["value"] for c in cells
+                       if c["sheet"] == "Summary" and c["cell"] == "B6"), None)
+            if not (b6 == fed_tax + (state_amount or 0) == total):
+                bad.append("summary_B6")
+            return bad
+        finally:
+            wb.close()
 
     def _phone_check(self, args: dict) -> dict:
         """v1.7: starts a phone run for the latest memo and returns {pending: true}; the
