@@ -29,7 +29,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 
 | File | Sent when | Placeholders |
 |---|---|---|
-| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note`, `payment_link` (D36: the Stripe link for the $49 filing offer; its whole line is dropped when empty) (`masked_name` allowed, unused) |
+| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note`, `payment_link` (D36: the Stripe link for the $49 filing offer; its whole line is dropped when empty, by the gateway once its D36 change lands) (`masked_name` allowed, unused) |
 | `ask-client.md` | `ask_client` | `greeting_name`, `missing_list` (joined fact labels, never `stated_par`), `problems_line` (may be empty) |
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
