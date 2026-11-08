@@ -500,9 +500,7 @@ v1.11.1, event payloads (the frontend's proposal, adopted):
 
 **v1.15 (design D35, documents):**
 
-| Tool | Agent | Input | Effect |
-|---|---|---|---|
-| `prepare_documents` | acct | `{case_id, order_id?}` | Refused unless `QA_PASSED`. The gateway builds the workpaper .xlsx, the memo .docx and a books entry from the engine's result and the extracted facts only. It verifies each file (it re-opens it and checks every figure against the engine) and stores them under `UTAX_DATA_DIR/docs/<case_id>/`. Events: one `doc.step` per build step `{doc: "workpaper"\|"memo"\|"books", step, detail}` (for example "Authorized Shares Method: 10,000,000 shares → $85,165"); then `doc.created {doc, file_name, sha256, pages_or_sheets}`, and `doc.verified {doc, ok}`. It's idempotent per case and memo version. |
+`prepare_documents` (acct, `{case_id, order_id?}`): its §6 table row lands in the same merge as the crew.ts change that seats it (see the backend task 34 brief). Behaviour: refused unless `QA_PASSED`; the gateway builds the workpaper .xlsx, the memo .docx and a books entry from the engine's result and the extracted facts only; it verifies each file, stores them under `UTAX_DATA_DIR/docs/<case_id>/`, and emits `doc.step`, `doc.created` and `doc.verified`; it's idempotent per case and memo version.
 
 `send_memo` (v1.15) attaches the case's verified workpaper and memo (AgentMail attachments), and is refused
 (`docs_missing`) when `prepare_documents` hasn't run for the current memo version. The theater gets

@@ -19,7 +19,11 @@ def outreach_mail(make_harness, **settings):
     slot = h.gw.offered_slots(None)[0]
     r = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": slot}, actor="hr")
     assert r.status == "done", r.error
-    return json.loads(h.outbox()[-1].read_text(encoding="utf-8"))["body"]
+    note = json.loads(h.outbox()[-1].read_text(encoding="utf-8"))["body"]
+    assert "pick a time on my calendar" not in note  # task 32: never a link in email 1
+    h.ok("inject_email", **{"from": "jo@example.com", "inbox": "hiring",
+                            "subject": "Re: gig", "body": "Yes, happy to."})
+    return json.loads(h.outbox()[-1].read_text(encoding="utf-8"))["body"]  # email 2
 
 
 def test_the_booking_link_is_offered_when_set(make_harness):

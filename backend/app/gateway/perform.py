@@ -1178,6 +1178,9 @@ class Gateway:
             self._wake(f"New applicant {candidate_id}")
         elif first_answer:
             self._wake(f"Applicant answered {candidate_id}")  # v1.5: now HR has answers
+        if not new and self.state.candidates.get(candidate_id, {}).get("contacted"):
+            # task 32: the reply to the outreach note books the call and sends the invite
+            self._send_candidate_invite(candidate_id, reply_id=mail.message_id)
         return {"candidate_id": candidate_id, "name_masked": name_masked, "new": new,
                 "questionnaire": questionnaire}
 
@@ -3215,26 +3218,81 @@ class Gateway:
         self._gate("calendar_invite", f"{key}:{start}:call", _cap(
             f"{self._first('calendar_invite')}calendar invite: {label} at {start}"), None)
         self._outreach_intents.put(candidate_id, start)  # before anything leaves
-        body = self.templates.render("hr-outreach", {"slot_time": _when(start),
-                                                     "minutes": str(SLOT_MINUTES),
-                                                     "booking_url": self._booking_line()})
-        # the invite first: the email says it was sent
-        self._with_retry("candidate call", lambda: self.ports.calendar.book(
-            Slot(start=start, minutes=SLOT_MINUTES), cand["reply_to"],
-            "U-Tax: intro call for the memo review gig", f"{key}:call"))
+        # task 32: email 1 is a short personal note proposing the time (no invite, no link:
+        # those send it to spam); the candidate's reply books the call (email 2)
+        body = self.templates.render("hr-outreach-note", {
+            "greeting_name": self._candidate_greeting(cand), "slot_time": _when(start),
+            "minutes": str(SLOT_MINUTES)})
         self._with_retry("outreach email", lambda: self.ports.mail.send(
-            OutMail(to=cand["reply_to"], subject="U-Tax: a paid 1-hour review gig", body=body,
+            OutMail(to=cand["reply_to"], subject="A paid 1-hour review gig?", body=body,
                     inbox="hiring"), key))
         self._emit([
             NewEvent(type="hr.outreach", actor="hr", provider=self.ports.mail.provider,
                      payload={"candidate_id": candidate_id, "label": label, "slot": start},
                      idempotency_key=key),
-            NewEvent(type="call.booked", actor="hr", provider=self.ports.calendar.provider,
-                     payload={"start": start, "minutes": SLOT_MINUTES,
-                              "invitee_masked": label, "kind": "candidate"},
-                     idempotency_key=f"{key}:call"),
         ])
-        return {"candidate_id": candidate_id, "label": label, "slot": start}
+        return {"candidate_id": candidate_id, "label": label, "slot": start,
+                "next": "the invite goes out when they reply"}
+
+    def _candidate_greeting(self, cand: dict) -> str:
+        """Task 32: the first name from HR_CANDIDATES ("Jane Roe <jane@...>": "Jane"), the
+        consented list's own words; "there" for anyone else."""
+        from email.utils import getaddresses
+
+        for name, address in getaddresses([self.settings.hr_candidates or ""]):
+            if address.strip().lower() == cand.get("sender_key") and name.strip():
+                return _form_greeting(name.split()[0])
+        return "there"
+
+    def _send_candidate_invite(self, candidate_id: str, reply_id: str | None = None) -> str:
+        """Task 32: a contacted candidate replied: book the intro call (the slot held at the
+        outreach if it is still ahead, else the first one offered) and send email 2 with
+        the invite and the booking link, in their thread. Once."""
+        cand = self.state.candidates[candidate_id]
+        key = f"hr_outreach:{candidate_id}:call"
+        if self._done_from(key) is not None:
+            return "sent"
+        start = cand.get("contacted")
+        soon = self._now() + timedelta(minutes=30)
+        if not start or parse_ts(start) < soon:
+            offered = self.offered_slots(None)
+            if not offered:
+                return "no_slot"
+            start = offered[0]
+        label = cand["name_masked"]
+        try:  # the CEO approved this invite with the outreach (same slot, same key)
+            self._gate("calendar_invite", f"hr_outreach:{candidate_id}:{start}:call", _cap(
+                f"{self._first('calendar_invite')}calendar invite: {label} at {start}"), None)
+        except NeedsApproval:
+            return "needs_approval"
+        except Refused as err:
+            return err.code
+        body = self.templates.render("hr-outreach-invite", {
+            "greeting_name": self._candidate_greeting(cand), "slot_time": _when(start),
+            "minutes": str(SLOT_MINUTES), "booking_url": self._booking_line()})
+        try:
+            self._with_retry("candidate call", lambda: self.ports.calendar.book(
+                Slot(start=start, minutes=SLOT_MINUTES), cand["reply_to"],
+                "U-Tax: intro call for the memo review gig", key))
+            self._with_retry("invite email", lambda: self.ports.mail.send(
+                OutMail(to=cand["reply_to"], subject="Re: A paid 1-hour review gig?",
+                        body=body, in_reply_to=reply_id, inbox="hiring"), f"{key}:mail"))
+        except ToolError as err:
+            log.warning("candidate invite for %s failed: %s", candidate_id, err)
+            return "failed"
+        self._emit([NewEvent(type="call.booked", actor="hr", provider=self.ports.calendar.provider,
+                             payload={"start": start, "minutes": SLOT_MINUTES,
+                                      "invitee_masked": label, "kind": "candidate"},
+                             idempotency_key=key)])
+        return "sent"
+
+    def retry_candidate_invites(self) -> list[str]:
+        """Task 32: invites waiting on the CEO's OK (or a failed send): the tick retries."""
+        with self._lock:
+            todo = [cid for cid, c in sorted(self.state.candidates.items())
+                    if c.get("replied") and c.get("contacted")
+                    and self._done_from(f"hr_outreach:{cid}:call") is None]
+            return [cid for cid in todo if self._send_candidate_invite(cid) == "sent"]
 
     FOLLOW_UP_STATUSES = {"memo_check": ("SENT", "CALL_BOOKED"),
                           "missing_facts": ("INTAKE_PENDING", "STALLED"),

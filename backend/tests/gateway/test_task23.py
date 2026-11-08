@@ -151,17 +151,28 @@ def test_hr_outreach_emails_a_consented_candidate_and_books_the_call(h):
                         actor="hr").data["offered_slots"][0]
     r = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": slot}, actor="hr")
     assert r.status == "done", r.error
-    [mail] = [json.loads(p.read_text(encoding="utf-8")) for p in h.outbox()]
-    assert mail["to"] == "jane.roe@example.com" and "calendar invite" in mail["body"]
+    [note] = [json.loads(p.read_text(encoding="utf-8")) for p in h.outbox()]
+    # task 32: email 1 is a plain personal note: first name, no invite, no link
+    assert note["to"] == "jane.roe@example.com" and note["body"].startswith("Hi Jane,")
+    assert "reply" in note["body"] and "http" not in note["body"]
+    assert not h.events("call.booked")
     assert h.events("hr.outreach")[-1].payload == {"candidate_id": "cand_1",
                                                    "label": "Candidate A", "slot": slot}
-    call = h.events("call.booked")[-1]
-    assert call.case_id is None and call.payload["kind"] == "candidate"
-    assert call.payload["invitee_masked"] == "Candidate A"
     assert slot not in h.gw.offered_slots(None)  # held for everyone now
     assert h.gw.state.public()["hiring"]["contacted"] == 1
     again = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": slot}, actor="hr")
     assert again.data["duplicate"] is True and len(h.outbox()) == 1
+    # the reply books the call and sends email 2 with the invite, in their thread
+    h.ok("inject_email", **{"from": "jane.roe@example.com", "inbox": "hiring",
+                            "subject": "Re: A paid 1-hour review gig?", "body": "Sure, works."})
+    invite = json.loads(h.outbox()[-1].read_text(encoding="utf-8"))
+    assert len(h.outbox()) == 2 and "calendar invite" in invite["body"]
+    call = h.events("call.booked")[-1]
+    assert call.case_id is None and call.payload["kind"] == "candidate"
+    assert call.payload["invitee_masked"] == "Candidate A" and call.payload["start"] == slot
+    h.ok("inject_email", **{"from": "jane.roe@example.com", "inbox": "hiring",
+                            "subject": "Re: again", "body": "See you then."})
+    assert len(h.outbox()) == 2 and len(h.events("call.booked")) == 1  # once
 
 
 def test_hr_outreach_refuses_a_lead_and_an_unoffered_slot(h):
@@ -257,19 +268,19 @@ def test_a_failed_outreach_retry_keeps_its_slot_and_mails_once(h, monkeypatch):
 
     auto_email(h)
     first, second = h.gw.offered_slots(None)[:2]
-    real = h.gw.ports.calendar.book
+    real = h.gw.ports.mail.send
 
     def down(*a, **k):
-        raise Unavailable("calendar down")
+        raise Unavailable("mail down")
 
-    monkeypatch.setattr(h.gw.ports.calendar, "book", down)
+    monkeypatch.setattr(h.gw.ports.mail, "send", down)
     r = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": first}, actor="hr")
-    assert r.status == "error" and h.outbox() == []  # the invite failed first: no mail
+    assert r.status == "error" and h.outbox() == []  # the note failed: nothing sent
     assert first not in h.gw.offered_slots(None)  # held while it's under way
     other = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": second},
                          actor="hr")
     assert other.error["code"] == "slot_bound" and other.data["slot"] == first
-    monkeypatch.setattr(h.gw.ports.calendar, "book", real)
+    monkeypatch.setattr(h.gw.ports.mail, "send", real)
     again = h.gw.perform("hr_outreach", {"candidate_id": "cand_1", "slot": first}, actor="hr")
     assert again.status == "done" and len(h.outbox()) == 1  # one mail, for that slot
 
