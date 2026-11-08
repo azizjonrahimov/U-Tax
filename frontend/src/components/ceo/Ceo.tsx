@@ -44,6 +44,7 @@ import { announceAgentAudio, CeoVoice, type VoiceSlots } from "./CeoVoice";
 import { logout, useSessionToken, writeSession } from "@/ceo/session";
 import { foldOrders, taskChip, type OrderCard, type TaskStatus } from "@/ceo/orders";
 import { CaseList } from "./CaseList";
+import { Payments } from "./Payments";
 import { useConsoleLock } from "@/ceo/popout";
 import { current, emptyCaseDocs, stepCaseDocs, type CaseDocs } from "@/office/artifact";
 import { SEAT_NAME, SEATS } from "@/office/workspace";
@@ -1292,6 +1293,8 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
               </div>
             </section>
           )}
+          {/* D41 F50.3: the last payments, under the money card (hidden when the ledger can't be read). */}
+          <Payments token={token} tick={activity[0]?.id ?? 0} />
         </aside>
       </div>
     );
