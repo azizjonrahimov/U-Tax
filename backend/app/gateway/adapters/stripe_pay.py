@@ -139,8 +139,11 @@ class StripePay:
         cents = max(50, int((usd * 100).to_integral_value(ROUND_HALF_UP)))  # card minimum $0.50
         body = self._post("/v1/payment_intents", {
             "amount": str(cents), "currency": "usd",
-            "payment_method": "pm_card_visa", "payment_method_types[]": "card",
-            "confirm": "true",
+            # B53b: the account's API version refuses payment_method_types; automatic
+            # methods without redirects confirm the test card server-side
+            "payment_method": "pm_card_visa", "confirm": "true",
+            "automatic_payment_methods[enabled]": "true",
+            "automatic_payment_methods[allow_redirects]": "never",
             "description": f"U-Tax paid {contractor} for {job_id}: MIRROR of Tempo testnet "
                            f"tx {tx_hash[:10]}…",
             "metadata[utax_kind]": self.MIRROR_KIND, "metadata[job_id]": job_id,
