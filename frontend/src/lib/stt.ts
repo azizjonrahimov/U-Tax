@@ -220,6 +220,8 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
     onend: (() => void) | null = null;
     onerror: ((e: { error: string }) => void) | null = null;
     onmicclosed: (() => void) | null = null;
+    /** D41 F47: an utterance's onset (the level gate's "start"), like the browser recognizer's own onspeechstart. */
+    onspeechstart: (() => void) | null = null;
     private stream: MediaStream | null = null;
     private ctx: AudioContext | null = null;
     private timer: ReturnType<typeof setInterval> | null = null;
@@ -294,6 +296,11 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
             // The older recorder (with its pre-roll) is this utterance's clip; the newer one goes.
             this.heardSpeech = true;
             this.dropSpare();
+            try {
+              this.onspeechstart?.();
+            } catch {
+              /* a listener's error never stops the recorder */
+            }
           } else if (t === "end") this.cut(false);
           else if (this.gate.speaking && this.clip && now - this.clip.at >= CLIP_MAX_MS) this.cut(false, true);
           else if (!this.gate.speaking) this.rotate(now);

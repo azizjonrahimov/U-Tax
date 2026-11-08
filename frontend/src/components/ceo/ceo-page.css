@@ -312,3 +312,5 @@
 .cx .pay-chip{align-self:flex-start;font:11px var(--mono);color:var(--dim);border:1px solid var(--line-2);border-radius:6px;padding:1px 6px}
 .cx .pay-open{align-self:flex-start;font:12px var(--mono);color:var(--lime);text-decoration:none}
 .cx .pay-open:hover{text-decoration:underline}
+/* D41 F47: the read-back waits for the CEO to finish */
+.cx .voice .waiting-more{color:var(--lime);font:12px var(--mono)}
