@@ -509,7 +509,13 @@ the tool names, kinds and args are fixed here:
     one utterance ≤ 30 s. → `200 {"text": "..."}`.
   - `purpose: "ceo"` needs the admin bearer. `purpose: "talk"` is public: /talk's Send per-IP limits in
     their own bucket, plus `STT_PUBLIC_SECONDS_PER_DAY` (default 7200) across all visitors.
-  - `seconds` is the recording's length; when it's missing, 30 is held and booked.
+  - `seconds` is the recording's length. The gateway holds and books max(`seconds`, its own floor from the audio
+    bytes), at most 30 s; a missing `seconds` holds 30 (v1.18.4, task 45).
+    - The floor is a WAV's header length, else the bytes at the type's lowest bitrate: 6 kbps for webm/ogg,
+      8 kbps for mp4/m4a/mpeg, 64 kbps for flac.
+    - A duration the provider measures wins when the provider reports one.
+    - Record at about 8 kbps opus (MediaRecorder `audioBitsPerSecond: 8000`) so honest clips book close to their
+      length.
   - Errors: `400 bad_input`, `401`, `413 too_large`, `415 bad_input` (not audio), `429 rate_limited`, and
     `503 voice_unavailable` (no STT, no key, the spend cap, or an outage: use the browser recognizer).
   - Booked as `cost.booked`, model `stt:<purpose>:<model>`, seconds in `tokens_in`, estimated.
@@ -794,6 +800,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.18.4 (2026-11-08, task 45): /api/stt books max(declared, a byte floor).
 
 - v1.18.3 (2026-11-08, task 44): xlsx cells literal (no formula injection).
 

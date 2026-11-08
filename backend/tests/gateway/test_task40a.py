@@ -20,6 +20,10 @@ ADMIN = "admin-" + "a" * 30
 AUTH = {"Authorization": f"Bearer {ADMIN}"}
 WEBM = {"Content-Type": "audio/webm"}
 AUDIO = b"\x1aE\xdf\xa3" + b"\x00" * 4000
+# task 45: a clip's bytes bound its booked length (6 kbps webm floor): 2,000 bytes is
+# at most 2.7 s, so an honest 3.4 s declaration stands
+SHORT = b"\x1aE\xdf\xa3" + b"\x00" * 1996
+TINY = b"\x1aE\xdf\xa3" + b"\x00" * 596  # 0.8 s
 
 
 def _field(body: bytes, name: str) -> str | None:
@@ -182,7 +186,7 @@ def test_the_mint_uses_the_realtime_port_not_the_tts_one(make_harness, tmp_path)
 
 
 def test_talk_transcribes_and_books_the_seconds(h, c):
-    out = stt(c, seconds=3.4)
+    out = stt(c, seconds=3.4, body=SHORT)
     assert out.status_code == 200 and out.json() == {"text": "We're a Delaware C-corp."}
     [booked] = stt_bookings(h)
     assert booked.provider == "openai" and booked.payload["model"] == \
@@ -262,7 +266,8 @@ def test_the_spend_cap_stops_stt(make_harness):
 
 
 def test_talk_uses_its_own_per_ip_bucket(h, c):
-    codes = [stt(c, seconds=1).status_code for _ in range(31)]  # 31 s: inside the budget
+    codes = [stt(c, seconds=1, body=TINY).status_code
+             for _ in range(31)]  # 31 s: inside the budget
     assert codes[:30] == [200] * 30 and codes[30] == 429  # SEND_LIMITS: 30 a minute per IP
 
 
