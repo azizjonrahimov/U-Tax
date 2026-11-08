@@ -1,6 +1,8 @@
-# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 08:42 local · D41 live; D42 building; FREEZE 10:30 (owner); hacking ends 11:00
+# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 09:15 local · D41 + D42 ALL MERGED + LIVE; freeze 10:30; hacking ends 11:00
 
 ## Needs you
+
+- NOW: M5/R1 the email test from a NON-CEO Gmail to utax-clients@agentmail.to (text in chat). R3: the landing on your laptop vs acts.png. R4: /ceo + /office emblem/orb/glass/Doto. R2 after R1: the autopilot with Naïve stopped. Stripe Test-mode Payments: 3× $0.50 MIRROR. The "Hide" click on /office.
 
 Captain (naive-yc-hackathon-99)
 - A (before 09:30, 5 min): the §D.4 email round trip from your personal Gmail (I'll send the address and the exact text when B51 lands).
