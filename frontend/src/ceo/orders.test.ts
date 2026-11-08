@@ -40,3 +40,12 @@ describe("order cards", () => {
     expect(many[0].text).toBe("order 6");
   });
 });
+
+describe("orders the D34 assistant placed", () => {
+  it("get a card too (actor ceo_assistant, speaker ceo)", () => {
+    const order = ev("voice.command", { text: "post the hiring ad", speaker: "ceo" }, { actor: "ceo_assistant" as UTaxEvent["actor"] });
+    const cards = foldOrders([], [order, ev("tool.called", { tool: "make_ad", status: "done", order_id: `order_${order.id}` }, { actor: "mkt" })], ctx);
+    expect(cards).toHaveLength(1);
+    expect(cards[0].steps).toHaveLength(1);
+  });
+});

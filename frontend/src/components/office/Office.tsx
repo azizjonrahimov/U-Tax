@@ -11,7 +11,7 @@ import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
 import { logout, useSessionToken } from "@/ceo/session";
-import { popOut, usePopoutOpen } from "@/ceo/popout";
+import { canPopOut, popOut } from "@/ceo/popout";
 import { Ceo } from "@/components/ceo/Ceo";
 import { followDelay, followTarget, initialView, type View } from "@/office/follow";
 import { ARTIFACT_MS, current, DRAFT_MS, type Desk } from "@/office/artifact";
@@ -29,9 +29,9 @@ export function Office() {
   const session = useSessionToken();
   const { office, numbers, status, live, studio } = useFirmFeed(session);
   const theater = useMemo(() => <Theater />, []);
-  /** D33: the CEO console as a panel on the right (signed in), unless it is popped out into its own window. */
-  const popped = usePopoutOpen();
-  const [panelOpen, setPanelOpen] = useState(true);
+  /** D33: the CEO console as a panel on the right (signed in). Nothing mounts until the viewer's layout is read. */
+  const [panelReady, setPanelReady] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [panelW, setPanelW] = useState(PANEL_W);
   const [view, setView] = useState<View>("overview");
   const [follow, setFollow] = useState(true);
@@ -49,10 +49,10 @@ export function Office() {
       if (!init.follow) setFollow(false);
       if (init.view !== "overview") setView(init.view);
       const saved = readPanel();
-      if (saved) {
-        setPanelOpen(saved.open);
-        setPanelW(saved.width);
-      }
+      // First visit: open on a wide screen only (the theater needs the room on a laptop).
+      setPanelOpen(saved ? saved.open : window.innerWidth >= 1600);
+      if (saved) setPanelW(saved.width);
+      setPanelReady(true);
     }, 0);
     const tick = setInterval(() => setNow(Date.now()), 4000);
     return () => {
@@ -166,11 +166,10 @@ export function Office() {
           <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} />
         )}
       </div>
-      {session && (
+      {session && panelReady && (
         <CeoPanel
           open={panelOpen}
           width={panelW}
-          popped={popped.open}
           onOpen={(o) => {
             setPanelOpen(o);
             savePanel({ open: o, width: panelW });
@@ -179,7 +178,6 @@ export function Office() {
             setPanelW(w);
             if (done) savePanel({ open: panelOpen, width: w });
           }}
-          bringBack={popped.bringBack}
         />
       )}
     </div>
@@ -211,7 +209,12 @@ function savePanel(v: { open: boolean; width: number }) {
   }
 }
 
-function CeoPanel({ open, width, popped, onOpen, onWidth, bringBack }: { open: boolean; width: number; popped: boolean; onOpen: (open: boolean) => void; onWidth: (w: number, done: boolean) => void; bringBack: () => void }) {
+function CeoPanel({ open, width, onOpen, onWidth }: { open: boolean; width: number; onOpen: (open: boolean) => void; onWidth: (w: number, done: boolean) => void }) {
+  /** The console is live in another window (a pop-out, a /ceo tab): the panel shrinks to a notice. */
+  const [elsewhere, setElsewhere] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  // One element for the life of the panel: resizing or the office's clock never re-renders the console.
+  const console_ = useMemo(() => <Ceo variant="panel" onElsewhere={setElsewhere} />, []);
   if (!open) {
     return (
       <aside className="ceo-panel closed" aria-label="CEO console (hidden)">
@@ -243,44 +246,42 @@ function CeoPanel({ open, width, popped, onOpen, onWidth, bringBack }: { open: b
     el.addEventListener("pointercancel", up);
   };
   return (
-    <aside className="ceo-panel" style={{ width }} aria-label="CEO console">
-      <div
-        className="ceo-grip"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize the CEO console"
-        aria-valuemin={PANEL_MIN}
-        aria-valuemax={PANEL_MAX}
-        aria-valuenow={width}
-        tabIndex={0}
-        onPointerDown={drag}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-            e.preventDefault();
-            onWidth(clampW(width + (e.key === "ArrowLeft" ? 24 : -24)), true);
-          }
-        }}
-      />
+    <aside className={`ceo-panel${elsewhere ? " elsewhere" : ""}`} style={elsewhere ? undefined : { width }} aria-label="CEO console">
+      {!elsewhere && (
+        <div
+          className="ceo-grip"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the CEO console"
+          aria-valuemin={PANEL_MIN}
+          aria-valuemax={PANEL_MAX}
+          aria-valuenow={width}
+          tabIndex={0}
+          onPointerDown={drag}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              onWidth(clampW(width + (e.key === "ArrowLeft" ? 24 : -24)), true);
+            }
+          }}
+        />
+      )}
       <div className="ceo-bar">
-        <button className="ghost" onClick={() => popOut()} title="Open the console in its own window">
-          Pop out <span aria-hidden>↗</span>
-        </button>
+        {canPopOut() && (
+          <button className="ghost" onClick={() => setBlocked(!popOut())} title="Open the console in its own window (or bring it to the front)">
+            {elsewhere ? "Show the window" : "Pop out"} <span aria-hidden>↗</span>
+          </button>
+        )}
         <button className="ghost" onClick={() => onOpen(false)} title="Hide the console">
           Hide <span aria-hidden>›</span>
         </button>
       </div>
-      <div className="ceo-body">
-        {popped ? (
-          <div className="popped">
-            <p>The console is open in its own window, so it listens and speaks there.</p>
-            <button className="ghost" onClick={bringBack}>
-              Bring it back here
-            </button>
-          </div>
-        ) : (
-          <Ceo variant="panel" />
-        )}
-      </div>
+      {blocked && (
+        <p className="popped-note" role="alert">
+          Your browser blocked the window. Allow pop-ups for this site, then press Pop out again.
+        </p>
+      )}
+      <div className="ceo-body">{console_}</div>
     </aside>
   );
 }

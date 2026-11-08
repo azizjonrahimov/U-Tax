@@ -1,87 +1,97 @@
 "use client";
 
 // D33: the CEO console lives in /office as a panel, and can pop out into its own window (/ceo).
-// One console at a time: two would mean two ears and two voices answering the CEO. A standalone
-// /ceo window announces itself on BroadcastChannel "utax-ceo" (a beat every 2 s, "bye" when it
-// closes); while one is open, the panel steps aside and offers to bring it back. The session is
-// shared because window.open copies this tab's sessionStorage into the new window.
+// One console at a time, across every window: two would mean two ears and two voices answering
+// the CEO, and a STOP in one wouldn't fence the other's queued words. A console is live only while
+// it holds the Web Lock "utax-ceo-console": the browser frees it the moment a window closes,
+// crashes or navigates away, so no heartbeat (and no timer throttling) decides who is live.
+// - A /ceo window (the pop-out, or a tab the CEO opened) takes the lock over when it opens.
+// - The office panel waits for it; "Use it here" takes it back (a pop-out then closes itself).
+// The session comes along because window.open copies this tab's sessionStorage.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-export const CEO_CHANNEL = "utax-ceo";
 export const POPOUT_NAME = "utax-ceo";
-const BEAT_MS = 2000;
-/** No beat for this long: the pop-out is gone (it crashed, or the browser killed it). */
-const GONE_MS = 6000;
+const LOCK = "utax-ceo-console";
 
-type Msg = { type: "open" | "bye" | "ping" | "close" };
-const isMsg = (v: unknown): v is Msg => typeof v === "object" && v !== null && ["open", "bye", "ping", "close"].includes((v as Msg).type);
+/** "live": this console runs; "elsewhere": another window has it; "unsupported": no Web Locks (always live). */
+export type ConsoleState = "waiting" | "live" | "elsewhere" | "unsupported";
 
-/** A standalone console: tell the office it's open, and close when the panel takes it back. */
-export function usePopoutBeacon(active: boolean) {
+const locksApi = (): LockManager | undefined => (typeof navigator !== "undefined" && "locks" in navigator ? navigator.locks : undefined);
+export const canPopOut = () => !!locksApi();
+
+/**
+ * Hold the console lock while `enabled` (signed in). `takeOver`: take it on mount (a /ceo window);
+ * otherwise wait for it (the panel). `take()` takes it over now.
+ */
+export function useConsoleLock(enabled: boolean, takeOver: boolean): { state: ConsoleState; take: () => void } {
+  const [state, setState] = useState<ConsoleState>("waiting");
+  const takeRef = useRef<() => void>(() => {});
   useEffect(() => {
-    if (!active || typeof BroadcastChannel === "undefined") return;
-    const bc = new BroadcastChannel(CEO_CHANNEL);
-    const say = (type: Msg["type"]) => bc.postMessage({ type });
-    say("open");
-    const beat = setInterval(() => say("open"), BEAT_MS);
-    bc.onmessage = (e) => {
-      if (!isMsg(e.data)) return;
-      if (e.data.type === "ping") say("open");
-      // Only a window this console's panel opened closes itself; a tab the CEO opened just stays.
-      if (e.data.type === "close" && window.name === POPOUT_NAME) window.close();
+    if (!enabled) return;
+    const locks = locksApi();
+    if (!locks) {
+      const t = setTimeout(() => setState("unsupported"), 0);
+      return () => clearTimeout(t);
+    }
+    let alive = true;
+    let release: (() => void) | null = null;
+    let waiting: AbortController | null = null;
+    const hold = (steal: boolean) => {
+      waiting?.abort();
+      const ac = new AbortController();
+      waiting = steal ? null : ac;
+      locks
+        .request(LOCK, steal ? { steal: true } : { signal: ac.signal }, () => {
+          if (!alive) return;
+          waiting = null;
+          setState("live");
+          return new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        })
+        .catch(() => {
+          // Taken over by another window (or our own wait was cancelled): wait for it again.
+          release = null;
+          if (!alive || ac.signal.aborted) return;
+          setState("elsewhere");
+          if (!takeOverSelfClose()) hold(false);
+        });
     };
-    const bye = () => say("bye");
-    window.addEventListener("pagehide", bye);
+    takeRef.current = () => hold(true);
+    hold(takeOver);
+    // Still waiting a moment later: another window has it.
+    const t = setTimeout(() => alive && waiting && setState((s) => (s === "waiting" ? "elsewhere" : s)), 400);
     return () => {
-      clearInterval(beat);
-      bye();
-      window.removeEventListener("pagehide", bye);
-      bc.close();
-    };
-  }, [active]);
-}
-
-/** The office panel: whether a standalone console is open right now, and a way to bring it back. */
-export function usePopoutOpen(): { open: boolean; bringBack: () => void } {
-  const [open, setOpen] = useState(false);
-  const [bc, setBc] = useState<BroadcastChannel | null>(null);
-  useEffect(() => {
-    if (typeof BroadcastChannel === "undefined") return;
-    const ch = new BroadcastChannel(CEO_CHANNEL);
-    let last = 0;
-    ch.onmessage = (e) => {
-      if (!isMsg(e.data)) return;
-      if (e.data.type === "open") {
-        last = Date.now();
-        setOpen(true);
-      } else if (e.data.type === "bye") {
-        last = 0;
-        setOpen(false);
-      }
-    };
-    ch.postMessage({ type: "ping" });
-    const check = setInterval(() => {
-      if (last && Date.now() - last > GONE_MS) {
-        last = 0;
-        setOpen(false);
-      }
-    }, BEAT_MS);
-    const t = setTimeout(() => setBc(ch), 0);
-    return () => {
+      alive = false;
       clearTimeout(t);
-      clearInterval(check);
-      ch.close();
+      waiting?.abort();
+      release?.();
     };
-  }, []);
-  const bringBack = useCallback(() => {
-    bc?.postMessage({ type: "close" });
-    setOpen(false);
-  }, [bc]);
-  return { open, bringBack };
+  }, [enabled, takeOver]);
+  const take = useCallback(() => takeRef.current(), []);
+  return { state: enabled ? state : "waiting", take };
 }
 
-/** Open the console in its own window (the session comes along: window.open copies sessionStorage). */
-export function popOut() {
-  window.open("/ceo", POPOUT_NAME, "popup,width=560,height=940");
+/** A pop-out whose console was taken back closes itself; any other window keeps waiting. */
+function takeOverSelfClose(): boolean {
+  if (typeof window === "undefined" || window.name !== POPOUT_NAME) return false;
+  window.close();
+  return true;
+}
+
+/**
+ * Open the console in its own window, or bring the open one to the front (never reload it).
+ * False when the browser blocked the window.
+ */
+export function popOut(): boolean {
+  const w = window.open("", POPOUT_NAME, "popup,width=560,height=940");
+  if (!w) return false;
+  try {
+    if (w.location.pathname !== "/ceo") w.location.href = "/ceo";
+  } catch {
+    w.location.href = "/ceo";
+  }
+  w.focus();
+  return true;
 }

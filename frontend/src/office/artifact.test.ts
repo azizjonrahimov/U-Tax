@@ -184,3 +184,12 @@ describe("v1.18.2 cell formats", () => {
     expect(cellText(null, "usd")).toBe("");
   });
 });
+
+describe("v1.18.2 money at full precision", () => {
+  it("keeps the gateway's digits, never shows -$0.00", async () => {
+    const { cellText } = await import("./artifact");
+    expect(cellText(1000000.004, "usd")).toBe("$1,000,000.004");
+    expect(cellText(-0, "usd")).toBe("$0.00");
+    expect(cellText(-1234.5, "usd")).toBe("-$1,234.50");
+  });
+});

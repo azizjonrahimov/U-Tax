@@ -184,7 +184,8 @@ function put(st: Studio, seat: Seat, desk: Partial<Desk>, live?: string): Studio
 
 const emptyBook = (file: string): Book => ({ file, cells: {}, sheets: [], lines: [], verified: null });
 
-const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// At least the cents; more digits when the gateway sends them (the assumed par value capital, at full precision).
+const USD = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2, maximumFractionDigits: 20 });
 const INT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 /**
  * A workbook cell as Excel shows it (v1.18.2 `fmt`): "usd" → $#,##0.00, "int" → 10,000,000,
@@ -192,7 +193,7 @@ const INT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
  */
 export function cellText(value: unknown, fmt: string): string {
   if (typeof value === "number" && Number.isFinite(value)) {
-    if (fmt === "usd") return USD.format(value);
+    if (fmt === "usd") return USD.format(value === 0 ? 0 : value); // never "-$0.00"
     if (fmt === "int") return INT.format(value);
     if (fmt === "par") return value.toLocaleString("en-US", { useGrouping: false, maximumSignificantDigits: 21 });
     return String(value);

@@ -83,7 +83,31 @@ export function writeSession(s: CeoSession | null) {
   armExpiry();
 }
 
+/**
+ * D33: the console can run in a pop-out with its own copy of the session. Signing out in one
+ * window signs out every window that holds the same session (a short hash names it; never the
+ * session itself). Another sign-in's windows ignore it.
+ */
+const SIGNOUT_CHANNEL = "utax-ceo-session";
+export function sessionTag(session: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < session.length; i++) h = Math.imul(h ^ session.charCodeAt(i), 0x01000193) >>> 0;
+  return h.toString(16).padStart(8, "0");
+}
+let signoutChannel: BroadcastChannel | null = null;
+function channel(): BroadcastChannel | null {
+  if (signoutChannel || typeof BroadcastChannel === "undefined") return signoutChannel;
+  signoutChannel = new BroadcastChannel(SIGNOUT_CHANNEL);
+  signoutChannel.onmessage = (e) => {
+    const d = e.data as { type?: unknown; tag?: unknown } | null;
+    const mine = readSession();
+    if (d?.type === "signout" && mine && d.tag === sessionTag(mine.session)) writeSession(null);
+  };
+  return signoutChannel;
+}
+
 const subscribe = (l: () => void) => {
+  channel();
   listeners.add(l);
   armExpiry();
   return () => {
@@ -141,6 +165,7 @@ export async function logout(fetchImpl: typeof fetch = fetch): Promise<void> {
   const s = readSession();
   writeSession(null);
   if (!s) return;
+  channel()?.postMessage({ type: "signout", tag: sessionTag(s.session) });
   try {
     await fetchImpl(`${API_URL}/api/auth/logout`, {
       method: "POST",

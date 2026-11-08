@@ -124,6 +124,8 @@ export interface VoiceProps {
   feedRef: MutableRefObject<((events: readonly UTaxEvent[], reset: boolean) => void) | null>;
   names: ReadonlyMap<string, string>;
   flagged: ReadonlySet<string>;
+  /** In the /office panel: Esc is STOP EVERYTHING only while focus is inside the console (the office is the rest of the page). */
+  escInside?: boolean;
 }
 
 /** Gateway refusals for voice actions, as sentences. */
@@ -163,7 +165,7 @@ const IGNORED =
 /** Refusals after which the action certainly did not run. */
 const NOT_RUN = new Set(["expired", "superseded", "flagged", "console_only", "not_a_confirm", "not_found", "bad_args", "unknown_tool", "nothing_pending"]);
 
-export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: VoiceProps) {
+export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, escInside = false }: VoiceProps) {
   const [link, setLink] = useState<Link>("off");
   const [flow, setFlow] = useState<Flow>("idle");
   const [micOn, setMicOn] = useState(false);
@@ -1273,12 +1275,13 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.repeat || e.isComposing) return;
+      if (escInside && !(e.target instanceof Element && e.target.closest(".ceo.in-panel"))) return;
       e.preventDefault();
       void stopRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [escInside]);
 
   // The console's brief (gateway audio or browser speech) is agent audio too: counted, and the mic muted meanwhile.
   useEffect(() => {

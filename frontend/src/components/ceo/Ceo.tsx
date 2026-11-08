@@ -40,7 +40,7 @@ import {
 import { announceAgentAudio, CeoVoice } from "./CeoVoice";
 import { logout, useSessionToken, writeSession } from "@/ceo/session";
 import { foldOrders, type OrderCard } from "@/ceo/orders";
-import { usePopoutBeacon } from "@/ceo/popout";
+import { useConsoleLock } from "@/ceo/popout";
 import { current } from "@/office/artifact";
 import { SEAT_NAME } from "@/office/workspace";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
@@ -112,11 +112,39 @@ interface Confirm {
 }
 
 /**
- * `variant="panel"`: inside /office (the office has its own header and sign-out). Otherwise the
- * standalone /ceo page, which tells the office it's open (one console at a time).
+ * The CEO console. `variant="panel"`: inside /office (the office has its own header and
+ * sign-out). Otherwise the standalone /ceo page. One console is live at a time across every
+ * window (src/ceo/popout.ts): a /ceo window takes it over when it opens, the panel waits for it.
+ * A console that isn't live renders a notice only (no polling, no ear, no voice).
  */
-export function Ceo({ variant = "page" }: { variant?: "page" | "panel" } = {}) {
-  usePopoutBeacon(variant === "page");
+export function Ceo({ variant = "page", onElsewhere }: { variant?: "page" | "panel"; onElsewhere?: (elsewhere: boolean) => void } = {}) {
+  const token = useSessionToken();
+  const { state, take } = useConsoleLock(!!token, variant === "page");
+  useEffect(() => {
+    onElsewhere?.(!!token && state === "elsewhere");
+  }, [onElsewhere, state, token]);
+  if (token && (state === "waiting" || state === "elsewhere")) {
+    return (
+      <div className={`ceo${variant === "panel" ? " in-panel" : ""}`}>
+        <main className="elsewhere">
+          {state === "waiting" ? (
+            <p className="dim">Opening the console…</p>
+          ) : (
+            <>
+              <p>The console is open in another window, so it listens and speaks there.</p>
+              <button className="secondary" onClick={take}>
+                Use it here
+              </button>
+            </>
+          )}
+        </main>
+      </div>
+    );
+  }
+  return <CeoConsole variant={variant} />;
+}
+
+function CeoConsole({ variant }: { variant: "page" | "panel" }) {
   const token = useSessionToken();
   /** Why the console signed out (a 401: the session expired or was revoked), shown on the sign-in link. */
   const [signInError, setSignInError] = useState<string | null>(null);
@@ -328,9 +356,11 @@ export function Ceo({ variant = "page" }: { variant?: "page" | "panel" } = {}) {
         if (mine !== session.current) return;
         briefRef.current = b;
         setBrief(b);
-        rememberSeen(b);
         setBriefError(null);
-        void playBrief(b, token);
+        if (variant === "page") {
+          rememberSeen(b);
+          void playBrief(b, token); // the panel shows the brief; its Play button reads it
+        }
       } catch (e) {
         if (mine !== session.current) return;
         if (e instanceof ApiError && e.status === 401) fail(e);
@@ -351,7 +381,7 @@ export function Ceo({ variant = "page" }: { variant?: "page" | "panel" } = {}) {
       clearTimeout(timer);
       clearInterval(clock);
     };
-  }, [token, refreshNow, loadBrief, playBrief, fail]);
+  }, [token, refreshNow, loadBrief, playBrief, fail, variant]);
 
   useEffect(() => () => stopAudio(), [stopAudio]);
 
@@ -480,7 +510,7 @@ export function Ceo({ variant = "page" }: { variant?: "page" | "panel" } = {}) {
       <header>
         {variant === "page" && <span className="logo">U</span>}
         <span className="title">{variant === "page" ? "U-Tax · CEO console" : "CEO console"}</span>
-        <span className={`updated${stale ? " stale" : ""}`} role="status">
+        <span className={`updated${stale ? " stale" : ""}`} role={variant === "page" ? "status" : undefined}>
           {updatedAt === null ? "Loading…" : stale ? "Not updating · retrying" : `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`}
         </span>
         {variant === "page" && (
@@ -493,7 +523,7 @@ export function Ceo({ variant = "page" }: { variant?: "page" | "panel" } = {}) {
         <p className="sr-only" role="status" aria-live="polite">
           {announce}
         </p>
-        <CeoVoice key={token} token={token} refresh={refreshAfterVoice} signOut={voiceSignOut} feedRef={voiceFeed} names={caseNames} flagged={flaggedCases} />
+        <CeoVoice key={token} token={token} refresh={refreshAfterVoice} signOut={voiceSignOut} feedRef={voiceFeed} names={caseNames} flagged={flaggedCases} escInside={variant === "panel"} />
         {actionError && (
           <p className="error banner" role="alert">
             {actionError}{" "}
@@ -766,7 +796,7 @@ export function Ceo({ variant = "page" }: { variant?: "page" | "panel" } = {}) {
                     <q>{o.text}</q>
                   </p>
                   {o.live && current(o.live.ts, now) && (
-                    <p className="order-live" role="status">
+                    <p className="order-live">
                       {o.live.text}
                     </p>
                   )}

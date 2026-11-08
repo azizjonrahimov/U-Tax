@@ -42,7 +42,9 @@ export function foldOrders(prev: readonly OrderCard[], events: readonly UTaxEven
   let cards = [...prev];
   for (const ev of events) {
     const p: P = isObj(ev.payload) ? ev.payload : {};
-    if (ev.type === "voice.command" && ev.actor === "ceo" && p.speaker === "ceo") {
+    // The CEO's own order, typed or said, or placed for the CEO by the D34 assistant (actor
+    // ceo_assistant, speaker still "ceo"): the gateway links order_id by the speaker alone.
+    if (ev.type === "voice.command" && (ev.actor === "ceo" || (ev.actor as string) === "ceo_assistant") && p.speaker === "ceo") {
       const id = `order_${ev.id}`;
       if (cards.some((c) => c.id === id)) continue;
       const text = typeof p.text === "string" && p.text.trim() ? clip(p.text.replace(/\s+/g, " ").trim(), 200) : "Your order";

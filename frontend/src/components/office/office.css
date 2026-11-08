@@ -232,3 +232,20 @@
   .office .ceo-panel:not(.closed) { position: fixed; right: 0; top: 0; bottom: 0; z-index: 20; max-width: 94vw; box-shadow: -12px 0 32px rgba(0, 0, 0, .5); }
   .office .ceo-panel.closed { position: fixed; right: 0; top: 40%; z-index: 20; height: auto; border: 0; }
 }
+/* D33 review: the phone layout wins over the panel's 1100px rule; the panel shrinks while the console is elsewhere */
+@media (max-width: 900px) {
+  .office.with-panel { grid-template-columns: 1fr; }
+}
+.office .ceo-panel.elsewhere { width: 240px; }
+.office .popped-note { margin: 0; padding: 8px 12px; color: var(--amber); font-size: 14px; border-bottom: 1px solid var(--line); }
+/* The console's own focus ring (the office's 2px white one loads later) */
+.office .ceo :focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+/* The console in a narrow panel: its 640px layout, by the panel's width rather than the screen's */
+.office .ceo-body { container-type: inline-size; }
+@container (max-width: 640px) {
+  .ceo.in-panel .line { flex-direction: column; align-items: stretch; }
+  .ceo.in-panel .btns { justify-content: flex-start; }
+  .ceo.in-panel .row { flex-direction: column; align-items: stretch; }
+  .ceo.in-panel .stop { flex: 1 1 100%; }
+  .ceo.in-panel .vbar .ghost { margin-left: 0; }
+}
