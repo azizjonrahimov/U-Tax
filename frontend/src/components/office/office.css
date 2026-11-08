@@ -78,8 +78,8 @@
 .office .of-dept .trail li { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12px; color: var(--dim); min-width: 0; }
 .office .of-dept .trail li .mono { font-size: 11px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .office .of-dept .trail li > span:last-child { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.office .of-dept .trail li:nth-child(n + 3) { opacity: .75; }
-.office .of-dept .trail li:nth-child(n + 5) { opacity: .55; }
+/* Older pages step down in color, never in opacity (text stays AA). */
+.office .of-dept .trail li:nth-child(n + 3) { color: var(--faint); background: var(--panel); }
 .office .of-dept .trail li.needs_approval { border-color: color-mix(in srgb, var(--amber) 50%, var(--line)); }
 .office .of-dept .trail li.error, .office .of-dept .trail li.refused { border-color: color-mix(in srgb, var(--red) 50%, var(--line)); }
 .office .of-dept .win-empty p { margin: 0 0 6px; color: var(--dim); }
