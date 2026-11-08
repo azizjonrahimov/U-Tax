@@ -156,7 +156,7 @@ function command(text) {
   if (has(text, "everything") && (has(text, "stop") || has(text, "pause"))) return tool("pause", { action_type: "everything" }, "command");
   if (has(text, "stop posting")) return tool("pause", { action_type: "social_post" }, "command");
   if (open) return [200, { kind: "say", say: "Say confirm or cancel." }];
-  if (/^(?:(?:hey|hi|hello|test|testing)\s*)+$/.test(w) || /can you hear me|are you there|is this working/.test(w)) return [200, { kind: "say", say: "I'm listening. Tell me an order." }];
+  if (/^(?:(?:hey|hi|hello|test|testing|okay)\s*)+$/.test(w) || /can you hear me|are you there|is this working/.test(w)) return [200, { kind: "say", say: "I'm listening. Tell me an order." }];
   if (has(text, "approve")) return tool("approve", { approval: "latest" }, "command");
   if (has(text, "deny")) return tool("deny", { approval: "latest" }, "command");
   if (has(text, "money")) return tool("get_money", {}, "command");
