@@ -35,7 +35,7 @@
 .office .feed .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .office .feed.live .dot { background: var(--green); }
 .office .feed.reconnecting .dot { background: var(--amber); }
-.office .follow { border: 1px solid var(--line); background: var(--panel2); color: var(--text); border-radius: 8px; padding: 9px 12px; font: 600 13px var(--font-inter), sans-serif; cursor: pointer; min-height: 40px; }
+.office .follow { border: 1px solid var(--line); background: var(--panel2); color: var(--text); border-radius: 8px; padding: 9px 12px; font: 600 13px var(--font-inter), sans-serif; cursor: pointer; min-height: 44px; }
 .office .follow.on { background: var(--green); color: var(--ink); border-color: var(--green); }
 
 /* Main area */
