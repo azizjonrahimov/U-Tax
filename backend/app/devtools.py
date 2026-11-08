@@ -6,6 +6,7 @@
     python -m app.devtools state
     python -m app.devtools agentmail-webhook https://<public-host>   # after a tunnel restart
     python -m app.devtools rotate-host https://<public-host>   # UTAX_PUBLIC_URL + the webhook
+    python -m app.devtools stripe-webhook https://<public-host>  # task 40b: /hooks/stripe
     python -m app.devtools preflight              # demo checks, read-only (task 37)
     python -m app.devtools archive-log --yes      # gateway stopped: a clean log (task 37)
 
@@ -177,6 +178,69 @@ def agentmail_webhook(public: str, env_path: Path,
         return outcome
 
 
+STRIPE_EVENTS = ("checkout.session.completed", "checkout.session.async_payment_succeeded")
+
+
+def stripe_hook_url(public: str) -> str:
+    base = hook_url(public).removesuffix("/hooks/agentmail")
+    return base + "/hooks/stripe"
+
+
+def stripe_webhook(public: str, env_path: Path,
+                   transport: httpx.BaseTransport | None = None) -> str:
+    """Task 40b: point the U-Tax Stripe webhook endpoint (metadata utax=gateway) at
+    `public`/hooks/stripe. A new endpoint's secret goes into `env_path`
+    (STRIPE_WEBHOOK_SECRET), never printed. A live key needs STRIPE_LIVE=1.
+    Returns "created", "updated" or "unchanged"."""
+    from app.gateway.adapters.stripe_pay import key_mode
+
+    env = {**env_file_values(env_path), **{k: v for k, v in os.environ.items()
+                                           if k.startswith("STRIPE_")}}
+    key = env.get("STRIPE_SECRET_KEY", "")
+    mode = key_mode(key)
+    if not mode:
+        raise SystemExit("needs STRIPE_SECRET_KEY (an sk_test_ key)")
+    if mode == "live" and env.get("STRIPE_LIVE") != "1":
+        raise SystemExit("a live Stripe key needs STRIPE_LIVE=1 (the owner's word)")
+    url = stripe_hook_url(public)
+    with httpx.Client(base_url="https://api.stripe.com",
+                      headers={"Authorization": f"Bearer {key}",
+                               "User-Agent": "utax-gateway-devtools"},
+                      timeout=20, transport=transport) as http:
+        listed = http.get("/v1/webhook_endpoints", params={"limit": 100})
+        listed.raise_for_status()
+        ours = [w for w in listed.json().get("data", [])
+                if (w.get("metadata") or {}).get("utax") == "gateway"]
+        if ours:
+            hook = ours[0]
+            if hook.get("url") == url and sorted(hook.get("enabled_events") or []) == sorted(
+                    STRIPE_EVENTS):
+                return "unchanged"
+            data = {"url": url, **{f"enabled_events[{i}]": e
+                                   for i, e in enumerate(STRIPE_EVENTS)}}
+            http.post(f"/v1/webhook_endpoints/{hook['id']}", data=data).raise_for_status()
+            return "updated"  # same secret: no restart needed
+        data = {"url": url, "metadata[utax]": "gateway",
+                "description": "U-Tax gateway: paid filings",
+                **{f"enabled_events[{i}]": e for i, e in enumerate(STRIPE_EVENTS)}}
+        made = http.post("/v1/webhook_endpoints", data=data)
+        made.raise_for_status()
+        secret = made.json().get("secret", "")
+        if not secret.startswith("whsec_"):
+            raise SystemExit("Stripe answered without a whsec_ secret; nothing written")
+        set_env_values(env_path, {"STRIPE_WEBHOOK_SECRET": secret})
+        return "created"
+
+
+def cmd_stripe_webhook(args: argparse.Namespace) -> int:
+    outcome = stripe_webhook(args.url, Path(args.env))
+    note = {"created": "secret written; restart the gateway",
+            "updated": "same secret; no restart needed",
+            "unchanged": "already pointing there"}[outcome]
+    print(f"Stripe webhook {outcome} -> {stripe_hook_url(args.url)} ({note})")
+    return 0
+
+
 def rotate_host(public: str, env_path: Path,
                 transport: httpx.BaseTransport | None = None) -> str:
     """A quick tunnel's new host, in one go: UTAX_PUBLIC_URL (make_ad's images) in the
@@ -276,6 +340,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
                    help="the .env that gets AGENTMAIL_WEBHOOK_SECRET (default backend/.env)")
     p.set_defaults(func=cmd_agentmail_webhook)
+    p = sub.add_parser("stripe-webhook",
+                       help="point the Stripe webhook at https://<public-host>/hooks/stripe")
+    p.add_argument("url", help="the public https URL (the tunnel host)")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
+                   help="the .env that gets STRIPE_WEBHOOK_SECRET (default backend/.env)")
+    p.set_defaults(func=cmd_stripe_webhook)
     p = sub.add_parser("set-ceo-password",
                        help="hash the CEO's password (read from stdin) into the .env")
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),

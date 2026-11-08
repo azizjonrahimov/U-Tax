@@ -392,5 +392,6 @@ class LocalSocial:
 class NoPay:
     provider = None
 
-    def create_link(self, amount_cents: int, label: str, key: str) -> PaymentLink:
-        raise NotConfigured("PayPort has no adapter (Stripe is a stretch goal)")
+    def create_link(self, amount_cents: int, label: str, key: str,
+                    case_id: str = "") -> PaymentLink:
+        raise NotConfigured("pay_unavailable: ADAPTER_PAY=none")

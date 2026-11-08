@@ -82,6 +82,12 @@ class Settings:
     public_url: str = ""  # v1.11: the gateway's own https base (make_ad serves /assets/ there)
     hr_candidates: str = ""  # v1.11: the CEO's own consenting list, "Name <email>, ..."
     hr_booking_url: str = ""  # v1.11.3: the owner's booking page (https only) in hr-outreach
+    # task 40b (D36): Stripe, test mode unless STRIPE_LIVE=1
+    stripe_secret_key: str = ""
+    stripe_webhook_secret: str = ""  # whsec_...; verifies /hooks/stripe
+    stripe_live: bool = False
+    stripe_price_id: str = ""  # optional: reuse one Price instead of making one at boot
+    filing_price_cents: int = 4900  # the filing-help offer (memo.md's copy says $49)
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"
     naive_confirm: bool = True  # v1.9 §6b-bis: answer Naïve's confirms (UTAX_NAIVE_CONFIRM=off)
@@ -166,6 +172,11 @@ class Settings:
             apify_token=_env("APIFY_TOKEN"),
             hubspot_token=_env("HUBSPOT_TOKEN"),
             monid_api_key=_env("MONID_API_KEY"),
+            stripe_secret_key=_env("STRIPE_SECRET_KEY"),
+            stripe_webhook_secret=_env("STRIPE_WEBHOOK_SECRET"),
+            stripe_live=_env("STRIPE_LIVE") == "1",
+            stripe_price_id=_env("STRIPE_PRICE_ID"),
+            filing_price_cents=int(_env("FILING_PRICE_CENTS") or 4900),
             naive_api_key=_env("NAIVE_API_KEY"),
             naive_api_base=_env("NAIVE_API_BASE") or "https://api.vetta.sh",
             naive_confirm=_env("UTAX_NAIVE_CONFIRM").lower() != "off",

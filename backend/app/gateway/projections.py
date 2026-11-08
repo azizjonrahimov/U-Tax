@@ -99,6 +99,8 @@ class Case:
     memo_ts: str | None = None
     docs: dict | None = None  # v1.15: {"key", "files"} of the verified documents
     docs_building: dict = field(default_factory=dict)  # v1.15: the version being built
+    payment_link_url: str | None = None  # task 40b: the $49 offer's Stripe link (private)
+    paid_cents: int = 0  # task 40b: payments received for this case
     call: dict[str, Any] | None = None
     blocked_reason: str | None = None
     not_eligible_reason: str | None = None
@@ -190,6 +192,8 @@ class State:
     posts: int = 0
     briefs: list[int] = field(default_factory=list)
     proposals: dict[str, dict] = field(default_factory=dict)  # v1.8 §5b: CEO proposals
+    payment_links: dict[str, str] = field(default_factory=dict)  # task 40b: plink -> case
+    revenue_cents: int = 0  # task 40b: Σ payment.received (usd)
 
     # ---------------------------------------------------------------- reads
 
@@ -218,6 +222,7 @@ class State:
             "trust": dict(self.trust),
             "money": {
                 "tax_saved_cents": self.tax_saved_cents,
+                "revenue_cents": self.revenue_cents,  # task 40b: paid filings (Stripe)
                 "spent_usd": money_text(self.spent_usd()),
                 "spent_by_provider": {p: money_text(v)
                                       for p, v in sorted(self.spent_by_provider.items())},
@@ -477,6 +482,21 @@ class State:
         if not cand.get("booked_at"):
             cand["slot_released"] = True
             self.candidate_call_starts.discard(cand.get("contacted"))
+
+    def _on_payment_link_created(self, e: Event) -> None:
+        case = self._case(e)
+        url = (e.private or {}).get("url")
+        if case is not None and url:
+            case.payment_link_url = url
+        if case is not None and e.payload.get("link_id"):
+            self.payment_links[e.payload["link_id"]] = case.case_id
+
+    def _on_payment_received(self, e: Event) -> None:
+        if e.payload.get("currency") == "usd":
+            self.revenue_cents += int(e.payload["amount_cents"])
+        case = self.cases.get(e.payload["case_id"])
+        if case is not None:
+            case.paid_cents += int(e.payload["amount_cents"])
 
     def _on_call_booked(self, e: Event) -> None:
         if e.payload.get("kind") == "candidate":  # v1.11.1: no case; the slot is held

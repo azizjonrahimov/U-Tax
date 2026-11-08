@@ -302,6 +302,34 @@ def append_books(path: Path, entry: str, date: str, label: str, f: Figures) -> i
     return row
 
 
+def append_revenue(path: Path, entry: str, date: str, label: str, amount_cents: int) -> int:
+    """Task 40b: a payment's revenue row ("<case>:filing", the U-Tax fee column), written
+    once per entry and updated in place on a redelivery. Never touched by a memo v2."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        wb = load_workbook(path)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Books"
+        ws.append(BOOKS_HEADER)
+    values = [entry, date, label, "Filing help: worksheet + call (Stripe)", _usd(amount_cents),
+              None, None, None, None]
+    row = next((r[0].row for r in ws.iter_rows(min_row=2) if r[0].value == entry), None)
+    if row is None:
+        ws.append(values)
+        row = ws.max_row
+    else:
+        for col, value in enumerate(values, start=1):
+            ws.cell(row, col).value = value
+    ws.cell(row, 5).number_format = MONEY
+    tmp = path.with_suffix(".tmp.xlsx")
+    wb.save(tmp)
+    tmp.replace(path)
+    return row
+
+
 def shape(path: Path) -> int:
     """doc.created's pages_or_sheets: a workbook's sheets, a memo's pages (estimated)."""
     if path.suffix == ".xlsx":

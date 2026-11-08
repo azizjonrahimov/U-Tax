@@ -797,6 +797,63 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             raise APIError(400, "bad_input", "charged: true or false is required")
         return act("resolve_purchase", picked)
 
+    @router.post("/hooks/stripe")
+    async def stripe_hook(request: Request, stripe_signature: str | None = Header(None)):
+        """Task 40b (D36): Stripe's checkout webhook, Stripe-Signature checked against
+        STRIPE_WEBHOOK_SECRET (none: 503). A paid checkout.session.completed (or
+        async_payment_succeeded) becomes payment.received; anything else is acknowledged.
+        Only ids, the amount and the currency are read: no card data reaches the gateway."""
+        from app.gateway.adapters.stripe_pay import verify_stripe
+
+        settings = gw().settings
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > HOOK_MAX_BYTES:
+            raise APIError(413, "too_large", "webhook body too large")
+        raw = b""
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > HOOK_MAX_BYTES:
+                raise APIError(413, "too_large", "webhook body too large")
+        if not settings.stripe_webhook_secret:
+            raise APIError(503, "hook_not_configured", "set STRIPE_WEBHOOK_SECRET")
+        if not verify_stripe(settings.stripe_webhook_secret, stripe_signature, raw):
+            raise APIError(401, "unauthorized", "bad Stripe-Signature")
+        try:
+            event = json.loads(raw)
+        except (ValueError, RecursionError) as err:
+            raise APIError(400, "bad_input", "JSON expected") from err
+        if not isinstance(event, dict):
+            raise APIError(400, "bad_input", "JSON object expected")
+        event_id, kind = str(event.get("id") or "?")[:80], event.get("type")
+        if event.get("livemode") and not settings.stripe_live:
+            log.warning("stripe hook: live event %s ignored (STRIPE_LIVE is off)", event_id)
+            return {"ok": True, "ignored": "livemode"}
+        if kind not in ("checkout.session.completed",
+                        "checkout.session.async_payment_succeeded"):
+            return {"ok": True, "ignored": kind}  # 2xx: Stripe must not retry these
+        session = (event.get("data") or {}).get("object") if isinstance(
+            event.get("data"), dict) else None
+        if not isinstance(session, dict) or not session.get("id"):
+            return {"ok": True, "ignored": "no_session"}
+        if session.get("payment_status") != "paid":  # async methods: wait for succeeded
+            return {"ok": True, "ignored": f"payment_status {session.get('payment_status')}"}
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        result = await asyncio.to_thread(gw().perform, "stripe_payment", {
+            "session_id": str(session["id"]), "event_id": event_id,
+            "case_id": metadata.get("case_id"),
+            "client_reference_id": session.get("client_reference_id"),
+            "link_id": session.get("payment_link"),
+            "amount_cents": session.get("amount_total"), "currency": session.get("currency")})
+        if result.status == "done":
+            if result.data.get("receipt") == "failed":  # recorded; Stripe's retry resends it
+                raise APIError(503, "unavailable", "payment recorded; the receipt will retry")
+            return {"ok": True, **result.data}
+        code = (result.error or {}).get("code", "error")
+        if result.status == "refused" and code in ("not_found", "bad_input"):
+            log.warning("stripe hook: event %s not recorded: %s", event_id, code)
+            return {"ok": True, "ignored": code}  # retrying can't fix it
+        raise APIError(503, code, (result.error or {}).get("message", "try again"))
+
     @router.post("/hooks/agentmail")
     async def agentmail_hook(request: Request,
                              x_utax_hook_token: str | None = Header(None)):

@@ -1,4 +1,4 @@
-# API contract (v1.16): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.17): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -93,6 +93,8 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `ceo.proposed` | ceo | `{proposal_id, tool, args, readback, expires_at, source: "realtime"\|"command"}` (§5b) |
 | `ceo.confirmed` / `ceo.cancelled` | ceo | `{proposal_id, via: "voice"\|"click", heard}` (`heard` = the CEO's transcribed words, ≤ 200 chars; cancelled also has `reason: "spoken"\|"clicked"\|"expired"\|"superseded"`) |
 | `hr.outreach_declined` | hr | `{candidate_id, name_masked, note}`: HR read a reply to the outreach as a no (v1.15.1). The held slot is freed, `outreach_declined` is set (a later CEO hire or decline sends no mail), and the stage is unchanged |
+| `payment.link_created` | acct | `{link_id, amount_cents, currency}` (v1.17, D36): the case's $49 filing-help Stripe Payment Link, made once per case when the memo is sent. The URL is private and never in a payload. |
+| `payment.received` | acct | `{case_id, amount_cents, currency}` (v1.17), provider stripe: a paid Stripe Checkout Session for a case, once per session. It adds a revenue row to U-Tax_Books.xlsx and `money.revenue_cents`, then a `ceo.notified` (reason `paid`) and one `client.followed_up` (kind `payment_receipt`). |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
 | `tool.bought` | any agent | `{tool, provider}` (amount in envelope `cost_usd`) |
@@ -231,6 +233,24 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/dev/inject-email` `{from, subject, body}` → local MailPort only; produces
   `email.received` exactly as a real inbound mail would. Refused unless `ADAPTER_MAIL=local`.
 - `POST /hooks/agentmail` (Saturday): AgentMail webhook; idempotency key = message id.
+
+## 5-bis. Payments (v1.17, D36)
+
+- `POST /hooks/stripe`: verifies Stripe-Signature (`t=,v1=`, HMAC-SHA256 of `t.body` with STRIPE_WEBHOOK_SECRET,
+  5 min tolerance). With no secret it answers 503 `hook_not_configured`; a bad or old signature answers 401.
+  - `checkout.session.completed` and `checkout.session.async_payment_succeeded` with
+    `payment_status: "paid"` → `payment.received`. The case comes from metadata.case_id, then
+    client_reference_id, then the payment link. It's idempotent by the session.
+  - It answers 503 when the books are locked or the receipt failed: Stripe retries, and only what's
+    missing is redone.
+  - Everything else is acknowledged with 200 `{ignored}`, including live events while STRIPE_LIVE is off.
+  - No card data or customer details are read.
+- `ADAPTER_PAY=stripe`: STRIPE_SECRET_KEY (test mode; a live key needs STRIPE_LIVE=1),
+  STRIPE_WEBHOOK_SECRET, optional STRIPE_PRICE_ID, FILING_PRICE_CENTS (4900).
+  `python -m app.devtools stripe-webhook https://<host>` points the endpoint and writes the secret.
+- `/api/state` `money.revenue_cents` = Σ `payment.received` (usd).
+- The offer is a human-led 20-minute walkthrough of the client's own filing; U-Tax files nothing. The gateway,
+  never an agent, books payments and sends the fulfilment mails.
 
 ## 5a. Product shell routes (v1.12, design D32)
 
@@ -675,6 +695,11 @@ cannot replace them.
 
 ## 7. Memo template
 
+v1.17: optional `{{payment_link}}`, the case's Stripe link, filled in the client's copy only. A line holding it
+disappears whole when there's no link (no Stripe, or Stripe down) and in the masked `memo.sent` body. There's a new
+template `payment-receipt` `{{greeting_name}} {{booking_url}}` (booking_url required, plus the disclaimer). It's sent once
+after a payment, to the memo thread, and only when HR_BOOKING_URL is set.
+
 `naive/templates/memo.md` (agents lane writes the words), rendered by the gateway with
 only these placeholders: `{{memo_ref}}`, `{{greeting_name}}` (the outgoing mail only: derived from the **sender's email domain label**,
 letters/digits/spaces only, at most 40 chars, never from body text; `/talk` cases and free-mail
@@ -732,6 +757,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.17 (2026-11-08, task 40b, D36): Stripe filing-help link in the memo, /hooks/stripe, payment.link_created / payment.received, revenue_cents, the payment receipt and the CEO's "paid" notice.
 
 - v1.16.1 (2026-11-08, task 40a, D36): voice ports split (ADAPTER_TTS/REALTIME/STT); POST /api/stt (raw audio body) on OpenAI gpt-4o-transcribe.
 

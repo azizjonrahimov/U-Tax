@@ -70,6 +70,9 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "doc.created": ("doc", "file_name", "sha256", "pages_or_sheets"),
     "doc.verified": ("doc", "ok"),  # one per document (optional "failed": the checks)
     "client.followed_up": ("kind",),
+    # task 40b (D36): the $49 filing offer (the link's URL is private) and its payment
+    "payment.link_created": ("link_id", "amount_cents", "currency"),
+    "payment.received": ("case_id", "amount_cents", "currency"),
     "approval.requested": ("approval_id", "action_type", "summary"),
     "touch.training": _TOUCH,
     "touch.operating": _TOUCH,
