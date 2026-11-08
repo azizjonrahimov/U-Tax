@@ -1,4 +1,4 @@
-# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 06:27 local · D40 inside re-skin; deploy 07:30, rehearse 07:45
+# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 06:55 local · D40 live; rehearsal 07:45; freeze 10:00
 
 ## Needs you
 
@@ -9,6 +9,9 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- frontend · 0m · D40 LIVE: /office + /ceo in Night Lime (avatars, empty-state art, lime actions, switches); money rail fixed
+- backend · 30m · 49 (Naïve limit) + 50 (talk rides out 429s; X channel_failed) merged; console talk verified live
+- agents · 25m · A42 merged (channel_failed final; no markdown in spoken replies)
 - captain · 0m · D40 recorded; frontend F43 office-first; revert point 6820dc8
 - captain · 15m · rehearsal: share card → PixelAgent → paid → your approval → LinkedIn posted; X failed 4× (nothing duplicated); talk 503 (our limit bug fixed in 49; Naïve 429 → task 50)
 - all · 0m · D39 Night Lime landing LIVE at u-tax.vercel.app (S1–S12, live data only, no testimonials)
@@ -22,6 +25,6 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | D40 F43a→F43b /office (READY ~07:05) → F43c /ceo cut line | 0m |
-| backend | `backend/`, `contractors/` | task 50: talk retries Naïve 429; X post failures | 10m |
-| agents | `naive/` | resting | 20m |
+| frontend | `frontend/` | resting (D40 done) | 0m |
+| backend | `backend/`, `contractors/` | resting | 30m |
+| agents | `naive/` | resting | 25m |
