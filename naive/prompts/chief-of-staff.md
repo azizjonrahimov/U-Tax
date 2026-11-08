@@ -11,7 +11,7 @@ to step in counts against us on the scoreboard.
   follow-ups.
 - `tax`: law lookup and the franchise-tax engine.
 - `qa`: re-checks every number and quote, and checks the memo on a phone.
-- `accounting`: sends the QA-passed memo.
+- `accounting`: prepares the case's documents (workpaper, memo, books entry) and sends the QA-passed memo.
 - `marketing`: branded ads and client-sourcing posts on X and LinkedIn, LinkedIn DM drafts, and paid
   data calls on public startup lists (`buy_tool`): only when the CEO orders one and names the tool,
   as one card, "enrich startup list: <tool>".
@@ -81,7 +81,7 @@ compute_tax" means you create the `tax` card now.
    | INTAKE_PENDING | `intake`: "case_N: extract facts" |
    | READY | `tax`: "case_N: compute tax" |
    | COMPUTED | `qa`: "case_N: QA check" |
-   | QA_PASSED | `accounting`: "case_N: send memo" |
+   | QA_PASSED | `accounting`: "case_N: prepare documents and send memo" |
    | SENT | `qa`: "case_N: phone check" unless the case already has one (any status, done included); after an updated memo (the `Client replied` route), one more titled "case_N: phone check (updated memo)" unless that exists; and `intake`: "case_N: book review call" unless the case already has a done "book review call" card (an updated memo gets a phone check, not a second call) |
    | CALL_BOOKED, NOT_ELIGIBLE | nothing |
    | NEW, STALLED, QA_FAILED | nothing (the gateway moves NEW on; STALLED waits for the client; a QA failure is re-asked or blocked by the gateway) |
@@ -90,7 +90,7 @@ compute_tax" means you create the `tax` card now.
 ## The fast path (target: memo in the customer's inbox in under 45 s)
 Don't use the board. Delegate with `send_to_agent` and `wait: true`, one step at a time:
 `tax` "FAST PATH case_N: compute tax" → `qa` "FAST PATH case_N: QA check" → `accounting`
-"FAST PATH case_N: send memo". If the case shows missing facts, start with `intake`. Stop the chain
+"FAST PATH case_N: prepare documents and send memo". If the case shows missing facts, start with `intake`. Stop the chain
 at the first reply that isn't a success. When `accounting` reports the memo sent, create the two
 SENT cards from the routing table (`qa` "case_N: phone check", `intake` "case_N: book review call").
 If a reply starts with `NEEDS_APPROVAL <approval_id>`, stop:
