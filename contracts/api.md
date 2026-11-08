@@ -95,6 +95,14 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `hr.outreach_declined` | hr | `{candidate_id, name_masked, note}`: HR read a reply to the outreach as a no (v1.15.1). The held slot is freed, `outreach_declined` is set (a later CEO hire or decline sends no mail), and the stage is unchanged |
 | `payment.link_created` | acct | `{link_id, amount_cents, currency}` (v1.17, D36): the case's $49 filing-help Stripe Payment Link, made once per case when the memo is sent. The URL is private and never in a payload. |
 | `payment.received` | acct | `{case_id, amount_cents, currency}` (v1.17), provider stripe: a paid Stripe Checkout Session for a case, once per session. It adds a revenue row to U-Tax_Books.xlsx and `money.revenue_cents`, then a `ceo.notified` (reason `paid`) and one `client.followed_up` (kind `payment_receipt`). |
+| `job.posted` | mkt | `{job_id, template, price_usd, headline}` (v1.19, D38 §9): idem `job:{key}`; only with `MARKET_ENABLED=1` |
+| `job.claimed` | system | `{job_id, contractor}` (contractor = the registry name) |
+| `job.submitted` | system | `{job_id, contractor, sha256}`: the artifact stays private until paid |
+| `job.verified` | system | `{job_id, checks}` (checks = `[{name, ok}]`) |
+| `job.failed` | system | `{job_id, checks, reason}`: reason `checks_failed` / `expired` / `contractor_error` |
+| `payment.sent` | system | `{job_id, contractor, amount_usd, token, tx_hash, explorer_url}`, provider `tempo` or `local`: testnet tokens, counted only in `contractor_paid_usd`, never as dollar spend; status `failed` + private `unsure` on an unsure send |
+| `job.delivered` | system | `{job_id, image_url}`: `image_url` is absolute, `https://<UTAX_PUBLIC_URL host>/assets/ad_<n>.png` |
+| `agent.sale` | system | `{amount_usd, token, tx_hash, explorer_url, payer_masked}`, provider `tempo` or `stripe` (the §9.4 sell side) |
 | `agent.activity` | the agent's seat (`ceo_assistant` for the assistant) | `{agent, session_id, kind: "thinking"\|"tool_started"\|"tool_done"\|"writing"\|"idle"}` plus optional `tool` (a name, never arguments), `text` (writing only: masked, the latest ≤ 600 chars, ≤ 1 event/s per session) and `order_id` (v1.18, D37). Provider naive. **Admin and session readers only**: theater readers never receive it, and it doesn't change /api/state. |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
@@ -571,6 +579,8 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | Tool | Agent | Input | Effect |
 |---|---|---|---|
 | `make_ad` | mkt | `{kind: "client"\|"hiring", headline}` (headline ≤ 80 chars, passes the `post_social` content guard) | The gateway renders a branded 1200×628 PNG: firm name, headline, and for `client` the real example "$85,165 → $450". It's served at `<public-host>/assets/ad_<n>.png` (the gateway's own host is always in `PUBLIC_ASSET_HOSTS`). Returns `{image_url}`; event `ad.created`. No trust gate (nothing leaves the firm until `post_social`). |
+| `hire_contractor` | mkt | `{template: "share_card", headline, key}` | v1.19 D38 §9.2, listed only with `MARKET_ENABLED=1`. The headline passes `make_ad`'s guards; the price is `MARKET_PRICE_USD` (agents can't set it); needs an https `UTAX_PUBLIC_URL`. Returns `{job_id, status: "open", price_usd}`; event `job.posted`. Only the gateway pays, after its checks (§9.5). |
+| `get_job` | mkt | `{job_id}` | v1.19 D38 §9.2. Returns `{job_id, status, contractor?, image_url?, tx_hash?, explorer_url?, checks?, approval_id?}`; waits up to ~20 s off the lock while the job isn't final. A delivered image posts with `post_social`, forced ASK until the CEO approved one from that contractor (§9.6). |
 | `source_candidates` | hr | `{count}` (1–5) | ToolBuyPort (Monid) public search for the gig's role. Returns masked public leads `{lead_id, label, headline, public_url}`, never an email or phone; event `hr.sourced`. With Monid off it returns `[]` and says so. |
 | `hr_outreach` | hr | `{candidate_id, slot}` | Emails one candidate whose address the firm already holds with consent: an applicant from the hiring inbox, or an entry in `HR_CANDIDATES` (the CEO's own list: `name <email>`, comma-separated). The email carries the gig details (template `hr-outreach`) plus a calendar invite for `slot`, which must be one of `get_candidate.offered_slots`. Trust type `email`; event `hr.outreach` + `call.booked` (kind `candidate`). A lead from `source_candidates` has no address and is refused (`no_consented_address`). |
 | `prepare_documents` | acct | `{case_id, order_id?}` | Refused unless `QA_PASSED`. The gateway builds the workpaper .xlsx, the memo .docx and a books entry from the engine's result and the extracted facts only. It verifies each file (it re-opens it and checks every figure against the engine) and stores them under `UTAX_DATA_DIR/docs/<case_id>/`. Events: one `doc.step` per build step `{doc: "workpaper"\|"memo"\|"books", step, detail}` (for example "Authorized Shares Method: 10,000,000 shares → $85,165"); then `doc.created {doc, file_name, sha256, pages_or_sheets}`, and `doc.verified {doc, ok}`. It's idempotent per case and memo version. |
@@ -876,7 +886,7 @@ everything below.
 
 ## Changelog
 
-- v1.19 (2026-11-08, D38): agent market (§9): MCP tools hire_contractor/get_job (mkt); /market/* contractor routes; /agent/franchise-check (MPP 402); events job.*, payment.sent, agent.sale; provider tempo; trust type contractor_pay. §3/§6 rows land with their code.
+- v1.19 (2026-11-08, D38): agent market (§9): MCP tools hire_contractor/get_job (mkt); /market/* contractor routes; /agent/franchise-check (MPP 402); events job.*, payment.sent, agent.sale; provider tempo; trust type contractor_pay. §3/§6 rows landed with backend 47b + agents A41.
 
 - v1.18.4 (2026-11-08, task 45): /api/stt books max(declared, a byte floor).
 
