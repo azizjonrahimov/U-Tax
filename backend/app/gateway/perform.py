@@ -3848,6 +3848,94 @@ class Gateway:
                                           "payer_masked": payer_masked},
                                  idempotency_key=f"sale:{tx_hash}" if tx_hash else None)])
 
+    PAYMENTS_MAX = 100
+    PAYMENTS_CACHE_S = 5.0
+    PAYMENT_TYPES = frozenset({"payment.sent", "agent.sale", "payment.received",
+                               "payment.recorded"})
+
+    def payments(self) -> dict:
+        """D41 §E, GET /api/payments: newest first, at most 100 rows of public payload fields:
+        contractor payments (out), agent sales and client payments (in), each contractor
+        payment joined with its Stripe record (payment.recorded, by tx_hash). Testnet tokens
+        are never added to the USD total. Cached 5 s (the log is read whole)."""
+        now = time.monotonic()
+        cached = getattr(self, "_payments_cache", None)
+        if cached is not None and now - cached[0] < self.PAYMENTS_CACHE_S:
+            return cached[1]
+        with self._lock:
+            events = [e for e in self.store.since(0) if e.type in self.PAYMENT_TYPES]
+            jobs = {k: dict(v) for k, v in self.state.jobs.items()}
+            names = {cid: c.masked_name for cid, c in self.state.cases.items()}
+        out = self._ledger(events, jobs, names)
+        self._payments_cache = (now, out)
+        return out
+
+    @staticmethod
+    def _ledger(events: list, jobs: dict, names: dict) -> dict:
+        from app.gateway.adapters.tempo_wallet import EXPLORER
+
+        recorded: dict[str, dict] = {}
+        for e in events:
+            if e.type == "payment.recorded" and e.status == "ok" and e.payload.get("tx_hash"):
+                recorded.setdefault(e.payload["tx_hash"], {
+                    "id": e.payload.get("stripe_id"), "mode": e.payload.get("mode"),
+                    "dashboard_url": e.payload.get("dashboard_url")})
+        rows: list[dict] = []
+        sums = {"contractors": Decimal(0), "sales": Decimal(0), "clients_cents": 0}
+        tokens = {"contractors": None, "sales": None}
+
+        def amount(text: Any) -> Decimal | None:
+            try:
+                return Decimal(str(text))
+            except (InvalidOperation, ValueError):
+                return None
+
+        for e in events:
+            p = e.payload
+            row: dict[str, Any] = {"id": e.id, "ts": e.ts, "status": e.status}
+            tx = p.get("tx_hash") or None
+            if e.type in ("payment.sent", "agent.sale"):
+                tempo = e.provider == "tempo"
+                row.update(amount=p.get("amount_usd"), token=p.get("token"),
+                           rail="tempo-testnet" if tempo else (e.provider or "local"),
+                           tx_hash=tx, explorer_url=p.get("explorer_url")
+                           or (EXPLORER + tx if tx and tempo else None))
+                if e.type == "payment.sent":
+                    job = jobs.get(p.get("job_id")) or {}
+                    row.update(direction="out", kind="contractor",
+                               counterparty=p.get("contractor"), job_id=p.get("job_id"),
+                               order_id=p.get("order_id") or job.get("order_id"),
+                               task_no=p.get("task_no"))
+                    if tx and tx in recorded:
+                        row["stripe"] = recorded[tx]
+                    bucket = "contractors"
+                else:
+                    row.update(direction="in", kind="agent_sale",
+                               counterparty=p.get("payer_masked"))
+                    bucket = "sales"
+                value = amount(p.get("amount_usd"))
+                if e.status == "ok" and value is not None:
+                    sums[bucket] += value
+                    tokens[bucket] = tokens[bucket] or p.get("token")
+            elif e.type == "payment.received":
+                cents = p.get("amount_cents") if isinstance(p.get("amount_cents"), int) else 0
+                currency = str(p.get("currency") or "usd").upper()
+                row.update(direction="in", kind="client",
+                           counterparty=names.get(e.case_id or p.get("case_id"), "a client"),
+                           amount=f"{cents / 100:.2f}", token=currency, rail="stripe")
+                if e.status == "ok" and currency == "USD":
+                    sums["clients_cents"] += cents
+            else:
+                continue
+            rows.append({k: v for k, v in row.items() if v is not None})
+        rows.reverse()
+        return {"data": rows[:Gateway.PAYMENTS_MAX], "totals": {
+            "contractors_paid": {"amount": f"{sums['contractors']:.2f}",
+                                 "token": tokens["contractors"] or "pathUSD"},
+            "agent_sales": {"amount": f"{sums['sales']:.2f}",
+                            "token": tokens["sales"] or "pathUSD"},
+            "clients_paid_usd": f"{sums['clients_cents'] / 100:.2f}"}}
+
     def advance_market_jobs(self) -> list[str]:
         """D38: the pay tick (app/main.py's tick, and right after a verified submit)."""
         from app.gateway import market

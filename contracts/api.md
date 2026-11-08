@@ -169,6 +169,12 @@ For Replay mode and catch-up. Ordered by `id`.
 - Resume with `Last-Event-ID` header or `after_id`; the server replays everything after it, then streams live.
 - Heartbeat comment `: ping` every 15 s. Clients reconnect automatically.
 
+- `GET /api/payments?token=` (v1.20 §10.3, D41; the same token rule as `/api/state`): newest first, ≤ 100 rows
+  `{id, ts, direction, kind, counterparty, job_id?, order_id?, task_no?, amount, token, rail, status, tx_hash?,
+  explorer_url?, stripe?: {id, mode, dashboard_url}}` from `payment.sent`, `agent.sale`, `payment.received`, joined with
+  `payment.recorded` by `tx_hash`, plus `totals: {contractors_paid, agent_sales, clients_paid_usd}`. Testnet tokens never
+  enter USD totals. Cached 5 s.
+
 ## 5. Control endpoints (admin token)
 
 - `POST /api/approve` `{approval_id, decision: "allow"|"deny", note}` → `200 {"ok": true}`.
