@@ -1,31 +1,23 @@
-# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 03:30 local · FEATURE FREEZE · demo day (ends 11:00 AM PST)
+# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 04:30 local · D38 + D39 building, freeze 10:00
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (now): restart the gateway window (Ctrl+C, ↑, Enter). It loads backend 41-44: the live work stream, STOP fences, cell formats, the xlsx security fix.
-- B (now): redeploy the website: `powershell -ExecutionPolicy Bypass -File .\crew\scripts\deploy-frontend.ps1`. It loads D32-D37: landing, login, departments, live artifact windows, the CEO panel + pop-out, the conversation voice, doc downloads and STT.
-- C (when you can): paste the OpenAI, Apify and Stripe (sk_test_) keys in chat; the Captain wires them.
-- D (rehearsal): sign in → /office → order "follow up with Team 1" in the panel; watch it happen; then record the demo video.
-- E (after the event): rotate every key pasted in chat; pause the Naïve schedule.
+- A (2 min, Stripe payments): in backend/, run `.venv\Scripts\python -m app.devtools stripe-webhook https://regular-corporation-northeast-banana.trycloudflare.com` (an account change; it was blocked for me). Then tell me, and I restart the gateway.
+- B (optional): for the D38 sell side to show in Stripe, create a Stripe test-mode business profile and paste its `profile_test_…` id.
+- C (after the event): rotate every key pasted in chat (OpenAI, Apify, Stripe, …); pause the Naïve schedule; delete the testnet wallet keys.
 
 ## New
 
-- frontend · 0m · F1 Cases list in the CEO console merged (da03d87); STT records at 8 kbps
-- backend · 30m · 45 merged (/api/stt books server-bounded seconds); v1.18.4
-- frontend · 0m · D36 STT merged (41bd1afc): both ears through /api/stt, pre-roll, STOP ordering
-- backend · 30m · 44 SECURITY merged (xlsx cells always literal); contract v1.18.3
-- frontend · 40m · D35 docs downloads merged (eeb4c28)
-- frontend · 55m · the CEO panel + pop-out + live order cards merged (2318e9e6)
-- backend · 75m · 43 merged (cell fmt, relay replay skip, events types=); v1.18.2
-- frontend · 85m · D37 live artifact windows merged (06420677): emails type and send, posts publish, the workpaper fills cell by cell
-- backend · 2h · 42 (agent.activity relay, admin artifact content, receipt guard) v1.18, and 41 (stop-first, per-turn actions, STOP fences) v1.18.1 merged
-- all · GitHub CI green on every merge
+- all · 0m · D38 (agents hire agents, paid in testnet tokens) and D39 ("Night Lime" site) recorded; contract v1.19 §9; lanes briefed, APPROVED
+- captain · 10m · the gateway restarted with the OpenAI, Apify and Stripe keys (preflight 13 green; Naïve reads time out now and then); website redeployed to u-tax.vercel.app (all pages 200)
+- backend · 1h · 41–46 merged (live work stream, STOP fences, cell formats, xlsx security, STT bound, rebuild guard)
+- frontend · 1h · D37 live windows, CEO panel + pop-out, D35 downloads, D36 STT, F1 cases: all merged and now LIVE
 
 ## In progress
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | resting (freeze); woken for rehearsal fixes | 0m |
-| backend | `backend/` | task 46: can a documents rebuild reuse a version key (check first) | 0m |
-| agents | `naive/` | resting | 2h |
+| backend | `backend/`, `contractors/` | D38 47a→47e (G1 tempo-or-local at 05:15; 47b+47c READY by 06:45) | 0m |
+| agents | `naive/` | D38 A41, READY held until backend 47b | 0m |
+| frontend | `frontend/` | F41 Market pane (fixtures) → F42a–f Night Lime landing | 0m |
