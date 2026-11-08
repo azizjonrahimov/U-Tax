@@ -209,7 +209,8 @@ def test_admin_readers_get_the_memo_as_sent_and_the_theater_the_masked_one(h):
     assert "sent" not in theater["payload"]
     sent = admin["payload"]["sent"]
     assert sent["to_masked"] == memo.payload["to_masked"]
-    assert sent["subject"] == memo.payload["subject"]
+    # D42 (owner test R1): sent in the client's thread; the public payload keeps the label
+    assert sent["subject"] == "Re: free franchise tax checkup?"
     assert sent["body"].startswith("Hi Team7")  # the greeting the client really got
     assert theater["payload"]["body"] == memo.payload["body"]  # masked, as before
 

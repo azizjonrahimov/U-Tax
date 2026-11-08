@@ -200,7 +200,7 @@ def test_memo_ref_is_the_last_line_once_per_memo_version(h):
     assert ref.startswith("UTX-") and 8 <= len(ref) - 4 <= 16
     assert [line for line in sent.payload["body"].splitlines() if line][-1] == f"Reference: {ref}"
     mailed = [json.loads(p.read_text(encoding="utf-8")) for p in h.outbox()]
-    memo = [m for m in mailed if m["subject"] == sent.payload["subject"]][0]
+    memo = [m for m in mailed if m["message_id"] == sent.payload["message_id"]][0]  # D42
     assert memo["body"].rstrip().endswith(f"Reference: {ref}")  # the same ref in the mail
     again = h.ok("send_memo", case_id=case_id)
     assert again["duplicate"] is True
@@ -228,7 +228,8 @@ def test_memos_bcc_the_qa_mailbox(make_harness):
     h = make_harness(mail_qa_bcc="qa-phone@u-tax.test")
     h.to_sent()
     mailed = [json.loads(p.read_text(encoding="utf-8")) for p in h.outbox()]
-    memo = [m for m in mailed if m["subject"] == h.events("memo.sent")[0].payload["subject"]][0]
+    memo = [m for m in mailed  # D42: matched by id (its subject is the thread's)
+            if m["message_id"] == h.events("memo.sent")[0].payload["message_id"]][0]
     assert memo["bcc"] == "qa-phone@u-tax.test"
     asks = [m for m in mailed if m is not memo]
     assert all(m.get("bcc") is None for m in asks)
