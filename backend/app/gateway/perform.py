@@ -459,7 +459,16 @@ class Gateway:
     def _try_wake(self, message: str, waker: Callable[[str], None], *, attempt: int) -> None:
         try:
             waker(message)
-        except Exception:  # noqa: BLE001 - a dead waker never blocks the firm; retried
+        except Exception as err:  # noqa: BLE001 - a dead waker never blocks the firm; retried
+            held = getattr(err, "retry_after", None)
+            if isinstance(held, (int, float)) and held > 0:
+                # task 35: Naïve is at capacity: queued until the shared backoff clears,
+                # the same attempt (no escalation), one quiet line
+                log.info("wake %r held by the Naïve backoff; retry in %.0fs", message, held)
+                with self._lock:
+                    self._wake_retries.append((message, waker, attempt,
+                                               time.monotonic() + held + 1))
+                return
             delay = self.WAKE_BACKOFF[min(attempt, len(self.WAKE_BACKOFF) - 1)]
             log.exception("waker failed for %r (attempt %d); retry in %ss", message,
                           attempt + 1, delay)
