@@ -829,35 +829,40 @@ export function Theater() {
   const onReplay = () => (source === "live" ? setOverride("replay") : setRun((r) => r + 1));
 
   return (
-    <div className={`theater${stage ? " stage" : ""}${finale?.lined ? " lined" : ""}${hasOrders ? " has-orders" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
-      <header>
+    // D41 F46: the prototype's Overview DOM (office-prototype.html): .head → section.orders → section.stage (+ the
+    // rail) → .bar. Only containers and classes changed; every pane, data-target and handler is the same.
+    <div className="ox" style={{ display: "contents" }}>
+    <main className={`theater${stage ? " stagemode" : ""}${finale?.lined ? " lined" : ""}${hasOrders ? " has-orders" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
+      <div className="head">
         <span className="logo" aria-hidden>
           U
         </span>
         <h1 className="title">
           The firm, <em>live.</em>
         </h1>
-        <span className="sub">every move rendered from the action log</span>
-        <div className="pill">
+        <p className="sub">every move rendered from the action log</p>
+        <div className="pills">
           <span
-            className={`source${source === "live" ? " gateway" : ""}`}
+            className={`pill source${source === "live" ? " gateway" : ""}`}
             title={skippedCount ? `${skippedCount} log event(s) skipped as malformed or unknown (see console)` : undefined}
           >
             {sourceLabel}
             {skippedCount ? ` · ${skippedCount} skipped` : ""}
           </span>
           {/* Always mounted: LIVE → RECONNECTING… → NO LOG changes are announced. */}
-          <span className="live" role="status">
+          <span className="pill" role="status">
             <span className={`dot${blinking ? "" : " idle"}`} aria-hidden />
             {statusLabel[status]}
           </span>
-          <span className="mono clock" title="time of the current event">
+          <span className="clock" title="time of the current event">
             <span className="sr-only">Time of the current event: </span>
             {clock}
           </span>
-          <span className="hint">S · stage</span>
+          <button className={`tb${stage ? " on" : ""}`} aria-pressed={stage} onClick={() => setStage((v) => !v)} title="Stage mode (S)">
+            S · stage
+          </button>
         </div>
-      </header>
+      </div>
 
       {hasOrders && (
         <PaneBoundary resetKey={screen.lastEventId}>
@@ -866,64 +871,55 @@ export function Theater() {
       )}
 
       <PaneBoundary resetKey={screen.lastEventId}>
-        <main data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined}>
-          <div className="col left">
-            <MailPane screen={screen} typed={typed} />
-            {/* v1.19 (D38): the Market pane joins this row only once the market has a job (off: unchanged). */}
-            <div className={`low${screen.market.jobs.length ? " three" : ""}`}>
-              <SocialPane screen={screen} typed={typed} />
-              <MarketPane screen={screen} />
-              <PhonePane screen={screen} typed={typed} />
-            </div>
-          </div>
-          <div className="col mid">
-            <SheetPane screen={screen} />
-            <div className="low">
-              <SearchPane screen={screen} typed={typed} />
-              <CalendarPane screen={screen} />
-            </div>
-          </div>
+        <section className={screen.market.jobs.length ? "stage has-market" : "stage"} data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined} aria-label="The firm's panes">
+          <MailPane screen={screen} typed={typed} />
+          <SheetPane screen={screen} />
+          {/* v1.19 (D38): once the market has a job it takes this cell, and Search moves down beside Calendar. */}
+          <div className="stack">{screen.market.jobs.length ? <MarketPane screen={screen} /> : <SearchPane screen={screen} typed={typed} />}</div>
           <Rail screen={screen} numbers={numbers} />
-        </main>
+          <SocialPane screen={screen} typed={typed} />
+          <PhonePane screen={screen} typed={typed} />
+          <div className="stack">
+            {screen.market.jobs.length > 0 && <SearchPane screen={screen} typed={typed} />}
+            <CalendarPane screen={screen} />
+          </div>
+        </section>
       </PaneBoundary>
 
-      <footer>
+      <footer className="bar">
         <div className="avs" aria-hidden>
           {AGENTS.filter(([id]) => id !== "ceo").map(([id]) => (
-            <DeptAvatar key={id} seat={id} size={26} className="av" />
+            <DeptAvatar key={id} seat={id} size={28} className="av" />
           ))}
         </div>
-        <span className="mono firmline">
-          Firm run by <b>{plural(numbers.firm.agents, "agent")}</b> · <b>{plural(numbers.firm.clients, "client")}</b> ·{" "}
-          <b>{plural(humanTouches(numbers), "human touch", "human touches")}</b>
+        <span className="sum">
+          Firm run by {plural(numbers.firm.agents, "agent")} · {plural(numbers.firm.clients, "client")} · {plural(humanTouches(numbers), "human touch", "human touches")}
           {source === "replay" ? " · Replay" : ""}
         </span>
-        <div className="bar" role="progressbar" aria-label="log progress" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
+        <div className="prog" role="progressbar" aria-label="log progress" aria-valuenow={Math.round(progress * 100)} aria-valuemin={0} aria-valuemax={100}>
           <i style={{ width: `${progress * 100}%` }} />
         </div>
-        <div className="ctl" role="group" aria-label="playback">
-          <span className="seg">
-            {SPEEDS.map((s) => (
-              <button key={s} className={speed === s ? "on" : ""} aria-pressed={speed === s} onClick={() => setSpeed(s)}>
-                {s}×
-              </button>
-            ))}
-          </span>
-          <button className={sound ? "on" : ""} aria-pressed={sound} onClick={() => setSound((v) => !v)} title="Play spoken briefs and CEO orders">
-            {sound ? "Sound on" : "Sound off"}
-          </button>
-          <button className={stage ? "on" : ""} aria-pressed={stage} onClick={() => setStage((v) => !v)} title="Stage mode (S)">
-            Stage
-          </button>
-          <button className="replay" onClick={onReplay} disabled={status === "loading"} title={source === "live" ? "Replay the whole night from the gateway log" : "Play the log again"}>
-            Replay
-          </button>
-          {HAS_GATEWAY && source !== "live" && (
-            <button onClick={() => setOverride("live")} title="Follow the firm live">
-              Live
+        <div className="seg" role="group" aria-label="speed">
+          {SPEEDS.map((s) => (
+            <button key={s} className={speed === s ? "on" : ""} aria-pressed={speed === s} onClick={() => setSpeed(s)}>
+              {s}×
             </button>
-          )}
+          ))}
         </div>
+        <button className={`tb${sound ? " on" : ""}`} aria-pressed={sound} onClick={() => setSound((v) => !v)} title="Play spoken briefs and CEO orders">
+          {sound ? "🔊 Sound on" : "🔈 Sound off"}
+        </button>
+        <button className={`tb${stage ? " on" : ""}`} aria-pressed={stage} onClick={() => setStage((v) => !v)} title="Stage mode (S)">
+          Stage
+        </button>
+        <button className="tb lime" onClick={onReplay} disabled={status === "loading"} title={source === "live" ? "Replay the whole night from the gateway log" : "Play the log again"}>
+          ↺ Replay
+        </button>
+        {HAS_GATEWAY && source !== "live" && (
+          <button className="tb" onClick={() => setOverride("live")} title="Follow the firm live">
+            Live
+          </button>
+        )}
       </footer>
 
       {/* Always mounted, so screen readers announce each change: captions, the overlay, the finale. */}
@@ -971,6 +967,7 @@ export function Theater() {
           </div>
         );
       })}
+    </main>
     </div>
   );
 }

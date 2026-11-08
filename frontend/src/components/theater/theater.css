@@ -142,8 +142,6 @@
 .theater .avs { display: flex; }
 .theater .av { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--bg); margin-left: -6px; }
 .theater .av:first-child { margin-left: 0; }
-.theater .bar { flex: 1; height: 4px; background: var(--line); border-radius: 4px; overflow: hidden; min-width: 40px; }
-.theater .bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--a-intake), var(--red)); transition: width .3s; }
 .theater .ctl { display: flex; gap: 6px; }
 .theater .ctl button { background: var(--panel2); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: calc(8px * var(--k)) calc(11px * var(--k)); min-height: calc(32px * var(--k)); transition: background-color .15s, border-color .15s; font: 600 calc(12px * var(--k) * var(--s)) var(--font-inter), Inter, sans-serif; cursor: pointer; }
 .theater .ctl button.on { background: var(--a-intake); color: var(--ink); border-color: var(--a-intake); }
@@ -175,13 +173,13 @@
 
 /* Stage mode (S): every pane's type ×1.4 (one multiplier, so tags, chips and empty states grow too),
    brighter greys, rail collapses to 3 big numbers. Header, footer, cursors and banners keep their size. */
-.theater.stage { --dim: #c4c3d6; --faint: #9d9cb6; }
-.theater.stage main, .theater.stage .caption { --s: 1.4; }
+.theater.stagemode { --dim: #c4c3d6; --faint: #9d9cb6; }
+.theater.stagemode .stage, .theater.stagemode .caption { --s: 1.4; }
 .theater .stagebox { --s: 1; }
 /* Stage type is bigger: tighter rows keep all ten sheet lines (down to "Estimated total") in the pane at 1080p. */
-.theater.stage td { padding: 2px 4px; line-height: 1.25; }
-.theater.stage aside .pane { display: none; }
-.theater.stage aside .stagebox { display: flex; flex-direction: column; justify-content: space-around; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; grid-row: 1 / -1; }
+.theater.stagemode td { padding: 2px 4px; line-height: 1.25; }
+.theater.stagemode aside .pane { display: none; }
+.theater.stagemode aside .stagebox { display: flex; flex-direction: column; justify-content: space-around; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; grid-row: 1 / -1; }
 .theater .stagebox div { font-size: calc(15px * var(--k) * var(--s)); color: var(--dim); }
 .theater .stagebox b { display: block; font: 800 calc(44px * var(--k) * var(--s)) var(--font-jetbrains-mono), "JetBrains Mono", monospace; color: var(--text); }
 .theater .stagebox b.g { color: var(--green); font-size: calc(32px * var(--k) * var(--s)); }
@@ -205,7 +203,7 @@
 @media (max-width: 900px) {
   .theater main, .theater main[data-focus] { grid-template-columns: 1fr; }
   .theater aside, .theater .col.mid { display: none; }
-  .theater .sub, .theater .hint, .theater .pill > .mono, .theater .avs, .theater .bar, .theater .firmline { display: none; }
+  .theater .sub, .theater .hint, .theater .pill > .mono, .theater .avs, .theater .prog, .theater .firmline { display: none; }
   .theater header { gap: 8px; }
   .theater .pill { gap: 6px; }
   .theater footer { justify-content: flex-end; padding: 0 8px; overflow-x: auto; }
@@ -218,19 +216,9 @@
    Each card is one order; its lines are the firm's steps for it, newest at the bottom.
    The grid always has four rows (the band's is 0fr without orders), so the band slides open and
    closed instead of jumping every pane in one frame. */
-.theater { transition: grid-template-rows calc(.6s * var(--t)) ease; }
-.theater > header { grid-row: 1; }
-.theater > .orders { grid-row: 2; }
-.theater > main, .theater > .pane-fallback { grid-row: 3; }
-.theater > footer { grid-row: 4; }
 /* Without orders the empty band row would add one extra gap: take it back so the night layout is unchanged. */
-.theater:not(.has-orders) > main { margin-top: calc(-10px * var(--k)); }
-.theater.has-orders { grid-template-rows: calc(52px * var(--k)) minmax(0, .62fr) minmax(0, 1fr) calc(64px * var(--k)); }
-.theater.stage.has-orders { grid-template-rows: calc(52px * var(--k)) minmax(0, .85fr) minmax(0, 1fr) calc(64px * var(--k)); }
 /* The camera on any pane (an ad being posted, a call booked, the $85,165 → $450 sheet): the band makes room. */
-.theater.has-orders:has(> main[data-focus]) { grid-template-rows: calc(52px * var(--k)) minmax(0, .4fr) minmax(0, 1fr) calc(64px * var(--k)); }
-.theater.stage.has-orders:has(> main[data-focus]) { grid-template-rows: calc(52px * var(--k)) minmax(0, .5fr) minmax(0, 1fr) calc(64px * var(--k)); }
-.theater.stage .orders { --s: 1.4; }
+.theater.stagemode .orders { --s: 1.4; }
 .theater .orders { display: flex; flex-direction: column; gap: calc(8px * var(--k)); min-height: 0; }
 .theater .oh { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .theater .ot { font-size: calc(11px * var(--k) * var(--s)); color: var(--dim); letter-spacing: .08em; text-transform: uppercase; white-space: nowrap; }
@@ -270,7 +258,6 @@
   .theater { transition: none; }
 }
 @media (max-width: 900px) {
-  .theater.has-orders, .theater.stage.has-orders, .theater.has-orders:has(> main[data-focus]), .theater.stage.has-orders:has(> main[data-focus]) { grid-template-rows: auto minmax(0, .8fr) minmax(0, 1fr) auto; }
   .theater .cards { grid-template-columns: minmax(0, 1fr); }
   .theater .order:not(.newest) { display: none; }
   .theater .desks { display: none; }
@@ -325,7 +312,7 @@
 .theater ::selection { background: rgba(190, 242, 67, .3); }
 .theater main[data-focus] .pane:not(.focus) { --text: #c4c6bd; --line: rgba(255, 255, 255, .05); }
 .theater main[data-focus] aside .pane:not(.focus) { --text: #f2f3ee; --line: rgba(255, 255, 255, .08); }
-.theater.stage { --dim: #c9cbc2; --faint: #a3a59c; }
+.theater.stagemode { --dim: #c9cbc2; --faint: #a3a59c; }
 
 /* Header */
 .theater header { gap: 14px; }
@@ -398,7 +385,6 @@
 .theater .avs .av:first-child { margin-left: 0; }
 .theater .firmline { font: 500 calc(13px * var(--k)) var(--tmono); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .theater .firmline b { font-weight: 500; }
-.theater .bar i { background: linear-gradient(90deg, var(--a-intake), var(--lime)); }
 .theater .ctl { align-items: center; gap: 8px; flex-shrink: 0; }
 .theater .ctl button { background: transparent; border: 1px solid var(--line-2); color: var(--dim); border-radius: 10px; font: 500 calc(12.5px * var(--k)) var(--sans); white-space: nowrap; }
 .theater .ctl button:hover:not(:disabled) { color: var(--text); border-color: var(--lime); background: transparent; }
@@ -419,7 +405,7 @@
   .theater .title { font-size: 20px; }
 }
 /* Empty states fit whatever room the camera leaves a pane: the art goes first, then the line. */
-.theater main .col .pb { container-type: size; }
+.theater .stage > .pane .pb, .theater .stack > .pane .pb { container-type: size; }
 .theater .ui-empty { overflow: hidden; }
 .theater .ui-empty span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 @container (max-height: 170px) { .theater .ui-empty svg { display: none; } }
@@ -432,4 +418,48 @@
    (it lists what fits), and if even its minimum doesn't fit, the rail scrolls inside itself. */
 .theater aside { grid-template-rows: max-content max-content max-content minmax(calc(72px * var(--k)), 1fr); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .15) transparent; }
 .theater aside > .pane:not([data-target="rail.cases"]) { min-height: max-content; flex-shrink: 0; }
-.theater.stage aside { overflow: hidden; }
+.theater.stagemode aside { overflow: hidden; }
+
+/* ---------------------------------------------------------------- D41 F46: the prototype's Overview DOM.
+   office-page.css (the prototype, scoped .ox) draws it; these rules only fit the theater's parts into it. */
+.theater > .head { grid-row: 1; }
+.theater > .orders { grid-row: 2; }
+.theater > .stage, .theater > .pane-fallback { grid-row: 3; }
+.theater > .bar { grid-row: 4; }
+.theater:not(.has-orders) > .stage, .theater:not(.has-orders) > .pane-fallback { margin-top: -14px; } /* no empty band gap */
+.theater .pills .pill { margin-left: 0; }
+.theater .tb.on { background: rgba(190, 242, 67, .12); color: var(--lime); border-color: rgba(190, 242, 67, .5); }
+.theater .tb:disabled { opacity: .45; cursor: not-allowed; }
+.theater .tb:focus-visible, .theater .seg button:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+.theater .sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* Column 3, row 1: Search, with the Market pane above it once the market has a job. */
+.theater .stack { display: grid; grid-template-rows: minmax(0, 1fr); gap: 12px; min-height: 0; min-width: 0; }
+.theater .stack { grid-auto-rows: minmax(0, 1fr); }
+/* Orders: three cards; each shows its newest steps (older ones fade off the top). */
+.theater .ord { min-width: 0; max-height: calc(170px * var(--k)); overflow: hidden; }
+.theater .ord .ord-h time { font: inherit; }
+.theater .ord .wait { color: var(--faint); font-size: 13px; }
+.theater .ord .steps { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column-reverse; justify-content: flex-start; gap: 6px; padding-top: .6em; -webkit-mask-image: linear-gradient(to bottom, transparent, #000 .6em); mask-image: linear-gradient(to bottom, transparent, #000 .6em); }
+.theater .ord .steps .step:first-child { margin-bottom: auto; }
+.theater .ord .step { animation: th-line-in calc(.4s * var(--t)) ease-out; }
+.theater .ord .step img { margin-left: auto; height: 30px; border-radius: 4px; border: 1px solid var(--line); }
+/* The rail: touches, money and hiring keep their height; cases takes what is left (the rail scrolls if needed). */
+.theater aside.rail { overflow-y: auto; }
+.theater aside.rail > .pane[data-target="rail.cases"] { flex: 1 1 0; min-height: calc(72px * var(--k)); }
+.theater .rail .mb { display: flex; flex-direction: column; }
+.theater .rail .sublbl { font: 11.5px var(--gmono); color: var(--faint); margin-bottom: 6px; }
+.theater .rail .cases { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: hidden; }
+.theater .rail .log { margin-top: 6px; }
+/* The coin flies only on payment.sent (.flying); the prototype's demo loop never runs here. */
+.theater .coin:not(.flying) { animation: none; opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .theater .ord .step { animation: none; } }
+@media (max-width: 900px) {
+  .theater .stage { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; grid-auto-rows: minmax(220px, auto); overflow-y: auto; }
+  .theater .rail { display: none; }
+  .theater .orders { grid-template-columns: minmax(0, 1fr); }
+  .theater .ord:not(.live) { display: none; }
+  .theater .bar { overflow-x: auto; }
+}
+.theater .stage .wallets .wallet { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.theater .stage .job { gap: 6px; padding: 10px 12px; }
+.theater .stage .job .paid { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
