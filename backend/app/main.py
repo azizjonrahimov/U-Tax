@@ -59,7 +59,10 @@ def _show_utax_logs() -> None:
 def _ensure_session_secret(gw: Gateway) -> None:
     """v1.13: UTAX_SESSION_SECRET unset at first boot: generate one, write it into
     backend/.env (never printed) and use it now, so sessions outlive a restart."""
-    if gw.settings.session_secret or os.environ.get("UTAX_SESSION_SECRET"):
+    current = gw.settings.session_secret or os.environ.get("UTAX_SESSION_SECRET", "")
+    if current:
+        if len(current) < 32:  # fail at boot, never as a 500 on every theater read
+            raise RuntimeError("UTAX_SESSION_SECRET must be at least 32 characters")
         return
     import secrets
     from pathlib import Path

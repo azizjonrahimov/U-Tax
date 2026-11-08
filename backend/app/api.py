@@ -175,7 +175,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     free_limiter = RateLimiter(limit=FREE_LIMITS[False][0])
     audio_limiter = RateLimiter(limit=30, global_limit=120)
     ceo_mint_limiter = RateLimiter(limit=10, window=3600.0)  # v1.8: the CEO's 10 an hour
-    login_limiter = RateLimiter(limit=10, window=900.0)  # v1.13: 10 sign-ins per IP per 15 min
+    # v1.13: 10 sign-ins per IP and email per 15 min; 200 in all, so rotating keys stop too
+    login_limiter = RateLimiter(limit=10, window=900.0, global_limit=200)
     auth_state: dict[str, Any] = {}  # v1.13: the Sessions object for this app
     # v1.12 §5a: the public sign-up has /talk's per-IP limits, in its own bucket
     signup_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
@@ -220,9 +221,14 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             return  # the CEO console may read what the theater reads
         raise APIError(401, "unauthorized", "theater token required")
 
-    def require_admin(authorization: str | None) -> None:
+    def auth_configured() -> bool:
+        """Admin routes are closed once an ADMIN_TOKEN or a CEO password exists (open only
+        in bare local dev with neither): a blank ADMIN_TOKEN never undoes the CEO login."""
         settings = gw().settings
-        if settings.admin_token and not is_admin(authorization):
+        return bool(settings.admin_token or settings.ceo_password_hash)
+
+    def require_admin(authorization: str | None) -> None:
+        if auth_configured() and not is_admin(authorization):
             raise APIError(401, "unauthorized", "admin token or a CEO session required")
 
     def _talk_limit(limiter: RateLimiter, limits: dict[bool, tuple[int, int | None]]) -> None:
@@ -239,7 +245,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def state(token: str | None = Query(None), authorization: str | None = Header(None)):
         require_theater(token, authorization)
         settings = gw().settings
-        admin = not settings.admin_token or is_admin(authorization, token)
+        admin = not auth_configured() or is_admin(authorization, token)
         return gw().public_state(admin=admin)
 
     @router.get("/api/events")
@@ -276,9 +282,10 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def login(request: Request, body: dict = Body(...)):
         """The CEO signs in: CEO_EMAIL (any case) and the password behind CEO_PASSWORD_HASH.
         One answer for a wrong email or a wrong password; 10 tries per IP per 15 minutes."""
-        login_limiter.check(_client_ip(request))
         settings = gw().settings
         email, password = body.get("email"), body.get("password")
+        # per IP and email: a crowd sharing the venue's IP can't lock the CEO out
+        login_limiter.check(f"{_client_ip(request)}|{str(email or '').strip().lower()[:320]}")
         given = email.strip().lower() if isinstance(email, str) else ""
         expected = settings.ceo_email.strip().lower()
         email_ok = bool(expected) and hmac.compare_digest(given.encode(), expected.encode())

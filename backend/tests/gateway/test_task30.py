@@ -162,3 +162,32 @@ def test_greetings_and_mic_checks_are_never_orders(h, said):
     r = h.gw.perform("ceo_command", {"text": said}).data
     assert r == {"kind": "say", "say": "I'm listening. Tell me an order."}
     assert not h.events("ceo.proposed")
+
+
+# ---------------------------------------------------------------- review 1
+
+
+def test_a_blank_admin_token_never_opens_the_console_once_a_password_is_set(make_harness):
+    h = make_harness(ceo_email=CEO, ceo_password_hash=hash_password(PASSWORD),
+                     session_secret="s" * 48)  # no ADMIN_TOKEN
+    with TestClient(create_app(h.gw, start_background=False)) as client:
+        assert client.post("/api/ceo/command", json={"text": "trust"}).status_code == 401
+        token = login(client).json()["session"]
+        assert client.post("/api/ceo/command", headers=bearer(token),
+                           json={"text": "trust"}).status_code == 200
+
+
+def test_another_email_from_the_same_ip_cant_lock_the_ceo_out(site):
+    h, client = site
+    for _ in range(12):
+        login(client, email="attendee@venue.dev", password="guess")
+    assert login(client).status_code == 200
+
+
+def test_a_short_session_secret_fails_at_boot(make_harness, monkeypatch):
+    import app.main as main
+
+    monkeypatch.delenv("UTAX_SESSION_SECRET", raising=False)
+    h = make_harness(session_secret="too-short")
+    with pytest.raises(RuntimeError):
+        main._ensure_session_secret(h.gw)
