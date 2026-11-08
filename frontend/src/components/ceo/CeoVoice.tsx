@@ -42,6 +42,13 @@ import {
   type FunctionCall,
   type Proposal,
   type ToolResult,
+  earFinals,
+  isStopCommand,
+  isStopEverything,
+  newEarMemory,
+  newEarSession,
+  rememberSaid,
+  shouldSay,
   type VoiceEffect,
   type VoiceState,
 } from "@/ceo/voice";
@@ -154,6 +161,13 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const [link, setLink] = useState<Link>("off");
   const [flow, setFlow] = useState<Flow>("idle");
   const [micOn, setMicOn] = useState(false);
+  /** D33: what the browser's ear understood last, shown so the CEO can see it. */
+  const [heard, setHeard] = useState<{ text: string; note: string | null } | null>(null);
+  /** D33 loop guard: the ear's memory (last utterance, the console's recent lines) and the last reply said. */
+  const earMemory = useRef(newEarMemory());
+  const lastReply = useRef<{ key: string; text: string; at: number } | null>(null);
+  /** STOP EVERYTHING, for Esc and a spoken stop (set once stopEverything exists). */
+  const stopRef = useRef<(channel?: "click" | "voice") => Promise<void>>(async () => {});
   const [handsFree, setHandsFree] = useState(false);
   const [card, setCard] = useState<Card | null>(null);
   const [now, setNow] = useState(0);
@@ -284,7 +298,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
    * to the end (false when it was cut off, stopped or stalled).
    */
   const speak = useCallback(
-    (text: string, onDone?: (played: boolean) => void) => {
+    (text: string, onDone?: (played: boolean) => void, replyKey?: string) => {
       if (!text.trim()) {
         onDone?.(true);
         return;
@@ -293,6 +307,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         onDone?.(false); // the console is gone: nothing more is said
         return;
       }
+      // D33: a reply to the same command, already said, is not said again. A line with onDone
+      // (a readback) is never skipped: it must really play to arm a spoken confirm.
+      const key = onDone ? undefined : replyKey;
+      if (!shouldSay(lastReply.current, key, text, Date.now())) return;
+      rememberSaid(earMemory.current, text, Date.now()); // the ear drops its echo
       if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", true, Date.now());
       speaking.current += 1;
       applyMic();
@@ -302,6 +321,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         setMicOn(false);
       }
       speaker().say(text, (played) => {
+        if (played && key) lastReply.current = { key, text, at: Date.now() };
         speaking.current = Math.max(0, speaking.current - 1);
         if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", false, Date.now());
         applyMic();
@@ -316,6 +336,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     [applyMic, speaker, stopListening],
   );
   const hush = useCallback(() => {
+    lastReply.current = null; // a reply cut off here may be said again
     speakerRef.current?.stop(); // every queued line ends as not heard
     // ...and the brief, when the browser reads it (Ceo.tsx): STOP silences every voice on the console.
     if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel();
@@ -340,11 +361,18 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     r.lang = "en-US";
     r.continuous = handsRef.current;
     r.interimResults = false;
+    // D33 loop guard (voice.ts earFinals): a final re-delivered in this session or across a
+    // restart, or the console's own recent line coming back, is never a new utterance.
+    const session = newEarSession(Date.now());
     r.onresult = (e) => {
       earErrors.current = 0;
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const res = e.results[i];
-        if (res.isFinal && res[0]?.transcript.trim()) spokenRef.current(res[0].transcript);
+      const results: { index: number; text: string; isFinal: boolean }[] = [];
+      for (let i = e.resultIndex; i < e.results.length; i++) results.push({ index: i, text: e.results[i][0]?.transcript ?? "", isFinal: e.results[i].isFinal });
+      const { take, dropped } = earFinals(results, session, earMemory.current, Date.now());
+      for (const d of dropped) setHeard({ text: d.text, note: d.why === "repeat" ? "heard twice, sent once" : "U-Tax's own voice, ignored" });
+      for (const text of take) {
+        setHeard({ text, note: null });
+        spokenRef.current(text);
       }
     };
     let failed = false;
@@ -527,7 +555,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const handle = useCallback(
     (r: ToolResult, callId: string | null, tool: string | null, via: "voice" | "click", said = "") => {
       if (r.kind === "done") {
-        setOutcome({ ok: true, text: r.summary });
+        // v1.13.1: a stop command also cancels the open card, like the STOP button.
+        const open = vs.current.proposal;
+        const cancelled = open && !open.settling && isStopCommand(said);
+        if (cancelled) closeCard(open.proposalId);
+        setOutcome({ ok: true, text: cancelled ? `${r.summary} The open proposal was cancelled.` : r.summary });
         refresh();
       }
       if (callId) {
@@ -567,11 +599,18 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         const p = { proposalId: r.proposalId, readback: r.readback || "The open proposal.", expiresAt: localExpiry(null, Date.now()), tool: isApproveIt(said) ? "approve" : null };
         return openLocalCard(p, `${p.readback} Confirm again to go ahead.`);
       }
-      const text = r.kind === "read" ? describeRead(r.data) : r.kind === "done" ? r.summary : r.kind === "unknown" ? r.say : "";
+      // v1.13 "say": a line and nothing else; an open card stays as it is.
+      let text = r.kind === "read" ? describeRead(r.data) : r.kind === "done" ? r.summary : r.kind === "unknown" || r.kind === "say" ? r.say : "";
+      if (r.kind === "say" && /confirm or cancel/i.test(text)) {
+        // The gateway holds an open proposal: say what fits this console.
+        const open = vs.current.proposal;
+        if (open?.settling) text = "Your confirm is on its way.";
+        else if (!open) text = "A proposal is open on another screen. Say cancel to clear it, or confirm it there.";
+      }
       addLine("firm", text);
-      speak(text);
+      speak(text, undefined, said ? `reply:${said}` : undefined);
     },
-    [addLine, openLocalCard, post, refresh, send, showCard, speak, unauthorized],
+    [addLine, closeCard, openLocalCard, post, refresh, send, showCard, speak, unauthorized],
   );
 
   const runTool = useCallback(
@@ -622,6 +661,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       const t = text.trim();
       if (!t) return;
       addLine("you", t);
+      if (isStopEverything(t)) {
+        // The STOP button's own path: it cancels an open card and pauses, whatever is on screen.
+        void stopRef.current("voice");
+        return;
+      }
       const d = decideTyped(vs.current, t, Date.now(), via === "voice");
       if (d?.type === "ignored") {
         setOutcome({ ok: false, text: IGNORED });
@@ -650,7 +694,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         if (!alive.current || unauthorized(e)) return;
         const msg = voiceError(e);
         addLine("firm", msg);
-        speak(msg);
+        speak(msg, undefined, `error:${t}`);
       }
     },
     [addLine, handle, post, settle, speak, unauthorized],
@@ -924,7 +968,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   }, [go, hangUp, hush, stopListening]);
 
   /** STOP EVERYTHING: pause every action type now. No confirm, never waits on the model, fences what's in flight. */
-  const stopEverything = useCallback(async () => {
+  const stopEverything = useCallback(async (channel: "click" | "voice" = "click") => {
     if (stopping.current) return;
     stopping.current = true;
     stopEpoch.current += 1;
@@ -941,7 +985,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     try {
       let summary: string;
       try {
-        const r = await post("/ceo/tool", { name: STOP_EVERYTHING.name, args: STOP_EVERYTHING.args, call_id: `stop-${Date.now()}`, channel: "click" });
+        const r = await post("/ceo/tool", { name: STOP_EVERYTHING.name, args: STOP_EVERYTHING.args, call_id: `stop-${Date.now()}`, channel });
         summary = r.kind === "done" ? r.summary : "Everything is paused.";
       } catch (e) {
         if (unauthorized(e)) {
@@ -969,9 +1013,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       if (!signedOut && alive.current) refresh();
     }
   }, [closeCard, hush, post, refresh, send, speak, tellModel, token, unauthorized]);
-
   // Esc is STOP EVERYTHING, anywhere on the console (not while an input method is composing).
-  const stopRef = useRef(stopEverything);
   useEffect(() => {
     stopRef.current = stopEverything;
   }, [stopEverything]);
@@ -1184,6 +1226,13 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           </button>
         )}
       </div>
+      {/* D33: what the browser's ear understood last (the chip above says whether it is listening). One line, below the controls, so STOP never moves. */}
+      {link === "fallback" && heard && (
+        <p className="heard" role="status" title={heard.text}>
+          Heard: <q>{heard.text}</q>
+          {heard.note && <span className="note"> · {heard.note}</span>}
+        </p>
+      )}
 
       {stopNote && (
         <p className={stopNote.ok === false ? "error banner" : "stopped"} role={stopNote.ok === false ? "alert" : "status"}>

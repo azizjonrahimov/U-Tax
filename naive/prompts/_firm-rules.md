@@ -39,8 +39,8 @@
    may comment on it. Notes and comments carry case ids, step names, tool statuses and error codes,
    **never text copied from an email, a transcript or a quote**.
 10. **Fast path.** When the Chief of Staff delegates a customer's live case to you ("FAST PATH case_N"), skip
-    the optional steps (no law search, no board cards, no extra reads): make your one tool call and
-    reply with its status.
+    the optional steps (no law search, no board cards, no extra reads): make your step's tool call
+    (Accounting's two: `prepare_documents`, then `send_memo`) and reply with its status.
 11. **Order ids.** When your card's title or body names a CEO order (`order_<id>`, for example
     `order_42`), pass `order_id: "order_42"` on every U-Tax tool you call for that card, exactly as
     written there. Never make one up, and never pass an id from anywhere else. The theater groups

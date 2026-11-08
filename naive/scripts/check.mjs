@@ -172,7 +172,9 @@ const TEMPLATE_RULES = {
   "hr-hired.md": { body: true, noAmounts: true, placeholders: [] },
   "hr-declined.md": { body: true, noAmounts: true, placeholders: [] },
   // v1.11 (design D31): the gateway's Spec in backend/app/gateway/templates.py names these placeholders
-  "hr-outreach.md": { body: true, applicant: true, noAmounts: true, placeholders: ["slot_time", "minutes", "booking_url"], optional: ["booking_url"] },
+  // task 32: outreach is two emails, a plain note, then the invite once the candidate replies
+  "hr-outreach-note.md": { body: true, applicant: true, noAmounts: true, noLinks: true, placeholders: ["greeting_name", "slot_time", "minutes"] },
+  "hr-outreach-invite.md": { body: true, noAmounts: true, placeholders: ["greeting_name", "slot_time", "minutes", "booking_url"], optional: ["booking_url"] },
   "follow-up-memo_check.md": { body: true, client: true, placeholders: ["greeting_name"] },
   "follow-up-missing_facts.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list"] },
   "follow-up-call_reminder.md": { body: true, client: true, placeholders: ["greeting_name", "call_time"] },
@@ -289,6 +291,8 @@ function templateProblems(file, text, rule) {
   if (rule.applicant && !text.includes(DISCLOSURE)) bad("missing the AI-screen disclosure line");
   if (rule.body && /^\s*subject:/i.test(text)) bad("starts with a Subject: line; the gateway sets the subject");
   if (rule.noAmounts && /\$\s?\d/.test(text)) bad("literal dollar amount");
+  if (rule.noLinks && /https?:\/\/|\bwww\.|\{\{\s*booking_url\s*\}\}|@[a-z0-9-]+\.[a-z]{2,}|\b[a-z0-9-]+\.(?:com|io|ai|dev|co|net|org|app|xyz|to)\b/i.test(text))
+    bad("has a link (a first cold note stays plain: links send it to spam; the invite email carries them)");
   if (rule.spend && /(?<!estimated )\{\{\s*agent_spend\s*\}\}/.test(text.replace(/\s+/g, " ")))
     bad('{{agent_spend}} must read "an estimated {{agent_spend}}" (spend is an estimate)');
   if (rule.posts) {
