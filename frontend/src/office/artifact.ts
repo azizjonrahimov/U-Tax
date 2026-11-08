@@ -235,13 +235,45 @@ export function empty(a: Artifact | null): boolean {
   }
 }
 
+/** Each case's documents: what the Accounting window attaches and the CEO's case list offers (F1). */
+export type CaseDocs = Pick<Studio, "files" | "served" | "checks">;
+export const emptyCaseDocs = (): CaseDocs => ({ files: {}, served: {}, checks: {} });
+
+/**
+ * One doc.* event into a case's documents (one rule for every reader): a build starts its checks
+ * over; the latest workpaper and memo are the case's files (the books stay in the firm); a
+ * version is served once all three of its documents passed, never for a flagged case (`hide`).
+ */
+export function stepCaseDocs<T extends CaseDocs>(st: T, ev: UTaxEvent, hide: boolean): T {
+  const cid = ev.case_id;
+  if (!cid) return st;
+  const p: P = isObj(ev.payload) ? ev.payload : {};
+  const doc = str(p, "doc");
+  if (ev.type === "doc.step") return doc === "workpaper" && num(p, "step") === 1 ? { ...st, checks: { ...st.checks, [cid]: {} } } : st;
+  if (ev.type === "doc.created") {
+    const file = line(str(p, "file_name"), 100);
+    if (!file || (doc !== "workpaper" && doc !== "memo")) return st;
+    const files = { ...st.files, [cid]: { ...st.files[cid], [doc]: file } };
+    const ids = Object.keys(files);
+    if (ids.length > 50) delete files[ids[0]];
+    return { ...st, files };
+  }
+  if (ev.type === "doc.verified" && (doc === "workpaper" || doc === "memo" || doc === "books")) {
+    const checks = { ...(st.checks[cid] ?? {}), [doc]: p.ok === true };
+    const f = st.files[cid];
+    const next = { ...st, checks: { ...st.checks, [cid]: checks } };
+    return !hide && checks.workpaper && checks.memo && checks.books && f?.workpaper && f.memo ? { ...next, served: { ...next.served, [cid]: [f.workpaper, f.memo] } } : next;
+  }
+  return st;
+}
+
 /** Fold one event into the studio. Unknown or malformed events change nothing. */
 export function applyStudio(st0: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
-  let st = st0;
   const p: P = isObj(ev.payload) ? ev.payload : {};
   const key = `${ev.id}`;
   const base = { key, ts: ev.ts, caseId: ev.case_id };
   const hide = ctx.flagged(ev.case_id);
+  const st = stepCaseDocs(st0, ev, hide);
 
   if (ev.type === "agent.activity") {
     const seat = seatOf(ev);
@@ -357,7 +389,6 @@ export function applyStudio(st0: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio 
       if (doc !== "workpaper" && doc !== "memo" && doc !== "books") return st;
       const detail = line(str(p, "detail"), 200);
       const fresh = doc === "workpaper" && num(p, "step") === 1;
-      if (fresh && ev.case_id) st = { ...st, checks: { ...st.checks, [ev.case_id]: {} } };
       const reuse = prev?.kind === "docs" && (prev.caseId === ev.case_id || (prev.caseId === null && prev.units.length === 0)) && !(fresh && prev.units.length > 0);
       const cur: Artifact & DocsArt = reuse && prev?.kind === "docs" ? { ...prev, caseId: ev.case_id } : { ...base, kind: "docs", workpaper: null, memo: null, books: null, units: [], state: "drafting" };
       const units = [...cur.units];
@@ -399,31 +430,16 @@ export function applyStudio(st0: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio 
       const doc = str(p, "doc");
       const file = line(str(p, "file_name"), 100);
       const cid = ev.case_id;
-      // Only the workpaper and the memo go to the client (the books stay in the firm); the latest version wins.
-      let files = st.files;
-      if (cid && file && (doc === "workpaper" || doc === "memo")) {
-        files = { ...st.files, [cid]: { ...st.files[cid], [doc]: file } };
-        const ids = Object.keys(files);
-        if (ids.length > 50) delete files[ids[0]];
-      }
       let art = prev;
       if (prev?.kind === "docs" && prev.caseId === cid && file && (doc === "workpaper" || doc === "memo" || doc === "books")) {
         const d = prev[doc];
         art = d ? { ...prev, [doc]: { ...d, file, built: true } } : prev;
       }
-      return { ...put(st, seat, { art }), files };
+      return put(st, seat, { art });
     }
     case "doc.verified": {
       const doc = str(p, "doc");
       if (doc !== "workpaper" && doc !== "memo" && doc !== "books") return st;
-      // What the gateway will serve: all three of this build passed (and the case isn't flagged).
-      const cid = ev.case_id;
-      if (cid) {
-        const checks = { ...(st.checks[cid] ?? {}), [doc]: p.ok === true };
-        st = { ...st, checks: { ...st.checks, [cid]: checks } };
-        const f = st.files[cid];
-        if (!hide && checks.workpaper && checks.memo && checks.books && f?.workpaper && f.memo) st = { ...st, served: { ...st.served, [cid]: [f.workpaper, f.memo] } };
-      }
       if (prev?.kind !== "docs" || prev.caseId !== ev.case_id) return st;
       const d = prev[doc];
       if (!d) return st;

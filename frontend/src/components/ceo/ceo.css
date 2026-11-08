@@ -158,3 +158,15 @@
 .ceo main.elsewhere { padding: 20px 16px; gap: 12px; }
 .ceo main.elsewhere p { margin: 0; color: var(--dim); font-size: 15px; }
 .ceo.in-panel:focus { outline: none; }
+/* F1: the firm's cases, each with its verified documents to download */
+.ceo .cases ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.ceo .case-row { padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); display: grid; gap: 6px; }
+.ceo .case-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.ceo .case-head strong { overflow-wrap: anywhere; }
+.ceo .case-status { font-size: 14px; color: var(--dim); white-space: nowrap; }
+.ceo .case-status.flagged { color: #ff8a7d; font-weight: 600; }
+.ceo .case-docs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; }
+.ceo .case-docs .dl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ceo .case-docs button { min-height: 36px; padding: 0 12px; font-size: 14px; }
+.ceo .case-docs .error { font-size: 14px; }
+.ceo .case-none { margin: 0; font-size: 14px; }
