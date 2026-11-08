@@ -662,3 +662,12 @@ describe("parseJsonl", () => {
     expect(bad.map((b) => b.line)).toEqual([2, 3, 4]);
   });
 });
+
+describe("v1.12 tool.called on the projector", () => {
+  it("only lights a desk: no hold, so busy agents never slow the theater", async () => {
+    const { stepHoldMs } = await import("./timing");
+    const step = { eventId: 1, ts: "2026-11-07T21:00:00.000Z", caseId: null, pane: "rail", key: "1:0", target: "rail.tool", agent: null, action: "status", text: "send_email", meta: { seat: "intake", tool: "send_email", status: "done" } } as unknown as Parameters<typeof stepHoldMs>[0];
+    expect(stepHoldMs(step)).toBe(0);
+    expect(stepHoldMs({ ...step, target: "rail.cases" } as typeof step)).toBe(250);
+  });
+});

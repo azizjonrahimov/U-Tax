@@ -26,9 +26,17 @@ npm run build   # production build
 npm run start   # serve the production build
 ```
 
+## Routes (D32/D33)
+
+- `/` the landing page (the free checkup). `/signup` client sign-up. `/talk` talk to U-Tax.
+- `/login` CEO sign-in: email and password → a 12 h session in this tab (no admin token on any screen).
+- `/office` the firm: Overview (the Agent Theater below) and one workspace per department, with
+  auto-follow of live agent steps. `/ceo` the CEO console (sign-in required).
+
 ## Theater
 
-`/` is the Agent Theater. It plays `public/fixtures/events.sample.jsonl` (a byte copy of
+The Agent Theater is the Overview in `/office` (`/office?source=fixture` or `?source=replay` for a
+fixture or full-log replay; auto-follow stays off then). It plays `public/fixtures/events.sample.jsonl` (a byte copy of
 `contracts/events.sample.jsonl`; a test fails if they drift). Keys and controls: `S` or the
 Stage button toggles stage mode; 1×/4×/16× speed; Sound plays briefs (gateway audio, falling
 back to browser speech); Replay restarts. Flags (default on): `NEXT_PUBLIC_SHOW_BLOCKED`,

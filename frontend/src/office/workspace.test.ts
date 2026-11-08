@@ -62,6 +62,17 @@ describe("D32 workspaces: tool.called drives each department's browser", () => {
     flaggedSet.delete("case_9");
   });
 
+  it("a possible-injection flag that comes later hides the sender of the email already shown", () => {
+    let o = applyEvent(emptyOffice(), ev(1, "email.received", { masked_name: "Team #5", from_masked: "z***@evil.dev", subject: "s", body: "b" }, { actor: "intake", case_id: "case_5" }), ctx);
+    o = applyEvent(o, ev(2, "email.received", { masked_name: "Team #6", from_masked: "k***@ok.dev", subject: "s", body: "b" }, { actor: "intake", case_id: "case_6" }), ctx);
+    o = applyEvent(o, ev(3, "case.flagged", { kind: "possible_injection" }, { actor: "qa", case_id: "case_5" }), ctx);
+    const shown = JSON.stringify(o.desks.intake.steps);
+    expect(shown).not.toContain("z***@evil.dev");
+    expect(shown).not.toContain("Team #5");
+    expect(shown).toContain("k***@ok.dev"); // another case is untouched
+    expect(o.desks.intake.steps.find((x) => x.caseId === "case_5")?.fields).toEqual([{ label: "From", value: "Hidden: flagged by QA" }]);
+  });
+
   it("images pass only the caller's check; replays file once; a desk keeps its newest 40 steps and 4 tabs", () => {
     const o = fold([
       ev(1, "ad.created", { kind: "client", headline: "h", image_url: "https://gw.example/assets/ad_1.png" }, { actor: "mkt" }),

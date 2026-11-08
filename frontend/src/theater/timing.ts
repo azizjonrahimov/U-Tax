@@ -40,6 +40,8 @@ export function stepHoldMs(step: CursorStep): number {
   const len = step.text?.length ?? 0;
   if (step.action === "type") return Math.min(4000, Math.max(300, (len / typingCps(step)) * 1000));
   if (step.action === "say") return Math.min(6000, Math.max(1200, len * 45));
+  // A tool call only lights a desk: no hold, so a busy agent never slows the projector (v1.12).
+  if (step.target === "rail.tool") return 0;
   return BASE_MS[step.action];
 }
 

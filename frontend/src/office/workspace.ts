@@ -54,6 +54,10 @@ export interface WsStep {
   fields: WsField[];
   focus: number;
   image?: string;
+  /** The case this step is about, when it has one. */
+  caseId?: string;
+  /** An email step: its sender fields are hidden if the case is flagged later. */
+  mail?: true;
 }
 
 export interface Workspace {
@@ -189,6 +193,22 @@ const factValue = (k: string, v: unknown): string | null => {
   return null;
 };
 
+/** An email step of a flagged case: nothing from the mail is shown. */
+const HIDDEN_MAIL = { text: "Opened a new email (flagged by QA: hidden)", fields: [{ label: "From", value: "Hidden: flagged by QA" }] as WsField[] };
+
+/** A possible-injection flag hides the case's mail on every desk, steps already shown included. */
+function hideMail(prev: Office, caseId: string): Office {
+  let changed = false;
+  const desks = { ...prev.desks };
+  for (const seat of SEATS) {
+    const w = desks[seat];
+    if (!w.steps.some((x) => x.mail && x.caseId === caseId)) continue;
+    changed = true;
+    desks[seat] = { ...w, steps: w.steps.map((x) => (x.mail && x.caseId === caseId ? { ...x, text: HIDDEN_MAIL.text, fields: HIDDEN_MAIL.fields, focus: 0 } : x)) };
+  }
+  return changed ? { ...prev, desks } : prev;
+}
+
 interface Draft {
   seat: Seat;
   kind: "tool" | "event";
@@ -199,6 +219,7 @@ interface Draft {
   focus?: number;
   image?: string;
   count?: string;
+  mail?: true;
 }
 
 /**
@@ -232,7 +253,8 @@ export function stepOf(ev: UTaxEvent, name: (caseId: string | null) => string, f
     case "email.received": {
       if (seat !== "intake") return null;
       const hidden = flagged(ev.case_id);
-      return { seat, kind: "event", text: `Opened a new email from ${s(p, "masked_name") || who}`, site: "AgentMail · inbox", fields: hidden ? [{ label: "From", value: "Hidden: flagged by QA" }] : [{ label: "From", value: clip(s(p, "from_masked"), 60) }, { label: "Client", value: clip(s(p, "masked_name"), 40) }], focus: 0, count: "emails" };
+      if (hidden) return { ...HIDDEN_MAIL, seat, kind: "event", site: "AgentMail · inbox", focus: 0, count: "emails", mail: true };
+      return { seat, kind: "event", text: `Opened a new email from ${s(p, "masked_name") || who}`, site: "AgentMail · inbox", fields: [{ label: "From", value: clip(s(p, "from_masked"), 60) }, { label: "Client", value: clip(s(p, "masked_name"), 40) }], focus: 0, count: "emails", mail: true };
     }
     case "facts.extracted": {
       if (!seat) return null;
@@ -388,12 +410,13 @@ export interface StepCtx {
 }
 
 export function applyEvent(prev: Office, ev: UTaxEvent, ctx: StepCtx): Office {
+  if (ev.type === "case.flagged" && ev.case_id && (ev.payload as { kind?: unknown } | null)?.kind === "possible_injection") prev = hideMail(prev, ev.case_id);
   const d = stepOf(ev, ctx.name, ctx.flagged, ctx.image);
   if (!d) return prev;
   const key = `${ev.id}`;
   const desk = prev.desks[d.seat];
   if (desk.steps.some((x) => x.key === key)) return prev; // replay
-  const step: WsStep = { key, eventId: ev.id, ts: ev.ts, seat: d.seat, kind: d.kind, text: d.text, status: d.status ?? "done", site: d.site, fields: d.fields ?? [], focus: d.focus ?? 0, ...(d.image ? { image: d.image } : {}) };
+  const step: WsStep = { key, eventId: ev.id, ts: ev.ts, seat: d.seat, kind: d.kind, text: d.text, status: d.status ?? "done", site: d.site, fields: d.fields ?? [], focus: d.focus ?? 0, ...(d.image ? { image: d.image } : {}), ...(ev.case_id ? { caseId: ev.case_id } : {}), ...(d.mail ? { mail: true as const } : {}) };
   const tabs = [...desk.tabs.filter((t) => t !== d.site), d.site].slice(-MAX_TABS);
   const counts = d.count ? { ...desk.counts, [d.count]: (desk.counts[d.count] ?? 0) + 1 } : desk.counts;
   const next: Workspace = { ...desk, steps: [step, ...desk.steps].slice(0, MAX_STEPS), tabs, counts };

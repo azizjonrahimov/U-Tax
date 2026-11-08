@@ -889,7 +889,7 @@ export function Talk() {
             {lostAnswer && <p className="hint">Your last spoken answer didn&rsquo;t come through. If it mattered, reply to the memo email with it.</p>}
             {streamDown && !done && <p className="hint">Live updates paused. The memo still arrives by email.</p>}
             <div className="actions">
-              <Link className="secondary" href="/">
+              <Link className="secondary" href="/office">
                 Watch the firm work
               </Link>
               <button className="ghost" onClick={startOver}>

@@ -11,7 +11,7 @@ import type { UTaxEvent } from "@/theater/events";
 import { assetAllowed, eventsUrl, numbersFromState, originOf, parseAssetHosts, reconnectDelayMs, seedFromState, stateUrl, streamUrl, type Endpoints } from "@/theater/live";
 import type { FirmNumbers } from "@/theater/rail";
 import { appendEvents, startScript, type ScriptCursor } from "@/theater/script";
-import { applyEvent, emptyOffice, type Office, type StepCtx } from "./workspace";
+import { applyEvent, emptyOffice, type Office, type Seat, type StepCtx } from "./workspace";
 
 const GATEWAY: Endpoints = { base: API_URL, token: process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "" };
 const HAS_GATEWAY = Boolean(process.env.NEXT_PUBLIC_API_URL);
@@ -28,6 +28,8 @@ export interface Feed {
   office: Office;
   numbers: FirmNumbers | null;
   status: FeedStatus;
+  /** The desk a live stream event last moved (never the log folded on open): what auto-follow follows. */
+  live: { seat: Seat; key: string } | null;
 }
 
 async function fetchJson(url: string): Promise<unknown> {
@@ -45,6 +47,7 @@ export function useFirmFeed(session: string | null = null): Feed {
   const [office, setOffice] = useState<Office>(emptyOffice);
   const [numbers, setNumbers] = useState<FirmNumbers | null>(null);
   const [status, setStatus] = useState<FeedStatus>(HAS_GATEWAY ? "connecting" : "offline");
+  const [live, setLive] = useState<Feed["live"]>(null);
   const officeRef = useRef(office);
 
   useEffect(() => {
@@ -62,7 +65,7 @@ export function useFirmFeed(session: string | null = null): Feed {
       flagged: (id) => id !== null && flagged.has(id),
       image: (url) => (typeof url === "string" && assetAllowed(url, HOSTS, GATEWAY_ORIGIN) ? url : undefined),
     };
-    const fold = (events: UTaxEvent[]) => {
+    const fold = (events: UTaxEvent[], live = false) => {
       const res = appendEvents(cursor, events, quiet);
       cursor = res.cursor;
       if (!res.accepted.length) return;
@@ -71,6 +74,7 @@ export function useFirmFeed(session: string | null = null): Feed {
         if (ev.type === "case.flagged" && ev.case_id && (ev.payload as { kind?: unknown })?.kind === "possible_injection") flagged.add(ev.case_id);
         o = applyEvent(o, ev, ctx);
       }
+      if (live && o.lastSeat && o.lastKey !== officeRef.current.lastKey) setLive({ seat: o.lastSeat, key: o.lastKey });
       officeRef.current = o;
       setOffice(o);
     };
@@ -96,7 +100,7 @@ export function useFirmFeed(session: string | null = null): Feed {
       };
       es.onmessage = (msg) => {
         try {
-          fold([JSON.parse(msg.data) as UTaxEvent]);
+          fold([JSON.parse(msg.data) as UTaxEvent], true);
         } catch {
           /* a malformed message is skipped, as on the theater */
         }
@@ -141,5 +145,5 @@ export function useFirmFeed(session: string | null = null): Feed {
     };
   }, [session]);
 
-  return { office, numbers, status };
+  return { office, numbers, status, live };
 }

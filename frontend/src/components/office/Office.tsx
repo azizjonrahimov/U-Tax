@@ -19,6 +19,8 @@ type View = "overview" | Seat;
 const DWELL_MS = 6000;
 /** A desk counts as working while its last step is this recent (wall clock, live feed). */
 const WORKING_MS = 20_000;
+/** A step older than this (by its log time) is history, not something to follow. */
+const FOLLOW_FRESH_MS = 15_000;
 
 const seatColor = (seat: Seat) => `var(--seat-${seat})`;
 
@@ -30,7 +32,7 @@ function viewFromUrl(): View {
 
 export function Office() {
   const session = useSessionToken();
-  const { office, numbers, status } = useFirmFeed(session);
+  const { office, numbers, status, live } = useFirmFeed(session);
   const [view, setView] = useState<View>("overview");
   const [follow, setFollow] = useState(true);
   const lastSwitch = useRef(0);
@@ -39,13 +41,15 @@ export function Office() {
 
   useEffect(() => {
     // After hydration (the server renders the overview): a shared link to a department opens it and stays there.
+    // The Overview gets a full dwell before auto-follow may leave it.
+    lastSwitch.current = Date.now();
     const t = setTimeout(() => {
       setNow(Date.now());
       const v = viewFromUrl();
-      if (v !== "overview") {
-        setView(v);
-        setFollow(false);
-      }
+      // A replay or fixture (?source=) plays on the Overview's theater only: the desks follow the
+      // live firm, so nothing should pull the view away from it.
+      if (v !== "overview" || new URLSearchParams(window.location.search).has("source")) setFollow(false);
+      if (v !== "overview") setView(v);
     }, 0);
     const tick = setInterval(() => setNow(Date.now()), 4000);
     return () => {
@@ -54,10 +58,13 @@ export function Office() {
     };
   }, []);
 
-  // Auto-follow: open the department that just acted, no faster than one every DWELL_MS.
+  // Auto-follow: open the department that just acted, no faster than one every DWELL_MS. Only a
+  // real, recent agent step counts: the log folded on open (the initial replay) never moves the view.
   useEffect(() => {
-    if (!follow || !office.lastSeat) return;
-    const target = office.lastSeat;
+    if (!follow || !live) return;
+    const target = live.seat;
+    const at = Date.parse(office.desks[target].steps[0]?.ts ?? "");
+    if (!Number.isFinite(at) || Math.abs(Date.now() - at) > FOLLOW_FRESH_MS) return;
     const wait = Math.max(0, lastSwitch.current + DWELL_MS - Date.now());
     const t = setTimeout(() => {
       setView((v) => {
@@ -67,7 +74,7 @@ export function Office() {
       });
     }, wait);
     return () => clearTimeout(t);
-  }, [follow, office.lastKey, office.lastSeat]);
+  }, [follow, live, office.desks]);
 
   const open = useCallback((v: View) => {
     setFollow(false);
