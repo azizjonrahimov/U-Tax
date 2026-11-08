@@ -580,6 +580,8 @@ class State:
             cand["reply_to"] = private.get("reply_to")
         if private.get("listed"):  # v1.11: from the CEO's HR_CANDIDATES (no questionnaire)
             cand["listed"] = True
+        if stage == "applicant" and cand.get("contacted") and not private.get("listed"):
+            cand["replied"] = True  # task 32: a mail after the outreach note is the reply
         if stage == "applicant":  # 22b: the applicant's latest mail wakes HR anew
             cand["last_event_id"] = max(cand.get("last_event_id", 0), e.id)
         if stage == "applicant" and private.get("text"):

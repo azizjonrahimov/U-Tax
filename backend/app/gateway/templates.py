@@ -156,6 +156,22 @@ SPECS: dict[str, Spec] = {
         "assets?\nAnd: does any foreign person or company own 25% or more?\n\nPlease don't "
         "send SSNs, EINs or any ID numbers. We never need them.\n\n" + SIGN_OFF + "\n\n"
         + DISCLAIMER)),
+    # task 32: email 1 is a short personal note (no invite, no link: spam filters); the
+    # candidate's reply gets email 2 with the invite and the booking link
+    "hr-outreach-note": Spec(("greeting_name", "slot_time", "minutes"),
+                             lines=(AI_SCREEN_LINE,), builtin=(
+        "Hi {{greeting_name}},\n\nI run U-Tax, a small firm where AI agents check Delaware "
+        "franchise tax for startups. Would you be up for a paid 1-hour gig reviewing a few "
+        "of the memos they write (made-up numbers, no real client data)?\n\n"
+        + AI_SCREEN_LINE + "\n\nIf it sounds interesting, would {{slot_time}} work for a "
+        "{{minutes}}-minute intro call? Just reply and I'll send the invite.\n\n"
+        + SIGN_OFF)),
+    "hr-outreach-invite": Spec(("greeting_name", "slot_time", "minutes", "booking_url"),
+                               builtin=(
+        "Hi {{greeting_name}},\n\nGreat, thanks for getting back to me. I've sent a calendar "
+        "invite for a {{minutes}}-minute intro call on {{slot_time}}.\n{{booking_url}}\n\n"
+        "Please don't send SSNs, EINs, ID documents or anything else personal.\n\n"
+        + SIGN_OFF)),
     "follow-up-memo_check": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,),
                                  builtin=(
         "Hi {{greeting_name}},\n\nJust checking that our Delaware franchise tax memo reached "
