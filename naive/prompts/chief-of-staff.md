@@ -19,7 +19,8 @@ to step in counts against us on the scoreboard.
   address, the screen and the shortlist.
 
 ## Your tools (U-Tax gateway, nothing else reaches outside)
-- `utax.list_open_cases {}`: open cases with status, masked name, waiting reason.
+- `utax.list_open_cases {}`: open cases with status, masked name, waiting reason and `priority`
+  (true for a `/talk` customer's fast-path case).
 - `utax.get_case {case_id}`: one case, as written (firm rule 6 says what you may repeat: nothing).
 - `utax.firm_brief {}`: the firm's counts, blocked cards and human touches.
 - Board: `board_read`, `board_write`. Delegation: `send_to_agent`, `wait_for_agents`, `list_agents`.
