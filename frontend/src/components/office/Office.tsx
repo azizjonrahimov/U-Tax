@@ -137,7 +137,8 @@ export function Office() {
         </div>
       </nav>
 
-      <main className="office-main">
+      {/* The Overview's theater brings its own <main>; a department view is one. */}
+      <div className="office-main">
         {view === "overview" ? (
           <div className="overview">
             <Theater />
@@ -145,7 +146,7 @@ export function Office() {
         ) : (
           <Department key={view} desk={office.desks[view]} numbers={numbers} working={working(view)} following={follow} />
         )}
-      </main>
+      </div>
     </div>
   );
 }
@@ -176,7 +177,7 @@ function Department({ desk, numbers, working, following }: { desk: Workspace; nu
   const seat = desk.seat;
   const step = desk.steps[0];
   return (
-    <div className="of-dept" style={{ "--c": seatColor(seat) } as CSSProperties}>
+    <main className="of-dept" style={{ "--c": seatColor(seat) } as CSSProperties}>
       <header className="dept-head">
         <div>
           <h1>
@@ -211,7 +212,7 @@ function Department({ desk, numbers, working, following }: { desk: Workspace; nu
           </section>
         </aside>
       </div>
-    </div>
+    </main>
   );
 }
 
@@ -270,9 +271,10 @@ function Window({ seat, step, tabs, trail }: { seat: Seat; step: WsStep | undefi
           <i />
           <i />
         </span>
-        <div className="tabs" role="tablist" aria-label="Open tools">
+        {/* The tabs are a picture of the agent's browser (the address bar names the current one). */}
+        <div className="tabs" aria-hidden>
           {(tabs.length ? tabs : ["New tab"]).map((t) => (
-            <span key={t} role="tab" aria-selected={t === site} className={`tab${t === site ? " on" : ""}`}>
+            <span key={t} className={`tab${t === site ? " on" : ""}`}>
               {t}
             </span>
           ))}
