@@ -374,6 +374,12 @@ class Gateway:
         # D38: the market's pay tick (one at a time), its intents (durable before any
         # payment) and the wakes it owes
         self._market_tick = threading.Lock()
+        # D41 B53: the Stripe mirror tick (one at a time, outside self._lock): the log read so
+        # far, the payments not yet recorded (tx -> payment.sent), failures per tx
+        self._mirror_tick = threading.Lock()
+        self._mirror_seen = 0
+        self._mirror_todo: dict[str, Event] = {}
+        self._mirror_fails: dict[str, int] = {}
         self._market_wakes: list[str] = []
         self.market_http = None  # httpx.Client for contractors' invoice status (tests set it)
         self.market_kick = True  # a verified submit runs the pay tick at once (tests: off)
@@ -3935,6 +3941,61 @@ class Gateway:
             "agent_sales": {"amount": f"{sums['sales']:.2f}",
                             "token": tokens["sales"] or "pathUSD"},
             "clients_paid_usd": f"{sums['clients_cents'] / 100:.2f}"}}
+
+    MIRROR_TRIES = 3
+
+    def mirror_payments(self) -> str | None:
+        """D41 B53 (main.tick): the oldest ok payment.sent with no payment.recorded gets a
+        test-mode Stripe record, one per tick, OUTSIDE the lock (§6f). An error is retried
+        next tick; after 3 a tx is given up for this process. Off with STRIPE_MIRROR=0, with
+        the market off, or without an sk_test_ Stripe key. Returns the tx recorded."""
+        pay = self.ports.pay
+        mirror = getattr(pay, "mirror_contractor_payment", None)
+        if not (self.settings.stripe_mirror and self.settings.market_enabled) \
+                or mirror is None or getattr(pay, "test_key", False) is not True:
+            return None
+        if not self._mirror_tick.acquire(blocking=False):
+            return None
+        try:
+            with self._lock:
+                for e in self.store.since(self._mirror_seen):
+                    self._mirror_seen = e.id
+                    tx = e.payload.get("tx_hash")
+                    if not tx:
+                        continue
+                    if e.type == "payment.sent" and e.status == "ok":
+                        self._mirror_todo.setdefault(tx, e)
+                    elif e.type == "payment.recorded":
+                        self._mirror_todo.pop(tx, None)
+                todo = next((e for tx, e in self._mirror_todo.items()
+                             if self._mirror_fails.get(tx, 0) < self.MIRROR_TRIES), None)
+                if todo is None:
+                    return None
+                p = todo.payload
+                order = p.get("order_id") or (self.state.jobs.get(p.get("job_id")) or {}).get(
+                    "order_id")
+            tx = p["tx_hash"]
+            try:
+                pi = mirror(tx_hash=tx, amount_usd=p["amount_usd"], token=p["token"],
+                            job_id=p["job_id"], contractor=p["contractor"],
+                            explorer_url=p.get("explorer_url") or "", order_id=order)
+            except Exception as err:  # noqa: BLE001 - logged, retried next tick, then given up
+                self._mirror_fails[tx] = self._mirror_fails.get(tx, 0) + 1
+                log.warning("stripe mirror of %s failed (%d/%d): %s", tx[:12],
+                            self._mirror_fails[tx], self.MIRROR_TRIES, err)
+                return None
+            with self._lock:
+                self._emit([NewEvent(type="payment.recorded", actor="system", provider="stripe",
+                                     payload={"job_id": p["job_id"], "tx_hash": tx,
+                                              "stripe_id": pi, "mode": "mirror",
+                                              "dashboard_url": "https://dashboard.stripe.com/"
+                                                               f"test/payments/{pi}",
+                                              **({"order_id": order} if order else {})},
+                                     idempotency_key=f"stripe_mirror:{tx}")])
+                self._mirror_todo.pop(tx, None)
+            return tx
+        finally:
+            self._mirror_tick.release()
 
     def advance_market_jobs(self) -> list[str]:
         """D38: the pay tick (app/main.py's tick, and right after a verified submit)."""

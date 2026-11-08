@@ -64,6 +64,8 @@ class StripePay:
         if not api_key:
             raise NotConfigured("pay_unavailable: no STRIPE_SECRET_KEY")
         self.live = key_mode(api_key) == "live"
+        # D41 B53: a mirror is a test-mode charge; with any other key it would be real money
+        self.test_key = api_key.startswith("sk_test_")
         self._prices: dict[tuple[int, str], str] = {}
         self._price_id = price_id
         self._http = httpx.Client(base_url=API, timeout=httpx.Timeout(timeout, connect=5.0),
@@ -117,6 +119,39 @@ class StripePay:
         if case_id:
             url += ("&" if "?" in url else "?") + "client_reference_id=" + quote(case_id)
         return PaymentLink(url=url, link_id=str(link_id or ""))
+
+    MIRROR_KIND = "contractor_payment_mirror"  # /hooks/stripe never books it as revenue
+
+    def mirror_contractor_payment(self, *, tx_hash: str, amount_usd: str, token: str,
+                                  job_id: str, contractor: str, explorer_url: str,
+                                  order_id: str | None) -> str:
+        """D41 B53: one labelled test-mode PaymentIntent per Tempo contractor payment, so the
+        Stripe Dashboard (test mode) shows it. The payment itself is on Tempo testnet: this
+        only records it. sk_test_ keys only; the key is idempotent per transaction."""
+        if not self.test_key:
+            raise NotConfigured("stripe mirror: test mode only (an sk_test_ key)")
+        from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
+
+        try:
+            usd = Decimal(str(amount_usd))
+        except (InvalidOperation, ValueError) as exc:
+            raise Rejected(f"stripe mirror: amount {amount_usd!r} is not a number") from exc
+        cents = max(50, int((usd * 100).to_integral_value(ROUND_HALF_UP)))  # card minimum $0.50
+        body = self._post("/v1/payment_intents", {
+            "amount": str(cents), "currency": "usd",
+            "payment_method": "pm_card_visa", "payment_method_types[]": "card",
+            "confirm": "true",
+            "description": f"U-Tax paid {contractor} for {job_id}: MIRROR of Tempo testnet "
+                           f"tx {tx_hash[:10]}…",
+            "metadata[utax_kind]": self.MIRROR_KIND, "metadata[job_id]": job_id,
+            "metadata[contractor]": contractor, "metadata[amount_token]": f"{amount_usd} {token}",
+            "metadata[tempo_tx]": tx_hash, "metadata[explorer_url]": explorer_url,
+            **({"metadata[order_id]": order_id} if order_id else {}),
+        }, f"utax-mirror-{tx_hash}")
+        pi = body.get("id")
+        if not isinstance(pi, str) or not pi.startswith("pi_") or body.get("status") != "succeeded":
+            raise Rejected("stripe did not record the mirror")
+        return pi
 
     def list_webhooks(self) -> list[dict]:  # devtools stripe-webhook
         try:
