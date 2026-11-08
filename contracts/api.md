@@ -1,4 +1,4 @@
-# API contract (v1.17): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.18): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -95,6 +95,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `hr.outreach_declined` | hr | `{candidate_id, name_masked, note}`: HR read a reply to the outreach as a no (v1.15.1). The held slot is freed, `outreach_declined` is set (a later CEO hire or decline sends no mail), and the stage is unchanged |
 | `payment.link_created` | acct | `{link_id, amount_cents, currency}` (v1.17, D36): the case's $49 filing-help Stripe Payment Link, made once per case when the memo is sent. The URL is private and never in a payload. |
 | `payment.received` | acct | `{case_id, amount_cents, currency}` (v1.17), provider stripe: a paid Stripe Checkout Session for a case, once per session. It adds a revenue row to U-Tax_Books.xlsx and `money.revenue_cents`, then a `ceo.notified` (reason `paid`) and one `client.followed_up` (kind `payment_receipt`). |
+| `agent.activity` | the agent's seat (`ceo_assistant` for the assistant) | `{agent, session_id, kind: "thinking"\|"tool_started"\|"tool_done"\|"writing"\|"idle"}` plus optional `tool` (a name, never arguments), `text` (writing only: masked, the latest ≤ 600 chars, ≤ 1 event/s per session) and `order_id` (v1.18, D37). Provider naive. **Admin and session readers only**: theater readers never receive it, and it doesn't change /api/state. |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
 | `tool.bought` | any agent | `{tool, provider}` (amount in envelope `cost_usd`) |
@@ -233,6 +234,16 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/dev/inject-email` `{from, subject, body}` → local MailPort only; produces
   `email.received` exactly as a real inbound mail would. Refused unless `ADAPTER_MAIL=local`.
 - `POST /hooks/agentmail` (Saturday): AgentMail webhook; idempotency key = message id.
+
+## 5-ter. Admin artifact views (v1.18, D37)
+
+- For admin and session readers only:
+  - `memo.sent`, `client.asked`, `client.followed_up` and `hr.outreach` add `payload.sent: {subject, body,
+    to_masked}`: the artifact as it actually left (the real greeting, the Stripe link).
+  - `doc.step` adds `payload.cells: [{sheet, cell, value}]`: what that step wrote.
+- Theater readers get neither; their payloads are unchanged.
+- `/hooks/stripe` sends the payment receipt only for a paid usd payment of exactly FILING_PRICE_CENTS. Anything
+  else tells only the CEO ("Payment of $X received: check it").
 
 ## 5-bis. Payments (v1.17, D36)
 
@@ -757,6 +768,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.18 (2026-11-08, task 42, D37): agent.activity; admin artifact content (sent, cells); the receipt guard.
 
 - v1.17 (2026-11-08, task 40b, D36): Stripe filing-help link in the memo, /hooks/stripe, payment.link_created / payment.received, revenue_cents, the payment receipt and the CEO's "paid" notice.
 

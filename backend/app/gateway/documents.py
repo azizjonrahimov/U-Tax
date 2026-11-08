@@ -127,7 +127,7 @@ def build_workpaper(path: Path, label: str, facts: dict, quotes: dict, f: Figure
                                                           "stated_par" else "")])
         if key == "gross_assets_cents":
             ws.cell(ws.max_row, 2).number_format = MONEY
-    step(f"Inputs: {len(FACT_LABELS)} facts, each with the client's own words")
+    step(f"Inputs: {len(FACT_LABELS)} facts, each with the client's own words", sheet_cells(ws))
 
     ws = wb.create_sheet("Authorized Shares Method")
     ws.append(["8 Del. C. § 503: authorized shares method", "", ""])
@@ -147,7 +147,7 @@ def build_workpaper(path: Path, label: str, facts: dict, quotes: dict, f: Figure
     for row in ws.iter_rows(min_row=3, max_row=6, min_col=2, max_col=2):
         row[0].number_format = MONEY
     ws.cell(ws.max_row, 2).number_format = MONEY
-    step(f"Authorized Shares Method: {f.authorized:,} shares → {format_usd(f.auth_cents)}")
+    step(f"Authorized Shares Method: {f.authorized:,} shares → {format_usd(f.auth_cents)}", sheet_cells(ws))
 
     ws = wb.create_sheet("Assumed Par Value Capital")
     ws.append(["8 Del. C. § 503: assumed par value capital method", "", ""])
@@ -170,7 +170,7 @@ def build_workpaper(path: Path, label: str, facts: dict, quotes: dict, f: Figure
     checks["apv"] = ("Assumed Par Value Capital", f"B{ws.max_row}", f.apv_cents)
     step(f"Assumed Par Value Capital Method: {format_usd(f.assets_cents)} ÷ {f.issued:,} "
          f"issued × {f.authorized:,} authorized = {_dollars_text(f.capital)} → "
-         f"{format_usd(f.apv_cents)}")
+         f"{format_usd(f.apv_cents)}", sheet_cells(ws))
 
     ws = wb.create_sheet("Comparison")
     ws.append(["Method", "Tax", ""])
@@ -185,7 +185,7 @@ def build_workpaper(path: Path, label: str, facts: dict, quotes: dict, f: Figure
     for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=2, max_col=2):
         row[0].number_format = MONEY
     step(f"Comparison: {format_usd(f.tax_cents)} + {format_usd(f.fee_cents)} annual report "
-         f"fee = {format_usd(f.total_cents)}")
+         f"fee = {format_usd(f.total_cents)}", sheet_cells(ws))
 
     ws = wb.create_sheet("Filing")
     ws.append(["Due date", f.due_date, "March 1 each year (annual report + franchise tax)"])
@@ -193,7 +193,7 @@ def build_workpaper(path: Path, label: str, facts: dict, quotes: dict, f: Figure
     ws.cell(ws.max_row, 2).number_format = MONEY
     ws.append(["Interest", LATE_INTEREST, ""])
     ws.append([DISCLAIMER, "", ""])
-    step(f"Filing: due {f.due_date}; late: {format_usd(LATE_PENALTY_CENTS)} + {LATE_INTEREST}")
+    step(f"Filing: due {f.due_date}; late: {format_usd(LATE_PENALTY_CENTS)} + {LATE_INTEREST}", sheet_cells(ws))
     for sheet in wb.worksheets:
         sheet.column_dimensions["A"].width = 52
         sheet.column_dimensions["B"].width = 18
@@ -300,6 +300,42 @@ def append_books(path: Path, entry: str, date: str, label: str, f: Figures) -> i
     wb.save(tmp)
     tmp.replace(path)
     return row
+
+
+CELLS_MAX_ROWS = 40
+
+
+def _shown(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (Decimal, float)):
+        return f"{value:,.2f}" if isinstance(value, Decimal) else f"{value:,.4f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def sheet_cells(ws) -> list[dict]:
+    """Task 42: a sheet's written cells as {sheet, cell, value} (admin readers watch the
+    workbook fill), at most CELLS_MAX_ROWS rows."""
+    out = []
+    for row in ws.iter_rows(max_row=CELLS_MAX_ROWS):
+        for cell in row:
+            if cell.value is not None and cell.value != "":
+                out.append({"sheet": ws.title, "cell": cell.coordinate,
+                            "value": _shown(cell.value)})
+    return out
+
+
+def row_cells(path: Path, row: int) -> list[dict]:
+    """Task 42: one books row as cells (the books step)."""
+    wb = load_workbook(path)
+    try:
+        ws = wb.active
+        return [{"sheet": ws.title, "cell": cell.coordinate, "value": _shown(cell.value)}
+                for cell in ws[row] if cell.value is not None]
+    finally:
+        wb.close()
 
 
 def append_revenue(path: Path, entry: str, date: str, label: str, amount_cents: int) -> int:

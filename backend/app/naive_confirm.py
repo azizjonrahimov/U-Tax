@@ -93,6 +93,7 @@ class NaiveConfirmer:
         # (Naive is the dedup) and logged as its own attempt
         self._attempts: dict[tuple[str, str], int] = {}
         self._pass_rows: list[dict] | None = None  # task 35: this pass's one sessions page
+        self.on_rows = None  # task 42: ActivityRelay.observe(rows, agents)
 
     async def boot(self) -> dict[str, str]:
         """Resolve the 7 agent ids by name. naive.config.ts also stamps each agent with
@@ -141,6 +142,11 @@ class NaiveConfirmer:
                 log.warning("naive confirms: listing sessions failed: %s", err)
             return 0
         self._pass_rows = list(page.data)
+        if self.on_rows is not None:  # task 42: the activity relay streams running sessions
+            try:
+                self.on_rows(self._pass_rows, dict(self.agents))
+            except Exception:  # noqa: BLE001 - the relay never stops the confirms
+                log.exception("activity relay failed to start streams")
         start = self._turn % len(agents)
         self._turn += 1
         answered, budget = 0, DETAILS_PER_POLL

@@ -118,8 +118,10 @@ def _same(given: str | None, expected: str) -> bool:
     return given is not None and hmac.compare_digest(given.encode(), expected.encode())
 
 
-def sse_frame(event: Event, view: Callable[[Event], dict] | None = None) -> str:
+def sse_frame(event: Event, view: Callable[[Event], dict | None] | None = None) -> str:
     data = view(event) if view is not None else event.public()
+    if data is None:  # task 42: a type this reader never gets (agent.activity on the theater)
+        return ""
     return f"id: {event.id}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
@@ -148,7 +150,9 @@ async def sse_events(gw: Gateway, after_id: int, *, is_disconnected: Callable[[]
         while True:  # replay in pages: a reconnect never copies the whole log at once
             page = await asyncio.to_thread(lambda: list(gw.store.since(last, limit=500)))
             for event in page:
-                yield sse_frame(event, view)
+                frame = sse_frame(event, view)
+                if frame:
+                    yield frame
                 last = event.id
             if len(page) < 500:
                 break
@@ -261,7 +265,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         has_more = len(batch) > limit
         batch = batch[:limit]
         admin = is_admin(authorization)
-        return {"data": [gw().public_event(e, admin=admin) for e in batch],
+        shown = (gw().public_event(e, admin=admin) for e in batch)
+        return {"data": [e for e in shown if e is not None],  # task 42: theater filter
                 "next_after_id": batch[-1].id if batch else after_id, "has_more": has_more}
 
     @router.get("/api/events/stream")
