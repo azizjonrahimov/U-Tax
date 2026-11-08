@@ -201,24 +201,25 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             auth_state.update(secret=key, sessions=Sessions(key))
         return auth_state["sessions"]
 
-    def is_admin(authorization: str | None, token: str | None = None) -> bool:
-        """The CEO: ADMIN_TOKEN as a bearer (scripts), or a signed-in session as a bearer or
-        as ?token= (EventSource can't send headers). v1.7.1 hiding: with no ADMIN_TOKEN and
-        no session, nobody is admin (the safe default for injection text)."""
+    def is_admin(authorization: str | None) -> bool:
+        """The CEO: ADMIN_TOKEN or a signed-in session, as the Authorization bearer only.
+        Task 39: never a session in the URL (access and tunnel logs keep URLs); the event
+        stream takes a 60 s single-use ?ticket= instead (task 36). v1.7.1 hiding: with no
+        ADMIN_TOKEN and no session, nobody is admin (the safe default for injection text)."""
         settings = gw().settings
         bearer = _bearer(authorization)
         if settings.admin_token and _same(bearer, settings.admin_token):
             return True
-        return sessions().valid(bearer) or sessions().valid(token)
+        return sessions().valid(bearer)
 
-    def require_theater(token: str | None, authorization: str | None, *,
-                        query_session: bool = True) -> None:
+    def require_theater(token: str | None, authorization: str | None) -> None:
+        """?token= is the THEATER_TOKEN only; the CEO's console sends its bearer."""
         settings = gw().settings
         if not settings.theater_token:
             return
         if _same(token, settings.theater_token):
             return
-        if is_admin(authorization, token if query_session else None):
+        if is_admin(authorization):
             return  # the CEO console may read what the theater reads
         raise APIError(401, "unauthorized", "theater token required")
 
@@ -246,7 +247,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def state(token: str | None = Query(None), authorization: str | None = Header(None)):
         require_theater(token, authorization)
         settings = gw().settings
-        admin = not auth_configured() or is_admin(authorization, token)
+        admin = not auth_configured() or is_admin(authorization)
         return gw().public_state(admin=admin)
 
     @router.get("/api/events")
@@ -256,7 +257,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         batch = list(gw().store.since(after_id, limit=limit + 1))
         has_more = len(batch) > limit
         batch = batch[:limit]
-        admin = is_admin(authorization, token)
+        admin = is_admin(authorization)
         return {"data": [gw().public_event(e, admin=admin) for e in batch],
                 "next_after_id": batch[-1].id if batch else after_id, "has_more": has_more}
 
@@ -273,7 +274,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
                                                     "new one from POST /api/stream-ticket")
             admin = True
         else:
-            require_theater(token, authorization, query_session=False)
+            require_theater(token, authorization)
             admin = is_admin(authorization)
         start = after_id
         if last_event_id and last_event_id.strip().isdigit():
