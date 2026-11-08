@@ -191,3 +191,25 @@ def test_a_short_session_secret_fails_at_boot(make_harness, monkeypatch):
     h = make_harness(session_secret="too-short")
     with pytest.raises(RuntimeError):
         main._ensure_session_secret(h.gw)
+
+
+# ---------------------------------------------------------------- task 31 (v1.13.1)
+
+
+@pytest.mark.parametrize("said,types", [
+    ("stop posting", {"social_post"}), ("pause emails", {"email"}),
+    ("okay stop everything", None), ("hey, stop everything", None)])
+def test_stop_runs_at_once_even_with_a_card_open(h, said, types):
+    card = h.gw.perform("ceo_command", {"text": "advertise our firm"}).data
+    assert card["kind"] == "proposal"
+    r = h.gw.perform("ceo_command", {"text": said})
+    assert r.status == "done" and r.data["kind"] == "done", (said, r.data)
+    paused = {t for t, state in h.gw.state.trust.items() if state == "PAUSED"}
+    assert paused == (types or set(h.gw.state.trust)), said
+    # §5b: a pause from any path cancels the open card (it never runs after a STOP)
+    assert h.gw.state.proposals[card["proposal_id"]]["status"] == "cancelled"
+
+
+def test_stop_with_no_card_open_still_pauses(h):
+    assert h.gw.perform("ceo_command", {"text": "hey, stop everything"}).data["kind"] == "done"
+    assert set(h.gw.state.trust.values()) == {"PAUSED"}

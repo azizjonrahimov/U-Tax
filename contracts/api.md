@@ -1,4 +1,4 @@
-# API contract (v1.14): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.15): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -262,8 +262,8 @@ For Replay mode and catch-up. Ordered by `id`.
   - While a proposal is open (unexpired, unconfirmed), any text that isn't a confirm or cancel
     answers `{kind: "say", say: "Say confirm or cancel."}`, and no new order is created.
     v1.13.1: stop-kind commands (`pause`: "stop posting", "pause emails", "stop everything", fillers
-    included) are exempt. They run at once, and the open card stays open (a later confirm is
-    still checked against the pins, so a pause that moved the trust supersedes it as before).
+    included) are exempt. They run at once, and the pause cancels the open card (§5b: a pause from any
+    path cancels open proposals), so nothing proposed before a STOP can run after it.
   - Greetings and mic checks never become orders. That means utterances made only of
     hey/hi/hello/test/testing/okay, or containing "can you hear me", "are you there" or
     "is this working". They answer `{kind: "say", say: "I'm listening. Tell me an order."}`.
@@ -498,6 +498,15 @@ v1.11.1, event payloads (the frontend's proposal, adopted):
   - The theater groups steps by `order_id`, and falls back to matching by department when it's
     absent.
 
+**v1.15 (design D35, documents):**
+
+`prepare_documents` (acct, `{case_id, order_id?}`): its §6 table row lands in the same merge as the crew.ts change that seats it (see the backend task 34 brief). Behaviour: refused unless `QA_PASSED`; the gateway builds the workpaper .xlsx, the memo .docx and a books entry from the engine's result and the extracted facts only; it verifies each file, stores them under `UTAX_DATA_DIR/docs/<case_id>/`, and emits `doc.step`, `doc.created` and `doc.verified`; it's idempotent per case and memo version.
+
+`send_memo` (v1.15) attaches the case's verified workpaper and memo (AgentMail attachments), and is refused
+(`docs_missing`) when `prepare_documents` hasn't run for the current memo version. The theater gets
+`doc.*` payloads with no client names (masked labels only). The files are never served publicly;
+`GET /api/docs/<case_id>/<file_name>` is admin or session only (the CEO can open them in `/office`).
+
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
 `gross_assets`, `foreign_owner_25`. Optional (never required to finish a case, asked once
 at most): `gross_receipts` (cents) and `years_with_receipts` (int), used only for the R&D
@@ -682,6 +691,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.15 (2026-11-07, design D35): prepare_documents (xlsx workpaper, docx memo, books entry), doc.step/created/verified events, memo attachments, /api/docs.
 
 - v1.14 (2026-11-07, design D34): /api/ceo/talk conversation, MCP seat ceo (direct actions, no confirm), undo.
 
