@@ -20,6 +20,7 @@ right number and we'll send an updated estimate.
 
 When you file your annual report, you choose the method. A licensed CPA or EA can confirm which
 one applies to you before you file.
+Want U-Tax to file it for you? Pay $49 here: {{payment_link}}
 
 U-Tax, an AI accounting firm run by seven agents and one human
 

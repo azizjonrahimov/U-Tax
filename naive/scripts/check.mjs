@@ -164,9 +164,15 @@ const MEMO_PLACEHOLDERS = (() => {
 // never the masked name). applicant: the AI-screen disclosure line. posts: Marketing posts its
 // X/LinkedIn sections (the gateway's post guard). spend: money spent is called "estimated".
 // optional: placeholders that may render empty; every empty/filled combination must render cleanly.
+// dropLine: optional placeholders whose whole line goes when empty (not only a line holding just it).
+// priceLine: the one line, word for word, that may name a price in a client template.
+const PAYMENT_LINE = "Want U-Tax to file it for you? Pay $49 here: {{payment_link}}";
 const TEMPLATE_RULES = {
   // contract v1.7 §7: the phone check finds the memo only by its last line
-  "memo.md": { body: true, client: true, placeholders: MEMO_PLACEHOLDERS, optional: ["form5472_note", "rnd_note"],
+  // D36: the $49 filing offer is one whole line, dropped (by the gateway) when the case has no
+  // Stripe link; it is the only price a client mail may name
+  "memo.md": { body: true, client: true, placeholders: [...new Set([...MEMO_PLACEHOLDERS, "payment_link"])],
+    optional: ["form5472_note", "rnd_note", "payment_link"], dropLine: ["payment_link"], priceLine: PAYMENT_LINE,
     lastLine: "Reference: {{memo_ref}}" },
   "ask-client.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list", "problems_line"], optional: ["problems_line"] },
   "not-eligible-not_incorporated.md": { body: true, client: true, placeholders: ["greeting_name"] },
@@ -242,12 +248,13 @@ const postSections = (text) =>
  * whose value is empty is dropped; every other placeholder is substituted. Stricter on purpose: the
  * gateway also collapses 3+ newlines, this port doesn't, so the template itself leaves no gaps.
  */
-function renderTemplate(text, values) {
+function renderTemplate(text, values, dropLine = []) {
   return text
     .split("\n")
     .filter((line) => {
       const only = line.trim().match(/^\{\{\s*(\w+)\s*\}\}$/);
-      return !(only && !values[only[1]]);
+      if (only && !values[only[1]]) return false;
+      return !dropLine.some((p) => !values[p] && new RegExp(`\\{\\{\\s*${p}\\s*\\}\\}`).test(line));
     })
     .join("\n")
     .replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => values[key] ?? "")
@@ -275,8 +282,11 @@ function templateProblems(file, text, rule) {
     const values = Object.fromEntries(used.map((p) => [p, "Value."]));
     optional.forEach((p, i) => { if (mask & (1 << i)) values[p] = ""; });
     const empty = optional.filter((_, i) => mask & (1 << i));
-    const rendered = renderTemplate(text, values);
+    const rendered = renderTemplate(text, values, rule.dropLine);
     const where = empty.length ? `with ${empty} empty` : "with every value set";
+    if (rule.priceLine && [...rule.priceLine.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].some((m) => empty.includes(m[1]))
+      && /\$\s?\d/.test(rendered))
+      bad(`still names a price ${where}`);
     if (/\n[ \t]*\n[ \t]*\n/.test(rendered)) bad(`renders a double blank line ${where}`);
     if (/[^\s] {2,}\S/.test(rendered) || /[ \t]+$/m.test(rendered) || /^[ \t]+\S/m.test(rendered.replace(/^ {2,}- .*/gm, "")))
       bad(`renders stray spaces ${where}`);
@@ -286,7 +296,11 @@ function templateProblems(file, text, rule) {
     if (!GREETING.test(first)) bad("the first line must greet the client with {{greeting_name}} (contract v1.6 §7)");
     if (used.includes("masked_name")) bad("uses {{masked_name}}; a client mail never shows the masked name");
     if (!text.includes(`${DISCLAIMER}.`)) bad(`missing the line "${DISCLAIMER}."`);
-    if (/\$\s?\d/.test(text.replace(/\{\{[^}]*\}\}/g, ""))) bad("literal dollar amount in a client template");
+    const lines = text.split("\n");
+    if (rule.priceLine && lines.filter((l) => l.trim() === rule.priceLine).length !== 1)
+      bad(`needs the line "${rule.priceLine}" exactly once, on a line of its own`);
+    const unpriced = lines.filter((l) => l.trim() !== rule.priceLine).join("\n");
+    if (/\$\s?\d/.test(unpriced.replace(/\{\{[^}]*\}\}/g, ""))) bad("literal dollar amount in a client template");
   }
   if (rule.lastLine) {
     const last = text.split("\n").filter((l) => l.trim()).pop()?.trim();
@@ -327,6 +341,23 @@ for (const [text, why] of TEMPLATE_SELF_TEST)
 if (!templateProblems("self-test.md", "Hi {{greeting_name}},\nEducational estimate — not tax advice.\nReference: {{x}}\nP.S.",
   { ...CLIENT_RULE, lastLine: "Reference: {{x}}" }).some((p) => p.includes("last line")))
   fail('template rule self-test: expected "last line" when the reference is not last');
+// D36: the price line passes only word for word, any other price fails, an empty link drops the line
+const PRICE_RULE = { ...CLIENT_RULE, dropLine: ["x"], priceLine: "Pay $49 here: {{x}}" };
+const PRICE_OK = "Hi {{greeting_name}},\nTotal is due.\nPay $49 here: {{x}}\n\nEducational estimate — not tax advice.";
+if (templateProblems("self-test.md", PRICE_OK, PRICE_RULE).length)
+  fail(`template rule self-test: the price line was refused: ${templateProblems("self-test.md", PRICE_OK, PRICE_RULE)}`);
+for (const [text, why] of [
+  [PRICE_OK.replace("$49", "$59"), "exactly once"],
+  [PRICE_OK.replace("Total is due.", "Total is due, $99."), "literal dollar amount"],
+  [PRICE_OK.replace("{{x}}\n", "{{x}} today\n"), "exactly once"],
+])
+  if (!templateProblems("self-test.md", text, PRICE_RULE).some((p) => p.includes(why))) fail(`template rule self-test: expected "${why}" for ${JSON.stringify(text)}`);
+if (!templateProblems("self-test.md", PRICE_OK, { ...PRICE_RULE, dropLine: [] }).some((p) => p.includes("still names a price")))
+  fail('template rule self-test: expected "still names a price" when an empty link keeps the price line');
+if (renderTemplate("A.\nPay $49 here: {{x}}\nB.", { x: "" }, ["x"]) !== "A.\nB.")
+  fail("template rule self-test: an empty dropLine placeholder must drop its whole line");
+if (renderTemplate("A.\nPay $49 here: {{x}}\nB.", { x: "L" }, ["x"]) !== "A.\nPay $49 here: L\nB.")
+  fail("template rule self-test: a filled dropLine placeholder must keep its line");
 if (templateProblems("self-test.md", "Hi {{greeting_name}},\nTotal is due.\n{{x}}\n\nEnd.\nEducational estimate — not tax advice.", CLIENT_RULE).length)
   fail("template rule self-test: a well-formed template was refused");
 

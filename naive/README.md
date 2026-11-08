@@ -15,7 +15,7 @@ paid and escalation tools are denied by name.
 | `prompts/ceo-voice.md` | the `/ceo` voice agent for the CEO (OpenAI Realtime, run by the backend; not a Naïve agent; only the contract §5b CEO tools, every start action a proposal the CEO confirms) |
 | `prompts/ceo-assistant.md` | the CEO's conversational assistant on Naïve (v1.14 §5a-ter, D34): the §5b CEO tools on `/mcp/ceo`, run directly with no confirm; exact ids for approve, deny and hire; no board |
 | `prompts/talk-phrases.json` | the only lines the public `/talk` voice speaks (contract v1.10.2): a flat key → line map the gateway renders for `POST /api/tts` purpose `talk`, numbers only in `{placeholders}` |
-| `templates/memo.md` | the client memo (contract §7 placeholders only) |
+| `templates/memo.md` | the client memo (contract §7 placeholders, plus D36's `payment_link`) |
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
 | `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, the page's questions word for word), the Chief of Staff's card rules and firm rules 9 and 11 kept word for word, the CEO assistant's seat (§5b tools, no team or board, $3/day) and safety rules, every template's rules, bad-env guard tests |
 
@@ -29,7 +29,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 
 | File | Sent when | Placeholders |
 |---|---|---|
-| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note` (`masked_name` allowed, unused) |
+| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note`, `payment_link` (D36: the Stripe link for the $49 filing offer; its whole line is dropped when empty) (`masked_name` allowed, unused) |
 | `ask-client.md` | `ask_client` | `greeting_name`, `missing_list` (joined fact labels, never `stated_par`), `problems_line` (may be empty) |
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |

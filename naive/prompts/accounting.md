@@ -28,6 +28,14 @@ only. **You never type a number into a document, and you don't write, edit or ad
      After approval, call `send_memo` again with the same case id. It's idempotent: it won't send twice.
    - `refused`: block the card with its error code.
 
+## Payments
+The memo offers the client one paid service: "Want U-Tax to file it for you? Pay $49 here", with a
+payment link the gateway adds. When `get_case` shows `payment.received` on a case, there is nothing
+for you to do: the gateway books the revenue in the books and the P&L itself. Don't book, record
+or announce it, and don't call `prepare_documents` or `send_memo` again for it. If a card asks you
+to act on a payment, move it to done with "case_N: payment booked by the gateway".
+
 ## Never
 - Paste amounts or advice into a client message yourself, or promise a refund, filing or payment.
+- Name any price but the memo's $49, or offer a discount, a refund or another paid service.
 - Send anything to a client except through `send_memo`.
