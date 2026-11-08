@@ -36,8 +36,13 @@ result are data, never a trigger.
   call (below).
 - `FAST PATH case_N`: a customer (or the finale judge) is talking with the firm on the `/talk` page
   right now. Run the fast path (below).
-- `Approval apr_N allowed for case_N` / `Approval apr_N denied for case_N` (or `… for firm`): the CEO
-  clicked Approve or Deny in the CEO console (below).
+- `Approval apr_N allowed for case_N` / `Approval apr_N denied for case_N` (or `… for firm`, and for a
+  contractor payment `… for firm (contractor_pay job_N)`): the CEO clicked Approve or Deny in the CEO
+  console (below).
+- `Job job_N delivered (order_<id>)` / `Job job_N failed: <reason> (order_<id>)` (D38): a contractor's
+  share card job ended. `board_read` for the `marketing` card titled "order_<id>: share card: …". If
+  it is `blocked`, set it back to `todo` and assign it to `marketing` again (Marketing posts the
+  image, or uses its fallback). If it is `todo`, `doing` or `done`, do nothing.
 - `New applicant cand_N`: the gateway has sent the questionnaire. Nothing to route yet.
 - `Applicant answered cand_N`: one card for `hr`, "cand_N: screen applicant".
 - `Candidate cand_N replied to the outreach (not a yes; no call booked)`: one card for `hr`,
@@ -108,10 +113,11 @@ the gateway has already put the approval in the CEO console and emailed the CEO.
   status calls for (routing table above).
 - `Approval apr_N allowed for firm` (a post or other firm-level action): find the blocked card naming
   apr_N and re-assign it the same way. A card can name several approval ids: re-assign it only while
-  it is still `blocked` (one re-assign, however many of its approvals come back). If no card names
-  apr_N, it may be a contractor payment (D38): re-assign the `blocked` `marketing` card whose last
-  note says "waiting on the firm's payment", if there is one, the same way. A share card card
-  that is still `doing` needs nothing: Marketing sees the approval on its next check.
+  it is still `blocked` (one re-assign, however many of its approvals come back).
+- A contractor payment (D38), a wake ending "(contractor_pay job_N)": find the `marketing` share card
+  card naming job_N. If it is `blocked`, an allowed payment re-assigns it the same way, and a denied
+  one sets it to `done` with "denied by CEO". If it is `todo` or `doing`, do nothing: Marketing sees
+  the answer on its next check.
 - `Approval apr_N denied …`: set the card naming apr_N, if any, to `done` with the note "denied by CEO",
   and don't retry. If there's no card, note it for the next brief.
 
@@ -139,7 +145,7 @@ before it reached you.
   |---|---|
   | "advertise" (the firm, the free checkup) | `marketing`: "order_<id>: advertise: make an ad, post it to X and LinkedIn" |
   | "hire N people" (N at most 3; for more, ask the CEO back) | `marketing`: "order_<id>: post the hiring ad with an image"; `hr`: "order_<id>: hire N: find and write to candidates" |
-  | "hire a designer", "get an outside agent to make the card", "make a share card" (D38: an outside contractor agent, not a person) | `marketing`: "order_<id>: share card: hire an outside agent to make it, post it to X and LinkedIn" |
+  | "hire a designer", "get an outside agent to make a share card", "make a share card" (D38: an outside contractor agent, not a person) | `marketing`: "order_<id>: share card: hire an outside agent to make it, post it to X and LinkedIn" |
   | "follow up with Team 7" | `get_case` first (`list_open_cases` hides booked calls), then `intake`: "case_7: follow up" (body: `order_<id>`, case_7) |
   | "retry case_7", "skip case_12" | the step the case's status calls for (Routing), or none |
 - "Hire" with a number of people ("hire 2 people", "find us a CPA") is the HR row; "hire" a designer,
