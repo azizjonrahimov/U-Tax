@@ -39,7 +39,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 | `follow-up-memo_check.md` | `follow_up` kind `memo_check` | `greeting_name` |
 | `follow-up-missing_facts.md` | `follow_up` kind `missing_facts` | `greeting_name`, `missing_list` |
 | `follow-up-call_reminder.md` | `follow_up` kind `call_reminder` | `greeting_name`, `call_time` |
-| `payment-receipt.md` | `payment.received` (D36) | `greeting_name`, `booking_url` (required: the CEO's booking link, on its own line) |
+| `payment-receipt.md` | `payment.received` (D36) | `greeting_name`, `booking_url` (required: a bare https link to the CEO's 20-minute booking page, on its own line right under the price line) |
 | `signup-welcome.md` | `POST /api/signup` (v1.12) | `greeting_name` (the Spec also allows `masked_name`, never used in client mail) |
 | `ceo-update-email.md` | approval needed, BLOCKED, flagged, shortlisted, paused | `headline`, `lead`, `summary`, `action_line` (per reason: "Approve or Deny it in the console", "Unblock or skip it", …), `console_url` |
 | `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `touches_engineering`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |

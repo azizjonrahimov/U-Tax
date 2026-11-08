@@ -167,6 +167,7 @@ const MEMO_PLACEHOLDERS = (() => {
 // dropLine: optional placeholders whose whole line goes when empty (not only a line holding just it).
 // priceLine: the one line, word for word, that may name a price in a client template.
 const PAYMENT_LINE = "Want hands-on help? For $49, a member of our team walks you through filing your Delaware annual report yourself on a 20-minute call: {{payment_link}}";
+const RECEIPT_LINE = "Thanks, your $49 payment is in. Pick a time for your 20-minute call with our team:";
 /** Every dollar amount in a text, as a number ("$ 49", "$49.00", "49 dollars", "USD 49", "49 bucks"). */
 function amountsIn(text) {
   const re = /\$\s*(\d[\d,]*(?:\.\d+)?)|\b(\d[\d,]*(?:\.\d+)?)\s*(?:us\s*)?(?:dollars?|bucks)\b|\busd\s*(\d[\d,]*(?:\.\d+)?)/gi;
@@ -198,7 +199,7 @@ const TEMPLATE_RULES = {
   "follow-up-call_reminder.md": { body: true, client: true, placeholders: ["greeting_name", "call_time"] },
   // D36: the receipt after a $49 payment; booking_url is required (the CEO's booking link)
   "payment-receipt.md": { body: true, client: true, placeholders: ["greeting_name", "booking_url"],
-    priceLine: "Thanks, your $49 payment is in. Pick a time for your 20-minute call with our team:" },
+    priceLine: RECEIPT_LINE },
   "signup-welcome.md": { body: true, client: true, placeholders: ["greeting_name"] }, // v1.12: the Spec also allows masked_name; a client mail never shows it
   "ceo-update-email.md": { body: true, placeholders: ["headline", "lead", "summary", "action_line", "console_url"] },
   "ceo-digest-email.md": {
@@ -418,6 +419,16 @@ if (otherPrices("the $49.00 offer").length || !otherPrices("the 59 dollars offer
 const accountingPath = join(ROOT, "prompts", "accounting.md");
 for (const n of otherPrices(existsSync(accountingPath) ? readFileSync(accountingPath, "utf8") : ""))
   fail(`prompts/accounting.md: names $${n}; the only price it may name is the memo's $${PRICE}`);
+// the receipt names the memo's price and call length, and its booking link sits right under the line
+const minutes = (s) => s.match(/\b\d+-minute\b/g)?.join();
+if (amountsIn(RECEIPT_LINE).join() !== String(PRICE) || minutes(RECEIPT_LINE) !== minutes(PAYMENT_LINE))
+  fail("templates/payment-receipt.md: its price or call length differs from the memo's offer (PAYMENT_LINE)");
+const receiptPath = join(templatesDir, "payment-receipt.md");
+if (existsSync(receiptPath)) {
+  const lines = readFileSync(receiptPath, "utf8").split("\n");
+  if (lines[lines.indexOf(RECEIPT_LINE) + 1] !== "{{booking_url}}")
+    fail("templates/payment-receipt.md: {{booking_url}} must be the line right after the price line");
+}
 for (const [file, rules] of Object.entries(MUST_KEEP)) {
   const path = join(ROOT, "prompts", file);
   const text = existsSync(path) ? readFileSync(path, "utf8").replace(/\s+/g, " ") : "";
