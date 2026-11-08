@@ -37,6 +37,7 @@ import httpx
 from app.gateway.adapters import _http
 from app.gateway.adapters.local import LocalMail, _KeyedJson
 from app.gateway.ports import (
+    PortError,
     Booking,
     InMail,
     NotConfigured,
@@ -131,6 +132,8 @@ class AgentMailMail:
         if not api_key:
             raise NotConfigured("AGENTMAIL_API_KEY is not set")
         self._inboxes = {name: addr.strip() for name, addr in inboxes.items() if addr.strip()}
+        # D42 M4: mail health: the last send (unix time, ok) and the last live check
+        self.last_send: tuple[float, bool] | None = None
         self._client = httpx.Client(base_url=base_url.rstrip("/"), transport=transport,
                                     timeout=timeout,
                                     headers={"Authorization": f"Bearer {api_key}",
@@ -154,6 +157,29 @@ class AgentMailMail:
         known = self._index.get(send_key)
         if known:
             return SentMail(message_id=known)
+        try:
+            sent = self._send(mail, key, inbox, subject, files, send_key)
+        except PortError:
+            self.last_send = (time.time(), False)
+            raise
+        self.last_send = (time.time(), True)
+        return sent
+
+    def check(self) -> bool:
+        """D42 M4: AgentMail answers for our clients inbox (GET /v0/inboxes/{inbox})."""
+        inbox = self._inboxes.get("clients")
+        if not inbox:
+            return False
+        try:
+            _http.call(self.provider, lambda: self._client.get(
+                f"/v0/inboxes/{quote(inbox, safe='@')}"))
+        except PortError as err:
+            log.warning("mail health: agentmail check failed: %s", err)
+            return False
+        return True
+
+    def _send(self, mail: OutMail, key: str, inbox: str, subject: str, files: list,
+              send_key: str) -> SentMail:
         body = {"to": [mail.to], "subject": subject, "text": mail.body,
                 **({"bcc": [mail.bcc]} if mail.bcc else {}),
                 **({"attachments": files} if files else {})}

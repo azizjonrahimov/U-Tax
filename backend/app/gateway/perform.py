@@ -3907,6 +3907,40 @@ class Gateway:
                                           "payer_masked": payer_masked},
                                  idempotency_key=f"sale:{tx_hash}" if tx_hash else None)])
 
+    MAIL_CHECK_EVERY = 60.0  # D42 M4: one live mail check a minute, at most
+    MAIL_STALE_AFTER = timedelta(minutes=2)
+    MAIL_OUT_TYPES = frozenset({"client.asked", "case.not_eligible", "memo.sent",
+                                "client.followed_up", "hr.questionnaire_sent",
+                                "hr.decision_mailed", "hr.outreach"})
+
+    def mail_health(self) -> dict:
+        """D42 M4, GET /api/admin/mail-health. last_poll_at: the last time the provider
+        answered a live check (inbound mail arrives by webhook; nothing polls). ok is false
+        when that is older than 2 minutes or the last send failed. Off the lock for I/O."""
+        port = self.ports.mail
+        now = time.monotonic()
+        checked = getattr(self, "_mail_checked", None)  # (monotonic, iso ts, ok)
+        check = getattr(port, "check", None)
+        if check is not None and (checked is None or now - checked[0] >= self.MAIL_CHECK_EVERY
+                                  or not checked[2]):
+            ok = bool(check())
+            prev = checked[1] if checked else None
+            checked = self._mail_checked = (now, iso_ts(self._now()) if ok else prev, ok)
+        with self._lock:
+            last_in = last_out = None
+            for e in self.store.since(max(0, self.state.last_event_id - 5000)):
+                if e.type == "email.received" and (e.payload.get("source") != "signup"):
+                    last_in = e.ts
+                elif e.type in self.MAIL_OUT_TYPES and e.status == "ok":
+                    last_out = e.ts
+        sent = getattr(port, "last_send", None)
+        last_poll = checked[1] if checked else (iso_ts(self._now()) if check is None else None)
+        fresh = last_poll is not None and self._now() - parse_ts(last_poll) <= \
+            self.MAIL_STALE_AFTER
+        return {"last_poll_at": last_poll, "last_inbound_at": last_in,
+                "last_outbound_at": last_out, "provider": port.provider or "local",
+                "ok": bool(fresh and (sent is None or sent[1]))}
+
     PAYMENTS_MAX = 100
     PAYMENTS_CACHE_S = 5.0
     PAYMENT_TYPES = frozenset({"payment.sent", "agent.sale", "payment.received",
