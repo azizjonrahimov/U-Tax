@@ -92,6 +92,7 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `touch.training` / `touch.operating` / `touch.engineering` | ceo | `{note, approval_id, channel: "click"\|"voice"\|"typed"\|"email"}` (`channel` v1.8; absent on older events = `click`) |
 | `ceo.proposed` | ceo | `{proposal_id, tool, args, readback, expires_at, source: "realtime"\|"command"}` (§5b) |
 | `ceo.confirmed` / `ceo.cancelled` | ceo | `{proposal_id, via: "voice"\|"click", heard}` (`heard` = the CEO's transcribed words, ≤ 200 chars; cancelled also has `reason: "spoken"\|"clicked"\|"expired"\|"superseded"`) |
+| `hr.outreach_declined` | hr | `{candidate_id, name_masked, note}`: HR read a reply to the outreach as a no (v1.15.1). The held slot is freed, `outreach_declined` is set (a later CEO hire or decline sends no mail), and the stage is unchanged |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
 | `tool.bought` | any agent | `{tool, provider}` (amount in envelope `cost_usd`) |
@@ -475,7 +476,7 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 | `post_social` | mkt | `{channel, text, image_url, kind: "client"\|"hiring"}` (kind defaults to client; text ≤ 255 chars) | refused unless `PUBLIC_TALK_URL` is set; `image_url` must be null or an https URL on a host in `PUBLIC_ASSET_HOSTS` (comma-separated), else refused; content guard first: refused when the text holds a case id, a `Team #N` name, an email address, a phone number, an @handle, any URL other than the firm's own `PUBLIC_TALK_URL`, or any dollar amount other than `$85,165`, `$400`, `$450`, `$50`; then trust type `social_post`; **after** the guard the gateway appends the link itself (`PUBLIC_TALK_URL` for client posts, the `MAIL_INBOX_HIRING` address for hiring posts); `post.published` |
 | `draft_dm` | mkt | `{recipient_label, text}` | `dm.drafted` (the human sends it) |
 | `get_candidate` | hr | `{candidate_id}` | the masked candidate: stated credentials, questionnaire answers, stage (no contact details) |
-| `hr_record` | hr | `{stage: "screened"\|"shortlisted", candidate_id, note}` | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
+| `hr_record` | hr | `{stage: "screened"\|"shortlisted"\|"outreach_declined", candidate_id, note}` (outreach_declined v1.15.1: refused `wrong_status` for a candidate never sent the outreach; a repeat answers `duplicate: true`) | `hr.<stage>`; `hr.applicant` comes from the gateway (§6c); declining or hiring is the CEO's (`/ceo`), never an agent's |
 | `flag_case` | qa | `{case_id, kind: "possible_injection"\|"unrealistic_inputs"}` | `case.flagged`; goes into the next CEO update email |
 | `firm_brief` | cos | `{}` | counts, blocked cards, touches; `brief.generated` |
 | `buy_tool` | mkt | `{tool, input, key}` | ToolBuyPort (Monid): refused unless `tool` is in `MONID_TOOLS`; the per-tool `max_usd` ceiling and `MONID_DAILY_CAP_USD` apply; the purchase runs outside the gateway lock; `tool.bought` with `cost_usd` in the envelope plus `cost.booked`; key, input fingerprint and unsure flag are private. Never input containing an email or a client's details (design: public startup lists only) |
@@ -706,6 +707,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.15.1 (2026-11-07, backend 38b): hr_record stage outreach_declined; event hr.outreach_declined.
 
 - v1.15 (2026-11-07, design D35): prepare_documents (xlsx workpaper, docx memo, books entry), doc.step/created/verified events, memo attachments, /api/docs.
 

@@ -3572,7 +3572,7 @@ class Gateway:
     def _hr_record(self, args: dict) -> dict:
         """v1.4: HR screens and shortlists. Applicants come from the gateway (§6c); hiring
         and declining are the CEO's (POST /api/candidates/{id}/decision)."""
-        stage = _one_of(args, "stage", ("screened", "shortlisted"))
+        stage = _one_of(args, "stage", ("screened", "shortlisted", "outreach_declined"))
         candidate_id = _str(args, "candidate_id", max_len=64)
         cand = self.state.candidates.get(candidate_id)
         if cand is None:
@@ -3580,6 +3580,8 @@ class Gateway:
         if cand.get("stage") in ("hired", "declined"):
             raise Refused("wrong_status", f"{candidate_id} is already {cand['stage']}")
         note = strip_contacts(_str(args, "note", required=False, max_len=500) or "")
+        if stage == "outreach_declined":
+            return self._outreach_declined(candidate_id, cand, note)
         written = self._emit([NewEvent(type=f"hr.{stage}", actor="hr", provider="local",
                                        payload={"candidate_id": candidate_id,
                                                 "name_masked": cand["name_masked"],
@@ -3591,6 +3593,27 @@ class Gateway:
                              "Hire or decline in the CEO console.",
                              key=f"ceo:shortlisted:{candidate_id}:{written[0].id}")
         return {"candidate_id": candidate_id, "stage": stage}
+
+    def _outreach_declined(self, candidate_id: str, cand: dict, note: str) -> dict:
+        """Task 38b: HR read a reply to the outreach as a no ("thanks, I'm all set"): the
+        same as the gateway's own no. The held slot is freed and no later mail goes out.
+        Not a hiring decision: the stage stays as it is (those are the CEO's)."""
+        if not cand.get("contacted"):
+            raise Refused("wrong_status", f"{candidate_id} was never sent the outreach")
+        if cand.get("outreach_declined"):
+            return {"candidate_id": candidate_id, "stage": "outreach_declined",
+                    "duplicate": True}
+        self._outreach_intents.put(candidate_id, None)  # the slot goes back on offer
+        self._emit([NewEvent(type="hr.outreach_declined", actor="hr", provider="local",
+                             payload={"candidate_id": candidate_id,
+                                      "name_masked": cand["name_masked"],
+                                      "note": note or "declined the outreach"},
+                             idempotency_key=f"hr:outreach_declined:{candidate_id}:"
+                                             f"{cand.get('last_event_id', 0)}")])
+        return {"candidate_id": candidate_id, "stage": "outreach_declined",
+                "booked_at": cand.get("booked_at"),
+                **({"note": "the intro call was already booked: cancel it in the calendar"}
+                   if cand.get("booked_at") else {})}
 
     def _get_candidate(self, args: dict) -> dict:
         """v1.4 (hr): the masked candidate. Stated credentials, questionnaire answers with

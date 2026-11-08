@@ -462,6 +462,17 @@ class State:
             if case.result:
                 case.memo_result = dict(case.result)
 
+    def _on_hr_outreach_declined(self, e: Event) -> None:
+        """Task 38b: HR's no: like the gateway's (slot freed, no later mail); no stage."""
+        cand = self.candidates.get(e.payload["candidate_id"])
+        if cand is None:
+            return
+        cand["outreach_declined"] = True
+        cand.pop("replied", None)  # the tick never books it
+        if not cand.get("booked_at"):
+            cand["slot_released"] = True
+            self.candidate_call_starts.discard(cand.get("contacted"))
+
     def _on_call_booked(self, e: Event) -> None:
         if e.payload.get("kind") == "candidate":  # v1.11.1: no case; the slot is held
             if e.status == "ok":

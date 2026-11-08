@@ -118,9 +118,12 @@ TOOLS: dict[str, dict[str, Any]] = {
     "get_candidate": {"description": "One candidate, masked: credentials, answers, stage.",
                       "inputSchema": _obj({"candidate_id": {"type": "string"}},
                                           ["candidate_id"])},
-    "hr_record": {"description": "Record a screening stage; hiring and declining are the CEO's.",
+    "hr_record": {"description": "Record a screening stage; hiring and declining are the "
+                                 "CEO's. outreach_declined: the candidate said no to the "
+                                 "outreach in other words (frees the slot; no later mail).",
                   "inputSchema": _obj({"stage": {"type": "string",
-                                                 "enum": ["screened", "shortlisted"]},
+                                                 "enum": ["screened", "shortlisted",
+                                                          "outreach_declined"]},
                                        "candidate_id": {"type": "string"},
                                        "note": {"type": "string"}},
                                       ["stage", "candidate_id"])},

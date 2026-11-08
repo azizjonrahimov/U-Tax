@@ -54,6 +54,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "hr.declined": _HR,
     "hr.questionnaire_sent": _HR,
     "hr.decision_mailed": _HR,  # v1.6.1
+    "hr.outreach_declined": _HR,  # task 38b: HR read the reply as a no (not the CEO's call)
     "screen.call": ("candidate_id", "transcript_excerpt", "seconds"),
     "voice.command": ("text", "channel", "speaker", "case_id", "masked_name"),  # v1.6.4
     "ceo.notified": ("channel", "subject", "summary", "reason"),

@@ -70,3 +70,36 @@ def test_the_no_rule():
         assert declined(no), no
     for other in ("Can we do Thursday?", "What's the pay?", "yes", "", "Maybe later"):
         assert not declined(other), other
+
+
+# ---------------------------------------------------------------- task 38b
+
+
+def test_hr_marks_a_reply_declined_with_the_same_effect(outreached):
+    h, _ = outreached
+    slot = cand(h)["contacted"]
+    reply(h, "Thanks, I'm all set for now.")  # a no in other words: the gateway can't tell
+    assert cand(h)["outreach_declined"] is False and slot not in h.gw.offered_slots(None)
+    out = h.gw.perform("hr_record", {"candidate_id": "cand_1", "stage": "outreach_declined",
+                                     "note": "said they're all set"}, actor="hr")
+    assert out.status == "done" and out.data["stage"] == "outreach_declined"
+    [e] = h.events("hr.outreach_declined")
+    assert e.actor == "hr" and e.payload == {"candidate_id": "cand_1",
+                                             "name_masked": "Candidate A",
+                                             "note": "said they're all set"}
+    got = cand(h)
+    assert got["outreach_declined"] is True and got["stage"] == "applicant"  # not a decision
+    assert slot in h.gw.offered_slots(None) and h.gw._outreach_intents.get("cand_1") is None
+    again = h.gw.perform("hr_record", {"candidate_id": "cand_1",
+                                       "stage": "outreach_declined"}, actor="hr")
+    assert again.data["duplicate"] is True and len(h.events("hr.outreach_declined")) == 1
+    sent = len(h.outbox())
+    assert h.ok("candidate_decision", candidate_id="cand_1",
+                decision="hire")["mail"] == "skipped" and len(h.outbox()) == sent
+
+
+def test_hr_cant_mark_a_candidate_never_contacted(make_harness):
+    h = make_harness(hr_candidates="Jo Doe <jo@example.com>")
+    r = h.gw.perform("hr_record", {"candidate_id": "cand_1", "stage": "outreach_declined"},
+                     actor="hr")
+    assert r.status == "refused" and r.error["code"] == "wrong_status"
