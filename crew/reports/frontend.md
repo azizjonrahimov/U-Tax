@@ -315,6 +315,26 @@ If either page can't hear you at all: check Chrome's site permission (the lock i
   - Each ear reopens the mic (Bluetooth headsets switch profile).
 - **Backend ask:** `/api/stt` books the client-declared `seconds` when the provider reports tokens instead of a duration, so a direct caller can under-declare on the public budget.
 
+## Cases list in the CEO console (F1, contract v1.15/v1.18.4)
+
+- **Every case in the console (page and /office panel):** each row shows status (or Flagged) and its verified documents (workpaper .xlsx, memo .docx), each with a download button. The downloads stay reachable after the Accounting desk moves on.
+- **Which cases:** the newest 12, plus any older case whose documents are ready.
+- **Which files:** one rule decides what is served, shared with the Accounting window (`stepCaseDocs`): a version is served once all three of its documents passed. A flagged case never offers a file, and only names the gateway can serve get a button.
+- **Downloads:** they share one hook with the Accounting window. A dead session signs the console out with the reason. A late 401 for an old session never ends a newer one.
+- **Log restart:** the served files and order cards clear at once, even if the reload fails.
+- **v1.18.4 (backend 45):** both ears record speech at 8 kbps Opus, so an honest clip books about 1.3× its length.
+- **Decisions taken with the recommended option:**
+  - Every case with documents stays listed rather than paging.
+  - The list sits after the order form.
+  - Download logic is shared through a hook rather than by exporting FileChip, so each component keeps its own look.
+- **Known (open, informational):**
+  - The console clears a case's checks per document; the gateway clears the whole set on any failure. A same-version rebuild could show "Verified ✓" downloads that 404 (backend: is that rebuild reachable?).
+  - A download in flight still saves after Sign out.
+  - A 403 counts as an expired session.
+  - The Office fold no longer checks the actor on `doc.*` events.
+  - The served map is not pruned.
+  - Safari's AAC bitrate at the 8 kbps request, and transcription quality at 8 kbps, are not measured on real devices.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
