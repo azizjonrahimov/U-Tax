@@ -485,6 +485,29 @@ for (const [key, seat] of Object.entries(CREW))
   for (const [key, seat] of Object.entries(CREW))
     if ((key === "ceo") === seat.tools.includes("task_done")) fail(`${seat.name}: task_done belongs to every firm seat and not the CEO assistant`);
 }
+// D42 (contract v1.21 §11): every email case runs the fast path; T4 tax-return prompts
+MUST_KEEP["chief-of-staff.md"].push("Every `FAST PATH case_N` wake runs this chain, whatever started the case (an email, the public `/talk` page, or a reply).",
+  "Skip cases marked `priority` **or `in_flight`**", "If `intake` reports that it asked the client (or \"no new facts\"), stop the chain");
+MUST_KEEP["_firm-rules.md"].push("We prepare drafts and estimates. We never file a return, never e-sign, never send a tax figure the engine did not compute.");
+(MUST_KEEP["intake.md"] ??= []).push("Never ask for an EIN or an SSN", "Never add `income_tax` for an S-corp, an LLC or an individual",
+  "block the card \"case_N: a person prepares this (<entity>)\"", "your\nreply is \"case_N: asked the client\", so the chain stops".replace(/\s+/g, " "),
+  "from the engine's `FACT_LABELS`", "Every fact you pass, as an arg or a quote, also needs its verbatim span in `quotes`",
+  "exactly one of `c_corp`, `s_corp`, `llc`, `individual`, `other`", "take each one\n   from the newest message that states it".replace(/\s+/g, " "),
+  "for `income_tax`, `gross_receipts` is required like any other fact");
+MUST_KEEP["chief-of-staff.md"].push("A case already SENT (or later) whose client wrote again is not a chain",
+  "start at the step its status calls for", "(with its \"unless\" guards)");
+(MUST_KEEP["tax.md"] ??= []).push("Never state a rate yourself: quote the engine's steps", "add one line naming which taxes were computed and the total, exactly as returned");
+(MUST_KEEP["accounting.md"] ??= []).push("it also makes the draft Form 1120", "memo sent with the draft Form 1120 and the returns workbook");
+{
+  // intake's services and new facts are the contract's (§11)
+  const api = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "";
+  const s11 = api.split(/^## 11\./m)[1]?.split(/^## /m)[0] ?? "";
+  const intake = readFileSync(join(ROOT, "prompts", "intake.md"), "utf8");
+  const svc = [...(s11.match(/`services\[\]` \(([^)]+)\)/)?.[1] ?? "").matchAll(/`(\w+)`/g)].map((m) => m[1]);
+  const facts = [...(s11.match(/Facts gain ([^;]+);/)?.[1] ?? "").matchAll(/`(\w+)`/g)].map((m) => m[1]);
+  if (svc.length < 2 || facts.length < 4) fail(`contracts/api.md §11: could not read the services (${svc}) or the new facts (${facts})`);
+  for (const t of [...svc, ...facts]) if (!intake.includes(`\`${t}\``)) fail(`prompts/intake.md: never names the §11 ${svc.includes(t) ? "service" : "fact"} \`${t}\``);
+}
 // D38: the order the CEO assistant sends is one the Chief of Staff's share card row lists
 const SHARE_ORDER = "get an outside agent to make a share card";
 for (const file of ["chief-of-staff.md", "ceo-assistant.md", "ceo-voice.md"])

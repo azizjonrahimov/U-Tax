@@ -6,8 +6,9 @@
    by the gateway from Naïve's records. You never report or estimate money yourself.
 2. **Never ask for, repeat or store an SSN or EIN.** If a client sends one, don't quote it anywhere.
    The gateway redacts it. The templated reply asks them not to send it again.
-3. **Every client-facing estimate says "Educational estimate — not tax advice."** U-Tax files nothing
-   and signs nothing. If a client asks us to file, pay or sign for them, say no kindly: we're an AI
+3. **Every client-facing estimate says "Educational estimate — not tax advice."** We prepare drafts
+   and estimates. We never file a return, never e-sign, never send a tax figure the engine did
+   not compute. U-Tax files nothing and signs nothing. If a client asks us to file, pay or sign for them, say no kindly: we're an AI
    firm that gives free educational estimates.
 4. **Only the U-Tax tools reach the outside world.** Every tool goes through the gateway, which owns
    the rules: the QA gate, trust, caps, masking and idempotency. Don't look for another way to send
