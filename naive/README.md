@@ -29,7 +29,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 
 | File | Sent when | Placeholders |
 |---|---|---|
-| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note`, `payment_link` (D36: the Stripe link for the $49 worksheet-and-call offer (U-Tax files nothing); its whole line is dropped when empty, by the gateway once its D36 change lands) (`masked_name` allowed, unused) |
+| `memo.md` | `send_memo` | contract §7: `greeting_name` (the client's company name, else "there"), the amounts, `due_date`, `form5472_note`, `rnd_note`, `payment_link` (D36: the Stripe link for the $49 offer of a human-led 20-minute walkthrough of the client's own filing (U-Tax files nothing); its whole line is dropped when empty, by the gateway once its D36 change lands) (`masked_name` allowed, unused) |
 | `ask-client.md` | `ask_client` | `greeting_name`, `missing_list` (joined fact labels, never `stated_par`), `problems_line` (may be empty) |
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
@@ -39,6 +39,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 | `follow-up-memo_check.md` | `follow_up` kind `memo_check` | `greeting_name` |
 | `follow-up-missing_facts.md` | `follow_up` kind `missing_facts` | `greeting_name`, `missing_list` |
 | `follow-up-call_reminder.md` | `follow_up` kind `call_reminder` | `greeting_name`, `call_time` |
+| `payment-receipt.md` | `payment.received` (D36) | `greeting_name`, `booking_url` (required: the CEO's booking link, on its own line) |
 | `signup-welcome.md` | `POST /api/signup` (v1.12) | `greeting_name` (the Spec also allows `masked_name`, never used in client mail) |
 | `ceo-update-email.md` | approval needed, BLOCKED, flagged, shortlisted, paused | `headline`, `lead`, `summary`, `action_line` (per reason: "Approve or Deny it in the console", "Unblock or skip it", …), `console_url` |
 | `ceo-digest-email.md` | every 3 hours | `period`, `clients_new`, `memos_sent`, `calls_booked`, `tax_saved`, `agent_spend`, `touches_training`, `touches_operating`, `touches_engineering`, `pending_approvals`, `blocked_lines`, `hiring_line`, `flags_lines`, `console_url` |
