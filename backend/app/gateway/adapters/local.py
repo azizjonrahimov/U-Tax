@@ -311,6 +311,16 @@ class NoVoice:
         raise NotConfigured("voice_unavailable: no OPENAI_API_KEY")
 
 
+class NoSTT:
+    """Task 40a: no ADAPTER_STT (or no key): /api/stt answers 503 and the pages keep the
+    browser's own recognizer."""
+
+    provider = None
+
+    def transcribe(self, audio: bytes, content_type: str):
+        raise NotConfigured("stt_unavailable: no speech-to-text adapter")
+
+
 # ------------------------------------------------------------------ calendar
 
 

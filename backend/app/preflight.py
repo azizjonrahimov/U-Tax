@@ -175,6 +175,37 @@ def check_elevenlabs(settings, transport: Transport = None) -> list[Check]:
                   + ("" if left >= MIN_TTS_CHARACTERS else f" (under {MIN_TTS_CHARACTERS:,})"))]
 
 
+def check_openai(settings, transport: Transport = None) -> list[Check]:
+    """Task 40a: only when ADAPTER_TTS / ADAPTER_REALTIME / ADAPTER_STT names openai. The
+    models list is free; each switched-on port's model must be on the key."""
+    from app.gateway.registry import AdapterNotReady, _voice_choice
+
+    try:
+        uses = [p for p in ("stt", "realtime", "tts") if _voice_choice(settings, p) == "openai"]
+    except AdapterNotReady as err:
+        return [Check("OpenAI", False, str(err)[:160])]
+    if not uses:
+        return []
+    switches = ", ".join(f"ADAPTER_{p.upper()}=openai" for p in uses)
+    if not settings.openai_api_key:
+        return [Check("OpenAI", False, f"OPENAI_API_KEY is not set ({switches})")]
+    try:
+        with _http("https://api.openai.com/v1", transport,
+                   Authorization=f"Bearer {settings.openai_api_key}") as http:
+            r = http.get("/models")
+            r.raise_for_status()
+            body = r.json()
+    except httpx.HTTPError as err:
+        return [Check("OpenAI", False, f"the key {_status(err)}")]
+    have = {str(m.get("id")) for m in (body.get("data") or []) if isinstance(m, dict)}         if isinstance(body, dict) else set()
+    wanted = {"stt": (os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe"), "whisper-1"),
+              "realtime": (os.environ.get("OPENAI_REALTIME_MODEL", "gpt-realtime"),),
+              "tts": (os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"),)}
+    missing = [f"{p} ({wanted[p][0]})" for p in uses if not any(m in have for m in wanted[p])]
+    return [Check("OpenAI", not missing, f"key works; {', '.join(uses)} models on the key"
+                  if not missing else f"key works; no model for {', '.join(missing)}")]
+
+
 def check_social(settings, transport: Transport = None) -> list[Check]:
     identity = settings.naive_social_identity
     if not identity or not settings.naive_api_key:
@@ -248,7 +279,8 @@ def check_files(settings) -> list[Check]:
 def preflight(settings, transport: Transport = None,
               out: Callable[[str], None] = print, color: bool = True) -> int:
     checks: list[Check] = []
-    for run in (check_gateway, check_naive, check_agentmail, check_elevenlabs, check_social):
+    for run in (check_gateway, check_naive, check_agentmail, check_elevenlabs, check_openai,
+                check_social):
         try:
             checks += run(settings, transport)
         except Exception as err:  # noqa: BLE001 - one broken check never hides the rest

@@ -167,6 +167,7 @@ class State:
     public_cases_by_day: dict[str, int] = field(default_factory=dict)  # task 13: UTC date -> n
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
     tts_talk_chars_by_day: dict[str, int] = field(default_factory=dict)  # v1.10 §5c budget
+    stt_talk_seconds_by_day: dict[str, int] = field(default_factory=dict)  # task 40a budget
     ads_created: int = 0  # v1.11: make_ad numbers its PNGs
     signups_by_day: dict[tuple[str, str], int] = field(default_factory=dict)  # v1.12
     signup_cases: set[str] = field(default_factory=set)  # v1.12: welcome mail owed
@@ -259,6 +260,10 @@ class State:
             if model.startswith("realtime:") and not model.startswith(f"realtime:{CEO_MINT}"):
                 day = e.ts[:10]
                 self.voice_mints_by_day[day] = self.voice_mints_by_day.get(day, 0) + 1
+            if model.startswith("stt:talk:"):  # task 40a: /talk's daily seconds (tokens_in)
+                day = e.ts[:10]
+                self.stt_talk_seconds_by_day[day] = (self.stt_talk_seconds_by_day.get(day, 0)
+                                                     + int(e.tokens_in or 0))
             if model.startswith("tts:talk:"):  # v1.10 §5c: /talk's daily character budget
                 day = e.ts[:10]
                 self.tts_talk_chars_by_day[day] = (self.tts_talk_chars_by_day.get(day, 0)
