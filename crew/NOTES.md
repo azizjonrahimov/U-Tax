@@ -205,3 +205,4 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-08 01:42 local: READY backend-43 554d7b86 MERGED with contract v1.18.2; targeted 25; GitHub CI green. Backend resting (queue empty).
 - 2026-11-08 02:05 local: READY frontend-panel 2318e9e6 (CEO console panel in /office + pop-out + Web Lock single console + live order cards + cell formats) MERGED; GitHub CI green. All D32-D37 owner asks now merged except D35 docs view and D36 STT (frontend next).
 - 2026-11-08 02:17 local: READY frontend-docs eeb4c28 MERGED (verified docs download via Bearer blob). SECURITY from its review: an XLSX formula injection (a client quote starting with = runs when the CEO opens the workpaper) → backend task 44 URGENT.
+- 2026-11-08 02:21 local: READY backend-44 1386fbd (SECURITY: xlsx literal cells, heal old books) MERGED with contract v1.18.3. Live needs a gateway restart (owner).
