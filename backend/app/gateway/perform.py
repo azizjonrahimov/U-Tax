@@ -137,6 +137,23 @@ CLIENT_REPLY_WAKES_PER_DAY = 3
 MAX_REVISIONS = 2
 
 
+_YES = re.compile(r"\b(yes|yeah|yep|yup|sure|sounds (good|great)|works( for me)?|ok|okay|"
+                  r"happy to|i'?m in|count me in|absolutely|definitely|of course|perfect|"
+                  r"great|let'?s do it)\b")
+_NOT_YES = re.compile(r"\b(no|nope|not|never|can'?t|cannot|won'?t|don'?t|doesn'?t|isn'?t|"
+                      r"unfortunately|decline|pass|busy|unsubscribe|stop|remove|but|maybe|"
+                      r"another time|reschedule|instead)\b|n't\b|\?")
+
+
+def affirmative(body: str) -> bool:
+    """Task 32b: a candidate's reply to the outreach note books the call only when the
+    reply-only text (quotes and signature cut) is a plain yes: "yes", "sure", "sounds good",
+    "works for me", "ok". A no, a question, a "but" or a new time is a note for HR, never
+    a booking (fail safe: a mixed reply books nothing)."""
+    text = " ".join(new_text(body or "").lower().replace("\u2019", "'").split())[:300]
+    return bool(text) and bool(_YES.search(text)) and not _NOT_YES.search(text)
+
+
 def new_text(body: str) -> str:
     """v1.6.2: only what the client newly wrote: no quoted lines, no signature, no
     "On ... wrote:" attribution (any length, or wrapped onto two lines), no Outlook
@@ -1189,17 +1206,26 @@ class Gateway:
         sender_key = mail.sender.strip().lower()
         candidate_id, name_masked, new = self._candidate_for(sender_key)
         known = self.state.candidates.get(candidate_id, {})
-        first_answer = not new and not known.get("answers")
+        # 32b: a listed candidate (HR_CANDIDATES) got the outreach, never the questionnaire:
+        # their mail is a reply to the note, never questionnaire answers
+        listed = bool(known.get("listed"))
+        first_answer = not new and not known.get("answers") and not listed
+        outreach_reply = not new and bool(known.get("contacted"))
+        yes = outreach_reply and affirmative(mail.body)
         # The public note is the stated credentials only (the raw text can carry a name or
         # signature); the redacted, contact-free text stays private for the HR screen.
         raw = re.sub(r"\s+", " ", strip_contacts(mail.body)).strip()[:2000]
-        note = credentials_summary(raw) if new else "replied to the questionnaire"
+        note = credentials_summary(raw) if new else (
+            "replied to the outreach" if outreach_reply or listed
+            else "replied to the questionnaire")
         self._emit([NewEvent(type="hr.applicant", actor="hr", provider=self.ports.mail.provider,
                              payload={"candidate_id": candidate_id, "name_masked": name_masked,
                                       "note": note},
                              idempotency_key=key,
                              private={"reply_to": mail.sender.strip(), "sender_key": sender_key,
                                       "message_id": mail.message_id,
+                                      **({"outreach_reply": True, "affirmative": yes}
+                                         if outreach_reply else {}),
                                       "text": mask_text(raw, masked_name=name_masked,
                                                         company=None,
                                                         hide_words=sender_words(sender_key))})])
@@ -1209,9 +1235,11 @@ class Gateway:
             self._wake(f"New applicant {candidate_id}")
         elif first_answer:
             self._wake(f"Applicant answered {candidate_id}")  # v1.5: now HR has answers
-        if not new and self.state.candidates.get(candidate_id, {}).get("contacted"):
-            # task 32: the reply to the outreach note books the call and sends the invite
+        if yes:  # task 32b: only a plain yes books the call and sends the invite
             self._send_candidate_invite(candidate_id, reply_id=mail.message_id)
+        elif outreach_reply:  # anything else is HR's to read: a note, no booking
+            self._wake(f"Candidate {candidate_id} replied to the outreach (not a yes; "
+                       "no call booked)")
         return {"candidate_id": candidate_id, "name_masked": name_masked, "new": new,
                 "questionnaire": questionnaire}
 
