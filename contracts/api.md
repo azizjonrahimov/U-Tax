@@ -597,6 +597,9 @@ v1.11.1, event payloads (the frontend's proposal, adopted):
 
 `prepare_documents` (acct): see its §6 row above. Behaviour: refused unless `QA_PASSED`; the gateway builds the workpaper .xlsx, the memo .docx and a books entry from the engine's result and the extracted facts only; it verifies each file, stores them under `UTAX_DATA_DIR/docs/<case_id>/`, and emits `doc.step`, `doc.created` and `doc.verified`; it's idempotent per case and memo version.
 
+v1.18.3 (task 44, security): every workbook text cell is stored as literal text, never a formula. A leading = + - @ tab or CR is
+stored as text with Excel's quote prefix. The memo .docx has no field codes.
+
 `send_memo` (v1.15) attaches the case's verified workpaper and memo (AgentMail attachments), and is refused
 (`docs_missing`) when `prepare_documents` hasn't run for the current memo version. The theater gets
 `doc.*` payloads with no client names (masked labels only). The files are never served publicly;
@@ -791,6 +794,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.18.3 (2026-11-08, task 44): xlsx cells literal (no formula injection).
 
 - v1.18.2 (2026-11-08, task 43): events types= filter, cells fmt, relay replay skip.
 

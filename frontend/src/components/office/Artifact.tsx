@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { current, type Activity, type Artifact, type Book, type Desk } from "@/office/artifact";
+import { docName, downloadDoc } from "@/office/docs";
 
 let reducedMotion: boolean | null = null;
 const reduced = () => {
@@ -47,14 +48,15 @@ export function AgentNotes({ desk, now, who }: { desk: Desk; now: number; who: s
   );
 }
 
-export function ArtifactView({ art }: { art: Artifact }) {
+/** D35: with the CEO's session, the real files (workpaper, memo) can be downloaded from the window. */
+export function ArtifactView({ art, session = null, served = [] }: { art: Artifact; session?: string | null; served?: readonly string[] }) {
   switch (art.kind) {
     case "mail":
-      return <Mail art={art} />;
+      return <Mail art={art} session={session} served={served} />;
     case "post":
       return <Post art={art} />;
     case "docs":
-      return <Docs art={art} />;
+      return <Docs art={art} session={session} served={served} />;
     case "calc":
       return <Calc art={art} />;
     case "invite":
@@ -62,7 +64,50 @@ export function ArtifactView({ art }: { art: Artifact }) {
   }
 }
 
-function Mail({ art }: { art: Extract<Artifact, { kind: "mail" }> }) {
+/** A file the CEO can save: a button while signed in, a plain chip otherwise. */
+function FileChip({ session, caseId, file, label, served }: { session: string | null; caseId: string | null; file: string; label?: string; served: readonly string[] }) {
+  const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  if (!session || !docName(caseId, file) || !served.includes(file)) {
+    return (
+      <span className="file-dl">
+        <span className="file">📎 {label ?? file}</span>
+        {state.error && (
+          <span className="dl-err" role="alert">
+            {state.error}
+          </span>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="file-dl">
+      <button
+        className="file"
+        disabled={state.busy}
+        title={`Download ${file}`}
+        onClick={async () => {
+          setState({ busy: true, error: null });
+          let error: string | null = "The download didn't finish. Try again.";
+          try {
+            const r = await downloadDoc(session, caseId as string, file);
+            error = r.ok ? null : r.message;
+          } finally {
+            setState({ busy: false, error });
+          }
+        }}
+      >
+        {state.busy ? "Downloading…" : `⬇ ${label ?? file}`}
+      </button>
+      {state.error && (
+        <span className="dl-err" role="alert">
+          {state.error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function Mail({ art, session, served }: { art: Extract<Artifact, { kind: "mail" }>; session: string | null; served: readonly string[] }) {
   const n = useReveal(art.body.length, chars, 24);
   const typing = n < art.body.length;
   const composing = art.state === "drafting";
@@ -83,9 +128,7 @@ function Mail({ art }: { art: Extract<Artifact, { kind: "mail" }> }) {
       {art.attachments.length > 0 && !typing && (
         <div className="attach" aria-label="Attachments">
           {art.attachments.map((f) => (
-            <span key={f} className="file">
-              📎 {f}
-            </span>
+            <FileChip key={f} session={session} caseId={art.caseId} file={f} served={served} />
           ))}
         </div>
       )}
@@ -133,7 +176,7 @@ const MAX_GRID_COLS = 9;
 const NUMERIC = /^-?\(?\$?[\d,]+(\.\d+)?\)?%?$/;
 
 /** The case's documents, played back in the order they were built: cells, then sections, then the books row. */
-function Docs({ art }: { art: Extract<Artifact, { kind: "docs" }> }) {
+function Docs({ art, session, served }: { art: Extract<Artifact, { kind: "docs" }>; session: string | null; served: readonly string[] }) {
   const n = useReveal(art.units.length, cellsTick, 140);
   const shown = art.units.slice(0, n);
   const done = n >= art.units.length;
@@ -164,6 +207,16 @@ function Docs({ art }: { art: Extract<Artifact, { kind: "docs" }> }) {
         </article>
       ) : (
         <Grid book={art[doc]} sheet={at?.sheet} revealed={shown.filter((u) => u.doc === doc)} last={at} />
+      )}
+      {/* D35: the real files, once built (the CEO's session; the books stay in the firm) */}
+      {session && done && (["workpaper", "memo"] as const).some((d) => art[d]?.built && served.includes(art[d]?.file ?? "")) && (
+        <div className="attach" aria-label="Download the documents">
+          {(["workpaper", "memo"] as const)
+            .filter((d) => art[d]?.built && served.includes(art[d]?.file ?? ""))
+            .map((d) => (
+              <FileChip key={d} session={session} caseId={art.caseId} file={art[d]?.file ?? ""} served={served} label={`${DOC_LABEL[d]} (${art[d]?.file.endsWith(".xlsx") ? "Excel" : "Word"})`} />
+            ))}
+        </div>
       )}
       {done && art[doc]?.verified !== null && art[doc]?.verified !== undefined && (
         <span className={`stamp${art[doc]?.verified ? "" : " bad"}`}>{art[doc]?.verified ? "Verified ✓" : "Check failed"}</span>
