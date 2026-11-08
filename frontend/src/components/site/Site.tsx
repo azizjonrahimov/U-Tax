@@ -316,7 +316,9 @@ export function Signup() {
                 void submit();
               }}
             >
-              <h1>Get your free checkup</h1>
+              <h1>
+                Start your <em>free</em> check
+              </h1>
               <p className="lead">Three fields. We email you to ask for your numbers, then send an estimate you can check line by line.</p>
               {field("name", "Your name", "text", "name")}
               {field("company", "Company", "text", "organization", "Your Delaware corporation's name.")}
