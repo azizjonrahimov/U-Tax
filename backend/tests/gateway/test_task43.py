@@ -16,6 +16,8 @@ from app.main import create_app
 from app.naive import NaiveClient
 from app.naive_activity import ActivityRelay, _Session
 
+from ..naive_strict import strict
+
 ADMIN = "admin-" + "a" * 30
 THEATER = "theater-" + "b" * 30
 
@@ -85,7 +87,7 @@ def test_a_replayed_old_step_is_never_relogged_but_new_ones_are(h):
     async def handler(request):
         return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
-    relay = ActivityRelay(h.gw, NaiveClient("nk", transport=httpx.MockTransport(handler)),
+    relay = ActivityRelay(h.gw, NaiveClient("nk", transport=httpx.MockTransport(strict(handler))),
                           now=lambda: seen)
     relay.sessions["ses_1"] = _Session("mkt", seen)
     asyncio.run(relay.follow("ses_1"))

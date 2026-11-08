@@ -34,6 +34,7 @@ API_VERSION = "2026-09-30"
 USER_AGENT = f"naive-yc-hackathon-backend/{__version__}"
 
 JSON = dict[str, Any]
+MAX_LIMIT = 100  # task 49: Naive answers 400 validation_failed "limit must be 1..100"
 Sleep = Callable[[float], Awaitable[None]]
 
 
@@ -319,7 +320,10 @@ class NaiveClient:
         )
 
     async def _page(self, path: str, params: Mapping[str, Any]) -> Page:
-        return Page.from_json(await self.request("GET", path, params=params))
+        query = dict(params)
+        if query.get("limit") is not None:  # task 49: every list call, clamped to 1..100
+            query["limit"] = max(1, min(int(query["limit"]), MAX_LIMIT))
+        return Page.from_json(await self.request("GET", path, params=query))
 
     async def paginate(
         self, path: str, params: Mapping[str, Any] | None = None, *, max_pages: int = 100
