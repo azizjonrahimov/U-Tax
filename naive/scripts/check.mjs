@@ -488,7 +488,7 @@ for (const [key, seat] of Object.entries(CREW))
 // D42 (contract v1.21 §11): every email case runs the fast path; T4 tax-return prompts
 MUST_KEEP["chief-of-staff.md"].push("Every `FAST PATH case_N` wake runs this chain, whatever started the case (an email, the public `/talk` page, or a reply).",
   "Skip cases marked `priority` **or `in_flight`**", "If `intake` reports that it asked the client (or \"no new facts\"), stop the chain");
-MUST_KEEP["_firm-rules.md"].push("We prepare drafts and estimates. We never file a return, never e-sign, never send a number the engine did not compute.");
+MUST_KEEP["_firm-rules.md"].push("We prepare drafts and estimates. We never file a return, never e-sign, never send a tax figure the engine did not compute.");
 (MUST_KEEP["intake.md"] ??= []).push("Never ask for an EIN or an SSN", "Never add `income_tax` for an S-corp, an LLC or an individual",
   "block the card \"case_N: a person prepares this (<entity>)\"", "your\nreply is \"case_N: asked the client\", so the chain stops".replace(/\s+/g, " "),
   "from the engine's `FACT_LABELS`", "Every fact you pass, as an arg or a quote, also needs its verbatim span in `quotes`",
