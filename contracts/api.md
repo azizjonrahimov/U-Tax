@@ -420,6 +420,9 @@ which asks the CEO; the agent retries the same call after approval (idempotent).
 
 `get_candidate` adds `offered_slots`, and `/api/state` hiring counts `sourced` and `contacted`.
 
+v1.11.3: `HR_BOOKING_URL` (optional, https). When it's set, `hr-outreach` adds a line with the CEO's own
+booking page (`{{booking_url}}`) beside the calendar invite. It's only ever sent to consented candidates.
+
 v1.11.1, event payloads (the frontend's proposal, adopted):
 - `ad.created` (mkt): `{kind: "client"|"hiring", headline, image_url}`. `image_url` is https on the gateway's own host.
 - `hr.sourced` (hr): `{count, source: "monid"|"none"}`. Counts only: no lead labels or URLs on the public log.
@@ -616,6 +619,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.11.3 (2026-11-07, owner's calendar link): HR_BOOKING_URL in hr-outreach.
 
 - v1.11.2 (2026-11-07, D31 agents + backend): `list_candidates` (hr); refusal codes slot_bound, no_public_url, too_soon, no_consented_address; every MCP schema offers order_id.
 
