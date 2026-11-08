@@ -245,6 +245,19 @@ For Replay mode and catch-up. Ordered by `id`.
 - `/hooks/stripe` sends the payment receipt only for a paid usd payment of exactly FILING_PRICE_CENTS. Anything
   else tells only the CEO ("Payment of $X received: check it").
 
+v1.18.2 (task 43):
+- `GET /api/events?types=a,b` (optional comma list). The type filter and the reader's visibility (theater readers never
+  get admin-only types) apply BEFORE `limit`. `next_after_id` is the id of the last row READ (pass it back as
+  `after_id`). `has_more` means rows are left to read (at most 50,000 are read per request).
+- `doc.step` `payload.cells: [{sheet, cell, value, fmt}]` (admin only). `fmt` is one of:
+  - `"usd"`: dollars as a JSON number to the cent; the assumed par value capital at full precision;
+  - `"par"`: a per-share par value at full precision;
+  - `"int"`;
+  - `"text"`.
+  Numbers are JSON numbers, never formatted strings.
+- `agent.activity`: a stream's replay of steps created more than 15 s before the gateway first saw the session
+  is not logged.
+
 ## 5-bis. Payments (v1.17, D36)
 
 - `POST /hooks/stripe`: verifies Stripe-Signature (`t=,v1=`, HMAC-SHA256 of `t.body` with STRIPE_WEBHOOK_SECRET,
@@ -778,6 +791,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.18.2 (2026-11-08, task 43): events types= filter, cells fmt, relay replay skip.
 
 - v1.18.1 (2026-11-08, task 41): stop-first talk, per-turn actions, STOP fences every assistant start tool.
 

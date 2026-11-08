@@ -17,6 +17,11 @@ event types map to a kind:
 
 The session's opening (user) message naming `order_<n>` stamps that order on its activity.
 Under the shared 429 backoff no stream opens, and open ones stop.
+
+Task 43: a stream opens at after_seq=0, so it replays the session from its start. Events
+created more than REPLAY_GRACE seconds before the relay first saw the session are read
+(the order id, the seq) but never logged: an old step is never re-logged with the
+current time. The grace covers the poll gap, so a new session's first steps still show.
 """
 
 from __future__ import annotations
@@ -25,6 +30,7 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 from app.naive import NaiveClient, NaiveError
@@ -35,6 +41,18 @@ MAX_STREAMS = 8
 WRITING_EVERY = 1.0  # seconds between "writing" events of one session
 TEXT_MAX = 600
 _ORDER = re.compile(r"\border_[0-9]{1,12}\b")
+REPLAY_GRACE = 15.0  # seconds: the poller's 10 s gap, and some clock skew
+
+
+def _created(event: dict) -> datetime | None:
+    raw = event.get("created_at")
+    if not isinstance(raw, str):
+        return None
+    try:
+        when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
 
 
 def _text(data: Any) -> str:
@@ -51,8 +69,9 @@ def _text(data: Any) -> str:
 
 
 class _Session:
-    def __init__(self, actor: str) -> None:
+    def __init__(self, actor: str, first_seen: datetime | None = None) -> None:
         self.actor = actor
+        self.first_seen = first_seen or datetime.now(timezone.utc)
         self.last_seq = 0
         self.order_id: str | None = None
         self.text = ""
@@ -62,7 +81,9 @@ class _Session:
 
 class ActivityRelay:
     def __init__(self, gw: Any, client: NaiveClient, *, clock: Callable[[], float] = time.monotonic,
-                 max_streams: int = MAX_STREAMS) -> None:
+                 max_streams: int = MAX_STREAMS,
+                 now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> None:
+        self.now = now
         self.gw = gw
         self.client = client
         self.clock = clock
@@ -87,7 +108,7 @@ class ActivityRelay:
                 continue
             if sid in self.tasks or len(self.tasks) >= self.max_streams:
                 continue
-            self.sessions.setdefault(sid, _Session(actor))
+            self.sessions.setdefault(sid, _Session(actor, self.now()))
             self.tasks[sid] = asyncio.create_task(self.follow(sid))
             started.append(sid)
         return started
@@ -123,6 +144,9 @@ class ActivityRelay:
             if found and state.order_id is None:
                 state.order_id = found.group(0)
             return None
+        created = _created(event)
+        if created is not None and created < state.first_seen - timedelta(seconds=REPLAY_GRACE):
+            return None  # task 43: a replayed old step, never re-logged as new
         if kind == "session.running":
             return await self._emit(session_id, "thinking", seq=seq)
         if kind in ("tool.started", "tool.completed"):

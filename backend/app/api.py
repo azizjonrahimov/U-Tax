@@ -257,17 +257,39 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         admin = not auth_configured() or is_admin(authorization)
         return gw().public_state(admin=admin)
 
+    EVENTS_SCAN_MAX = 50_000  # task 43: one request reads at most this many rows
+
     @router.get("/api/events")
     def events(after_id: int = Query(0, ge=0), limit: int = Query(500, ge=1, le=2000),
+               types: str | None = Query(None, max_length=2000),
                token: str | None = Query(None), authorization: str | None = Header(None)):
+        """Task 43: `types=` (a comma list) and the theater filter apply BEFORE the limit,
+        so a page is `limit` matching rows. `next_after_id` is the last row READ (resume
+        from there); `has_more` is true while rows are left to read."""
         require_theater(token, authorization)
-        batch = list(gw().store.since(after_id, limit=limit + 1))
-        has_more = len(batch) > limit
-        batch = batch[:limit]
         admin = is_admin(authorization)
-        shown = (gw().public_event(e, admin=admin) for e in batch)
-        return {"data": [e for e in shown if e is not None],  # task 42: theater filter
-                "next_after_id": batch[-1].id if batch else after_id, "has_more": has_more}
+        wanted = {t.strip() for t in types.split(",") if t.strip()} if types else None
+        out: list[dict] = []
+        cursor, scanned, has_more = after_id, 0, False
+        while True:
+            page = list(gw().store.since(cursor, limit=1000))
+            for event in page:
+                if len(out) == limit:
+                    has_more = True
+                    break
+                cursor = event.id
+                scanned += 1
+                if wanted is not None and event.type not in wanted:
+                    continue
+                shown = gw().public_event(event, admin=admin)
+                if shown is not None:  # task 42: admin-only types never reach the theater
+                    out.append(shown)
+            if has_more or len(page) < 1000:
+                break
+            if scanned >= EVENTS_SCAN_MAX:
+                has_more = True
+                break
+        return {"data": out, "next_after_id": cursor, "has_more": has_more}
 
     @router.get("/api/events/stream")
     async def stream(request: Request, after_id: int = Query(0, ge=0),
