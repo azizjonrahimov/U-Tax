@@ -360,3 +360,9 @@ The fix each time was to derive from the event log and to check, after each awai
 - F43b: theater + office sidebar re-skin only. Avatars in the sidebar (with activity bars), pane headers, order steps and the bottom-bar stack; EmptyState in Mail, Sheet, Search, Calendar, Social and Phone; short sheet labels; lime winner/total and QA chip; segmented speeds and a lime Replay; "The firm, *live.*" header. Empty states fit by container queries (art drops first, then the line).
 - Not touched: script.ts, live.ts, screen.ts, voice, API calls, every data-target/data-pane (diff checked). Cursor parking is computed in Theater.tsx script, so left as is (brief §4).
 - Checked at 1440x900 and 1920x1080 (normal and stage) on the fixture: no clipped chrome, Replay visible. Skipped for time: order status chips (no status field to bind), the Social "N posts waiting" line, the rail funnel and training pills.
+
+## D40 F43c (/ceo at the 7 cut line) + the rail fix
+- /ceo: Night Lime tokens (--blue now lime, so Talk/mic and focus are lime), a lime pill Approve, Deny ghost, department avatars on approvals, standing orders and order steps. The standing orders now use a Switch with the same handlers: on pauses at once (as Pause did); off opens the existing Resume confirm. STOP EVERYTHING is unchanged (red, one click / Esc).
+- Not done: image previews on social approvals. approval.requested is `{approval_id, action_type, summary}` and has no image field, so there is nothing to bind (no invented content). Hands-free stays a checkbox (lime accent) to keep CeoVoice.tsx untouched.
+- Controller fix: the theater rail keeps Cases at a 96px minimum and scrolls inside itself, so it is never cut off under the bottom bar at 1440x900.
+- Click-tested on the mock gateway: switch off → paused, switch on → Resume confirm → resumed; Approve clears the row. Lint, 555 tests and build green.
