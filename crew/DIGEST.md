@@ -9,6 +9,8 @@ Captain (naive-yc-hackathon-99)
 
 ## New
 
+- frontend · 0m · F41 Market pane merged (9037830): job card, contractor cursor, checks, coin to the PixelAgent wallet, tx link; testnet labelled
+
 - all · 0m · D38 (agents hire agents, paid in testnet tokens) and D39 ("Night Lime" site) recorded; contract v1.19 §9; lanes briefed, APPROVED
 - captain · 10m · the gateway restarted with the OpenAI, Apify and Stripe keys (preflight 13 green; Naïve reads time out now and then); website redeployed to u-tax.vercel.app (all pages 200)
 - backend · 1h · 41–46 merged (live work stream, STOP fences, cell formats, xlsx security, STT bound, rebuild guard)
@@ -20,4 +22,4 @@ Captain (naive-yc-hackathon-99)
 |---|---|---|---|
 | backend | `backend/`, `contractors/` | D38: G1 GO (tempo, a live testnet tx); 47b building; 47b+47c READY by 06:45 | 0m |
 | agents | `naive/` | D38 A41, READY held until backend 47b | 0m |
-| frontend | `frontend/` | F41 Market pane (fixtures) → F42a–f Night Lime landing | 0m |
+| frontend | `frontend/` | F41 MERGED (Market pane, fixture-ready); F42a–f Night Lime landing building | 0m |
