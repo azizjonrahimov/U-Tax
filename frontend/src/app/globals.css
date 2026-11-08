@@ -41,3 +41,11 @@ body {
 .ui-switch:focus-visible { outline: 2px solid var(--nl-lime); outline-offset: 2px; }
 .ui-switch:disabled { opacity: .45; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) { .ui-switch, .ui-switch i { transition: none; } }
+
+/* D42 P1: the dot-matrix display type (Doto, loaded in app/layout.tsx). */
+.dot-display {
+  font-family: var(--font-doto), var(--font-geist-mono), monospace;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
