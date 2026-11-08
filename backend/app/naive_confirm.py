@@ -33,6 +33,7 @@ log = logging.getLogger("utax.naive_confirm")
 AGENT_NAMES: dict[str, str] = {
     "chief-of-staff": "cos", "intake": "intake", "tax": "tax", "qa": "qa",
     "accounting": "acct", "marketing": "mkt", "hr": "hr",
+    "ceo-assistant": "ceo",  # v1.14 (D34): the CEO's conversation, the /mcp/ceo seat
 }
 BOARD_TOOLS = ("board_read", "board_write")
 # v1.10.3 (owner: "allow handoffs"): Naive's coordinator tools hand work to our own agents
@@ -63,6 +64,11 @@ def naive_decision(actor: str | None, name: str) -> str:
         return "allow"
     if name in COORDINATOR_TOOLS:
         return "allow" if actor == "cos" else "deny"
+    if actor == "ceo":  # v1.14: its own seat's tools (the gateway enforces the rest)
+        from app.ceo_direct import SEAT_TOOLS
+
+        ok = name.startswith(MCP_PREFIX) and name[len(MCP_PREFIX):] in SEAT_TOOLS
+        return "allow" if ok else "deny"
     if name.startswith(MCP_PREFIX) and actor in TOOL_ACTORS.get(name[len(MCP_PREFIX):], ()):
         return "allow"
     return "deny"

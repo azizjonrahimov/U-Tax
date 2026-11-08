@@ -468,6 +468,46 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         require_admin(authorization)
         return _console("ceo_command", _pick(body, "text"))
 
+    # ------------------------------------------------------------------ v1.14 §5a-ter (D34)
+
+    def _talk_owner(authorization: str | None) -> str:
+        """One conversation per CEO sign-in; ADMIN_TOKEN scripts share "admin"."""
+        return sessions().sid(_bearer(authorization)) or "admin"
+
+    def _talk():
+        talk = getattr(gw(), "ceo_talk", None)
+        if talk is None:
+            raise APIError(503, "assistant_unavailable", "the CEO assistant isn't configured "
+                                                         "(NAIVE_API_KEY)")
+        return talk
+
+    @router.post("/api/ceo/talk")
+    async def ceo_talk(body: dict = Body(...), authorization: str | None = Header(None)):
+        from app.ceo_talk import TalkRefused
+
+        require_admin(authorization)
+        cid = body.get("conversation_id")
+        try:
+            return await _talk().talk(_talk_owner(authorization), body.get("text"),
+                                      cid if isinstance(cid, str) else None)
+        except TalkRefused as err:
+            raise APIError(err.status, err.code, err.message) from err
+
+    @router.get("/api/ceo/talk/{conversation_id}")
+    async def ceo_talk_check(conversation_id: str, authorization: str | None = Header(None)):
+        from app.ceo_talk import TalkRefused
+
+        require_admin(authorization)
+        try:
+            return await _talk().check(_talk_owner(authorization), conversation_id)
+        except TalkRefused as err:
+            raise APIError(err.status, err.code, err.message) from err
+
+    @router.post("/api/ceo/undo")
+    def ceo_undo(body: dict = Body(...), authorization: str | None = Header(None)):
+        require_admin(authorization)
+        return _console("ceo_undo", {**_pick(body, "undo_id"), "as_ceo": True})
+
     @router.get("/assets/{name}")
     def asset(name: str):
         """v1.11 make_ad: the firm's ad PNGs, public (X and LinkedIn fetch them). Only

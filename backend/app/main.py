@@ -56,6 +56,27 @@ def _show_utax_logs() -> None:
     utax.setLevel(logging.INFO)
 
 
+def _ensure_ceo_tool_token(gw: Gateway) -> None:
+    """v1.14: UTAX_TOOL_TOKEN_CEO unset: generate one into backend/.env (never printed), so
+    `naive up` can hand it to the ceo-assistant agent; the seat opens now."""
+    if gw.settings.tool_tokens.get("ceo") or os.environ.get("UTAX_TOOL_TOKEN_CEO"):
+        return
+    import secrets
+    from pathlib import Path
+
+    from app.devtools import set_env_values
+
+    token = secrets.token_urlsafe(36)
+    os.environ["UTAX_TOOL_TOKEN_CEO"] = token
+    gw.settings.tool_tokens["ceo"] = token
+    try:
+        set_env_values(Path(__file__).resolve().parents[1] / ".env",
+                       {"UTAX_TOOL_TOKEN_CEO": token})
+        log.info("UTAX_TOOL_TOKEN_CEO generated and saved to backend/.env")
+    except OSError:
+        log.exception("UTAX_TOOL_TOKEN_CEO not saved: the ceo seat's token changes at restart")
+
+
 def _ensure_session_secret(gw: Gateway) -> None:
     """v1.13: UTAX_SESSION_SECRET unset at first boot: generate one, write it into
     backend/.env (never printed) and use it now, so sessions outlive a restart."""
@@ -92,6 +113,7 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
         state["gw"] = gw
         if start_background:
             _ensure_session_secret(gw)  # v1.13: the CEO's sessions need a key that persists
+            _ensure_ceo_tool_token(gw)  # v1.14: the /mcp/ceo seat
         crew = None
         if gw.settings.driver == "local":
             from app.driver import LocalCrew
@@ -136,7 +158,12 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
 
             confirmer = NaiveClient(gw.settings.naive_api_key, gw.settings.naive_api_base,
                                     backoff=SHARED)  # task 35: one gate with the waker
-            confirmer_task = asyncio.create_task(NaiveConfirmer(gw, confirmer).run())
+            resolver = NaiveConfirmer(gw, confirmer)
+            state["confirmer"] = resolver  # v1.14: /api/ceo/talk answers its confirms at once
+            confirmer_task = asyncio.create_task(resolver.run())
+            from app.ceo_talk import CeoTalk
+
+            gw.ceo_talk = CeoTalk(gw, confirmer, confirmer=resolver)  # v1.14 (D34)
         try:
             yield
         finally:

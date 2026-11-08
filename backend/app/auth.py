@@ -96,6 +96,11 @@ class Sessions:
     def valid(self, token: str | None) -> bool:
         return self._claims(token) is not None
 
+    def sid(self, token: str | None) -> str | None:
+        """v1.14: the sign-in a valid session belongs to (one CEO conversation each)."""
+        claims = self._claims(token)
+        return str(claims["sid"]) if claims else None
+
     def revoke(self, token: str | None) -> bool:
         claims = self._claims(token)
         if claims is None:
