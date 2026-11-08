@@ -43,7 +43,7 @@ SSE_QUEUE_MAX = 2000
 _REFUSED_STATUS = {
     "not_found": 404, "bad_input": 400, "unknown_action": 404, "not_local": 403,
     "tool_not_allowed": 403, "wrong_status": 409, "paused": 409, "denied": 409, "superseded": 409,
-    "qa_gate": 409, "at_capacity": 429, "too_long": 400,
+    "qa_gate": 409, "at_capacity": 429, "too_long": 400, "rate_limited": 429,
     # v1.8 §5b: the CEO console
     "unknown_tool": 400, "bad_args": 400, "not_a_confirm": 400, "nothing_pending": 409,
     "used": 409, "expired": 409, "flagged": 409, "console_only": 409,
@@ -171,6 +171,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     free_limiter = RateLimiter(limit=FREE_LIMITS[False][0])
     audio_limiter = RateLimiter(limit=30, global_limit=120)
     ceo_mint_limiter = RateLimiter(limit=10, window=3600.0)  # v1.8: the CEO's 10 an hour
+    # v1.12 §5a: the public sign-up has /talk's per-IP limits, in its own bucket
+    signup_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
     # v1.10 §5c: /talk's TTS has the per-IP limits of a /talk Send, in its own bucket
     tts_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
     phrases_cache: dict[str, Any] = {"stamp": None, "phrases": None}
@@ -249,6 +251,15 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def approve(body: dict = Body(...), authorization: str | None = Header(None)):
         require_admin(authorization)
         return act("approve", _pick(body, "approval_id", "decision", "note"))
+
+    @router.post("/api/signup")
+    def signup(request: Request, body: dict = Body(...)):
+        """v1.12 §5a (D32): public. Opens a case like an inbound email and sends one welcome
+        email asking for the numbers. Returns {case_id, masked_name}."""
+        _talk_limit(signup_limiter, SEND_LIMITS)
+        signup_limiter.check(_client_ip(request))
+        out = act("signup", _pick(body, "name", "company", "email", "request_id"))
+        return {"case_id": out["case_id"], "masked_name": out["masked_name"]}
 
     @router.post("/api/voice")
     async def voice(request: Request, authorization: str | None = Header(None)):

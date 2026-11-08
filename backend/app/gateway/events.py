@@ -57,6 +57,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "voice.command": ("text", "channel", "speaker", "case_id", "masked_name"),  # v1.6.4
     "ceo.notified": ("channel", "subject", "summary", "reason"),
     "naive.confirm": ("session_id", "agent", "tool", "decision", "read_people"),  # v1.9 §6b-bis
+    "tool.called": ("tool", "status"),  # v1.12 §5a: every MCP tool call, no args or data
     # v1.11.1 (D31): the live CEO orders
     "ad.created": ("kind", "headline", "image_url"),
     "hr.sourced": ("count", "source"),
@@ -82,6 +83,7 @@ FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "sta
 # keys a payload may leave out: v1.6.4 masked_name is set on customer voice.command only
 OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"}),
                          "call.booked": frozenset({"kind"}),  # v1.11.1: "candidate"
+                         "email.received": frozenset({"source"}),  # v1.12: "signup"
                          **{t: frozenset({"channel"})
                             for t in ("touch.training", "touch.operating", "touch.engineering")}}
 OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only

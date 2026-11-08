@@ -165,6 +165,8 @@ class State:
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
     tts_talk_chars_by_day: dict[str, int] = field(default_factory=dict)  # v1.10 §5c budget
     ads_created: int = 0  # v1.11: make_ad numbers its PNGs
+    signups_by_day: dict[tuple[str, str], int] = field(default_factory=dict)  # v1.12
+    signup_cases: set[str] = field(default_factory=set)  # v1.12: welcome mail owed
     candidate_call_starts: set[str] = field(default_factory=set)  # v1.11: held like case calls
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
@@ -268,6 +270,13 @@ class State:
         return self.cases.get(e.case_id) if e.case_id else None
 
     def _on_email_received(self, e: Event) -> None:
+        signup = e.payload.get("source") == "signup"
+        if signup and e.case_id and e.case_id not in self.cases:  # v1.12: a public case
+            day = e.ts[:10]
+            self.public_cases_by_day[day] = self.public_cases_by_day.get(day, 0) + 1
+            sender = (e.private or {}).get("reply_to", "").lower()
+            self.signups_by_day[(day, sender)] = self.signups_by_day.get((day, sender), 0) + 1
+            self.signup_cases.add(e.case_id)
         self._open_case(e, text=e.payload["body"], subject=e.payload["subject"])
         self._inbound(e)
 

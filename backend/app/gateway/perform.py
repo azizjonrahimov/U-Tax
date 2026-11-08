@@ -387,6 +387,8 @@ class Gateway:
             "naive_confirm": self._naive_confirm,
             "naive_question": self._naive_question,
             "naive_notice": self._naive_notice,
+            # v1.12 §5a (D32): the product shell's public sign-up
+            "signup": self._signup,
         }
         self._naive_noticed: dict[tuple[str, str], datetime] = {}
         self._naive_questions: set[str] = set()  # notices tried this process (mailed or not)
@@ -1198,6 +1200,106 @@ class Gateway:
                              idempotency_key=f"qsent:{candidate_id}",
                              private={"message_id": sent.message_id})])
         return "sent"
+
+    # ------------------------------------------------------------ v1.12 §5a (D32)
+
+    SIGNUPS_PER_EMAIL_PER_DAY = 3
+    SIGNUP_SUBJECT = "Your free Delaware franchise tax check"
+
+    def _signup(self, args: dict) -> dict:
+        """POST /api/signup: a case opened like an inbound email (source "signup"), the crew
+        woken, and one welcome email asking for the numbers (trust email)."""
+        name = " ".join(_str(args, "name", max_len=120).split())
+        company = " ".join(_str(args, "company", max_len=120).split())
+        email = _str(args, "email", max_len=320).strip()
+        if not name or not company:
+            raise Refused("bad_input", "name and company are required")
+        if not _EMAIL_RE.match(email):
+            raise Refused("bad_input", "email must be an email address")
+        request_id = _str(args, "request_id", required=False, max_len=80)
+        key = f"signup:{request_id}" if request_id else None
+        if key:
+            seen = self._done_from(key)
+            if seen is not None:
+                return {"case_id": seen.case_id, "masked_name": seen.payload["masked_name"],
+                        "duplicate": True}
+        day = iso_ts(self._now())[:10]
+        sender = email.lower()
+        if self.state.signups_by_day.get((day, sender), 0) >= self.SIGNUPS_PER_EMAIL_PER_DAY:
+            raise Refused("rate_limited", "this email has signed up 3 times today; reply to "
+                                          "our welcome email instead")
+        self._public_cap()  # the public daily case cap (raises at_capacity)
+        number = self._new_case_number()
+        case_id = f"case_{number}"
+        masked_name = f"Team #{number}"
+        # like /talk: a public form never joins (or reveals) a case another mail owns; the
+        # reply threads onto this case only when no case owns that address yet
+        owned = sender in self.state.case_by_sender
+        sender_key = f"signup:{case_id}" if owned else sender
+        body = "Signed up on the U-Tax site for a free Delaware franchise tax check."
+        events = [NewEvent(
+            type="email.received", actor="intake", case_id=case_id, provider="local",
+            payload={"masked_name": masked_name, "from_masked": mask_email(sender),
+                     "subject": "Sign-up", "body": body, "source": "signup"},
+            idempotency_key=key,
+            private={"reply_to": email, "sender_key": sender_key, "masked_name": masked_name,
+                     "company": company, "message_id": f"signup-{case_id}", "redactions": 0,
+                     "agent_text": agent_text(f"{body} Waiting for their numbers by email."),
+                     "agent_subject": "Sign-up"},
+        )]
+        events += self._reopen(None, case_id)
+        self._emit(events)
+        self._wake(f"New case {case_id}")
+        self._send_signup_welcome(case_id)
+        return {"case_id": case_id, "masked_name": masked_name}
+
+    def _send_signup_welcome(self, case_id: str) -> str:
+        """The sign-up's one welcome email (trust email). On ASK the CEO's approval sends it
+        later (retry_signup_welcomes, on the tick)."""
+        key = f"signup-welcome:{case_id}"
+        if self._done_from(key) is not None:
+            return "sent"
+        case = self.state.cases[case_id]
+        try:
+            self._gate("email", key, _cap(f"{self._first('email')}welcome email: "
+                                          f"{case.masked_name}"), case_id, public=True)
+        except NeedsApproval:
+            return "needs_approval"
+        except Refused as err:  # denied, or email paused
+            return err.code
+        try:
+            sent = self._with_retry("welcome email", lambda: self.ports.mail.send(
+                OutMail(to=case.reply_to, subject=self.SIGNUP_SUBJECT,
+                        body=self.templates.render("signup-welcome", {
+                            "greeting_name": self._greeting(case),
+                            "masked_name": case.masked_name})), key))
+        except ToolError as err:
+            log.warning("welcome email for %s failed: %s", case_id, err)
+            return "failed"
+        self._emit([NewEvent(type="client.followed_up", actor="intake", case_id=case_id,
+                             provider=self.ports.mail.provider,
+                             payload={"kind": "signup_welcome"}, idempotency_key=key,
+                             private={"message_id": sent.message_id})])
+        return "sent"
+
+    def retry_signup_welcomes(self) -> list[str]:
+        """Welcome emails that couldn't go out (ASK, paused, failed): the tick retries."""
+        with self._lock:
+            todo = [cid for cid in sorted(self.state.signup_cases)
+                    if self._done_from(f"signup-welcome:{cid}") is None
+                    and self._mail_may_go(f"signup-welcome:{cid}")]
+            return [cid for cid in todo if self._send_signup_welcome(cid) == "sent"]
+
+    def record_tool_call(self, actor: str, tool: str, status: str, order_id: Any) -> None:
+        """v1.12 §5a: tool.called for every MCP tool call (reads too): the seat, the tool,
+        the outcome, the CEO order it served. No args or data. Never raises."""
+        try:
+            order = self._valid_order(order_id)
+            with self._lock:
+                self._emit([NewEvent(type="tool.called", actor=actor, payload={
+                    "tool": tool, "status": status, **({"order_id": order} if order else {})})])
+        except Exception:  # noqa: BLE001 - the animation event never fails a tool call
+            log.exception("tool.called for %s %s not written", actor, tool)
 
     def _new_case_number(self) -> int:
         return max((c.number for c in self.state.cases.values()), default=0) + 1
