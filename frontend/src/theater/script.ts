@@ -881,7 +881,8 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
     case "job.failed": {
       const job = jobId(p);
       const checks = checkList(p);
-      checks.forEach((c, i) => push({ target: `market.check.${i}`, agent: null, action: c.ok ? "tick" : "circle", text: c.name, meta: { job_id: job } }));
+      checks.forEach((c, i) => push({ target: `market.check.${i}`, agent: null, action: c.ok ? "tick" : "circle", text: c.name, meta: { job_id: job, of: checks.length } }));
+      if (!checks.length) push({ target: "market.status", agent: null, action: "status", text: ev.type === "job.verified" ? "checked" : "failed", meta: { job_id: job, verified: ev.type === "job.verified" } });
       if (ev.type === "job.failed") {
         const reason = str(p, "reason");
         push({ target: "market.status", agent: null, action: "status", text: reason === "expired" ? "expired" : reason === "contractor_error" ? "contractor error" : "checks failed", meta: { job_id: job } });
@@ -918,7 +919,7 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       const amount = tokens(p, "amount_usd");
       const token = clip(str(p, "token"), 12);
       str(p, "payer_masked"); // an agent's wallet, masked: the projector names no payer
-      push({ target: "rail.sale", agent: null, action: "count", text: `An agent bought a franchise-tax check · ${amount} ${token}` });
+      push({ target: "rail.sale", agent: null, action: "count", text: `An agent bought a franchise-tax check · ${amount} ${token} (testnet)` });
       break;
     }
     case "tool.bought": {

@@ -298,6 +298,9 @@ export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Type
   );
 }
 
+/** A market total shows once it's above zero (the market off, or nothing paid yet: no row). */
+const tokensShown = (v: string | undefined) => v !== undefined && Number(v) > 0 && Number.isFinite(Number(v));
+
 const JOB_STATUS: Record<MarketJob["status"], string> = {
   open: "posted · waiting for a contractor",
   claimed: "claimed",
@@ -320,7 +323,7 @@ export function MarketPane({ screen }: { screen: ScreenState }) {
   const src = job.image && GATEWAY_ORIGIN ? `${GATEWAY_ORIGIN}${job.image}` : undefined;
   const img = imageOk(src) ? src : undefined;
   const claimed = job.status !== "open";
-  const submitted = ["submitted", "verified", "failed", "paid", "delivered"].includes(job.status) && !(job.status === "failed" && job.reason === "expired");
+  const submitted = job.card === true;
   return (
     <Pane k="market" screen={screen} label="Market" name="outside agents" tag="testnet tokens · no real value">
       <div className="wallets">
@@ -449,14 +452,14 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
         <div>
           Saved vs spent<b className="g">{saved} / {spent}</b>
         </div>
-        {numbers.money.contractor_paid_usd !== undefined && (
+        {tokensShown(numbers.money.contractor_paid_usd) && (
           <div>
-            Contractors paid<b>{Number(numbers.money.contractor_paid_usd).toFixed(2)} pathUSD</b>
+            Contractors paid (testnet)<b>{Number(numbers.money.contractor_paid_usd).toFixed(2)} pathUSD</b>
           </div>
         )}
-        {numbers.money.agent_sales_usd !== undefined && (
+        {tokensShown(numbers.money.agent_sales_usd) && (
           <div>
-            Earned from agents<b>{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</b>
+            Earned from agents (testnet)<b>{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</b>
           </div>
         )}
       </div>
@@ -522,13 +525,13 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
             <span>Firm spent (est.)</span>
             <span className="mono">{spent}</span>
           </div>
-          {numbers.money.contractor_paid_usd !== undefined && (
+          {tokensShown(numbers.money.contractor_paid_usd) && (
             <div className="k">
               <span>Contractors paid (testnet)</span>
               <span className="mono">{Number(numbers.money.contractor_paid_usd).toFixed(2)} pathUSD</span>
             </div>
           )}
-          {numbers.money.agent_sales_usd !== undefined && (
+          {tokensShown(numbers.money.agent_sales_usd) && (
             <div className="k">
               <span>Earned from agents (testnet)</span>
               <span className="mono">{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</span>

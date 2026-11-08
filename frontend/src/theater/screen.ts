@@ -92,6 +92,8 @@ export interface MarketJob {
   pay?: { amount: string; tx: string; url: string | null; ledger: boolean };
   /** The gateway's own asset path, shown once delivered (paid work unblurs). */
   image?: string;
+  /** job.submitted came: there is a card to show (blurred until delivered). */
+  card?: true;
 }
 
 export interface ScreenState {
@@ -413,6 +415,8 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
     if (!id) return s;
     const jobs = s.market.jobs;
     const at = jobs.findIndex((j) => j.id === id);
+    // A job seen only from its middle (the projector reloaded after job.posted): no blank card.
+    if (at < 0 && sub !== "job") return s;
     const job: MarketJob = at >= 0 ? jobs[at] : { id, headline: "", price: "", template: "", status: "open", checks: [] };
     let next: MarketJob = job;
     switch (sub) {
@@ -423,15 +427,17 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
         next = { ...job, contractor: text, status: "claimed" };
         break;
       case "thumb":
-        next = { ...job, status: "submitted", checks: [], reason: undefined };
+        next = { ...job, status: "submitted", card: true, checks: [], reason: undefined };
         break;
       case "check": {
         const checks = [...job.checks, { name: text, ok: step.action === "tick" }];
-        next = { ...job, checks, status: checks.every((c) => c.ok) ? "verified" : "failed" };
+        // The verdict shows once its last check has played (the step says how many there are).
+        const last = typeof meta.of === "number" && checks.length >= meta.of;
+        next = { ...job, checks, status: !checks.every((c) => c.ok) ? "failed" : last ? "verified" : job.status };
         break;
       }
       case "status":
-        next = { ...job, status: "failed", reason: text };
+        next = meta.verified === true ? { ...job, status: "verified" } : { ...job, status: "failed", reason: text };
         break;
       case "pay":
         next = {
@@ -445,8 +451,8 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
         next = { ...job, status: "delivered", image: str(meta.image_path) };
         break;
     }
-    const rest = jobs.filter((j) => j.id !== id);
-    s.market = { jobs: at >= 0 ? jobs.map((j) => (j.id === id ? next : j)) : [...rest, next].slice(-MAX_JOBS) };
+    // The job an event moved is the one on screen (two jobs in flight never animate on each other).
+    s.market = { jobs: [...jobs.filter((j) => j.id !== id), next].slice(-MAX_JOBS) };
     return s;
   }
 

@@ -255,7 +255,7 @@ export function empty(a: Artifact | null): boolean {
 const MARKET_EVENTS: ReadonlySet<string> = new Set(["job.posted", "job.claimed", "job.submitted", "job.verified", "job.failed", "payment.sent", "job.delivered"]);
 const JOB_ID = /^[A-Za-z0-9_-]{1,40}$/;
 const tokenAmount = (v: unknown): string | null =>
-  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v.toFixed(2) : typeof v === "string" && /^\d{1,9}(\.\d{1,18})?$/.test(v) ? Number(v).toFixed(2) : null;
+  typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 1e9 ? v.toFixed(2) : typeof v === "string" && /^\d{1,9}(\.\d{1,18})?$/.test(v) ? Number(v).toFixed(2) : null;
 
 function applyMarket(st: Studio, ev: UTaxEvent, ctx: StudioCtx, key: string): Studio {
   const p: P = isObj(ev.payload) ? ev.payload : {};
@@ -302,13 +302,13 @@ function applyMarket(st: Studio, ev: UTaxEvent, ctx: StudioCtx, key: string): St
       const short = /^0x[0-9a-fA-F]{8,}$/.test(tx) ? `${tx.slice(0, 6)}…${tx.slice(-4)}` : "";
       const link = str(p, "explorer_url");
       const url = !ledger && /^https:\/\/[^\s]+$/.test(link) ? link : undefined;
-      if (ev.status !== "ok") add(`Payment didn't go through · ${amount} ${token}`, false);
+      if (ev.status !== "ok") add(`Payment not confirmed · ${amount} ${token}`, false);
       else add(`Paid ${art.contractor || "the contractor"} ${amount} ${token}${ledger ? " (ledger token)" : short ? ` · ${short}` : ""}`, true, url);
       break;
     }
     case "job.delivered": {
       const path = str(p, "image_url");
-      const image = /^\/assets\/[A-Za-z0-9_.-]{1,80}$/.test(path) ? (ctx.asset?.(path) ?? null) : null;
+      const image = /^\/assets\/[A-Za-z0-9_.-]{1,80}$/.test(path) && !path.includes("..") ? (ctx.asset?.(path) ?? null) : null;
       art = { ...art, image, state: "done" };
       add("Delivered: Marketing can post it", true);
       break;
@@ -381,7 +381,7 @@ export function applyStudio(st0: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio 
     if (kind === "tool_done") return put(st, seat, { act: { ts: ev.ts, kind: "thinking", tool: null }, art: empty(desk.art) ? null : desk.art });
     if (kind === "idle") {
       // A composer that never got anything closes; a finished artifact (or documents still building) stays.
-      return put(st, seat, { act: null, art: empty(desk.art) || (desk.art?.state === "drafting" && desk.art.kind !== "docs") ? null : desk.art });
+      return put(st, seat, { act: null, art: empty(desk.art) || (desk.art?.state === "drafting" && desk.art.kind !== "docs" && desk.art.kind !== "job") ? null : desk.art });
     }
     return st;
   }

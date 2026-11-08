@@ -98,8 +98,8 @@ const int = (v: unknown, fallback = 0) => (typeof v === "number" && Number.isSaf
 
 /** A testnet-token total from /api/state (number or decimal string); anything else is left out. */
 function tokenField(k: "contractor_paid_usd" | "agent_sales_usd", v: unknown): Partial<Record<typeof k, string>> {
-  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return { [k]: String(v) };
-  if (typeof v === "string" && /^\d+(\.\d+)?$/.test(v)) return { [k]: v };
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 1e12) return { [k]: String(v) };
+  if (typeof v === "string" && /^\d{1,12}(\.\d{1,18})?$/.test(v)) return { [k]: v };
   return {};
 }
 

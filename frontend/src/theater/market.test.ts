@@ -88,12 +88,16 @@ describe("D38 market on the theater", () => {
       ev(1, "job.bribed", { job_id: "job_1" }),
       ev(2, "job.posted", { job_id: "job 1; drop", template: "share_card", price_usd: "0.50", headline: "x" }, { actor: "mkt" }),
       ev(3, "job.posted", { job_id: "job_2", template: "share_card", price_usd: "-1", headline: "x" }, { actor: "mkt" }),
-      ev(4, "payment.sent", { job_id: "job_2", contractor: "P", amount_usd: "0.50", token: "pathUSD", tx_hash: TX, explorer_url: "javascript:alert(1)" }, { provider: "tempo" }),
-      ev(5, "job.delivered", { job_id: "job_2", image_url: "https://evil.example/x.png" }),
+      ev(31, "job.posted", { job_id: "job_3", template: "share_card", price_usd: 0.5, headline: "ok" }, { actor: "mkt" }),
+      ev(32, "payment.sent", { job_id: "job_3", contractor: "P", amount_usd: "0.50", token: "pathUSD", tx_hash: TX, explorer_url: "javascript:alert(1)" }, { provider: "tempo" }),
+      ev(33, "job.delivered", { job_id: "job_3", image_url: "https://evil.example/x.png" }),
+      ev(34, "job.claimed", { job_id: "job_2", contractor: "Ghost" }), // a job never posted: no blank card
     ];
     const script = buildScript(events, log);
     expect(skipped).toEqual(["job.bribed:unknown_type", "job.posted:bad_payload", "job.posted:bad_payload"]);
-    const job = applySteps(emptyScreen(), script.steps).market.jobs[0];
+    const shown = applySteps(emptyScreen(), script.steps).market.jobs;
+    expect(shown.map((j) => j.id)).toEqual(["job_3"]); // the never-posted job_2 drew nothing
+    const job = shown[0];
     expect(job.pay?.url).toBeNull(); // a non-https explorer link is dropped (the tx still shows)
     expect(job.image).toBeUndefined(); // only the gateway's own /assets/ path renders
   });
@@ -106,7 +110,7 @@ describe("D38 market on the theater", () => {
     expect(railFromEvents(happy().slice(0, 4)).money.contractor_paid_usd).toBeUndefined(); // market off: no row
     expect(numbersFromState({ money: { spent_usd: "1.2" }, contractor_paid_usd: "1.5", agent_sales_usd: 0.5 })?.money).toMatchObject({ contractor_paid_usd: "1.5", agent_sales_usd: "0.5" });
     expect(numbersFromState({ money: {} })?.money.contractor_paid_usd).toBeUndefined();
-    expect(screenOf(events).rail.log.at(-1)?.text).toBe("An agent bought a franchise-tax check · 0.50 pathUSD");
+    expect(screenOf(events).rail.log.at(-1)?.text).toBe("An agent bought a franchise-tax check · 0.50 pathUSD (testnet)");
   });
 
   it("the contractor's approval belongs to Marketing", () => {
