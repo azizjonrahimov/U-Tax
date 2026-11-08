@@ -104,8 +104,10 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
             from app.naive_waker import NaiveWaker
 
             _show_utax_logs()
+            from app.naive.backoff import SHARED
+
             waker = NaiveWaker(gw.settings.naive_api_key, gw.settings.naive_api_base,
-                               trigger_of=gw.wake_trigger)
+                               trigger_of=gw.wake_trigger, backoff=SHARED)  # task 35
             unwake = gw.on_wake(waker)
             log.info("WAKE: the Naïve Chief of Staff receives the gateway's wakes")
         state["waker"] = waker
@@ -130,7 +132,10 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
             from app.naive import NaiveClient
             from app.naive_confirm import NaiveConfirmer
 
-            confirmer = NaiveClient(gw.settings.naive_api_key, gw.settings.naive_api_base)
+            from app.naive.backoff import SHARED
+
+            confirmer = NaiveClient(gw.settings.naive_api_key, gw.settings.naive_api_base,
+                                    backoff=SHARED)  # task 35: one gate with the waker
             confirmer_task = asyncio.create_task(NaiveConfirmer(gw, confirmer).run())
         try:
             yield

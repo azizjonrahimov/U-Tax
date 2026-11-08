@@ -197,6 +197,7 @@ class NaiveClient:
         max_retry_wait: float = 60.0,
         transport: httpx.AsyncBaseTransport | None = None,
         sleep: Sleep = asyncio.sleep,
+        backoff: Any = None,
     ) -> None:
         key = api_key if api_key is not None else os.environ.get("NAIVE_API_KEY", "")
         if not key:
@@ -208,6 +209,9 @@ class NaiveClient:
         self.max_retries = max_retries
         self.max_retry_wait = max_retry_wait
         self._sleep = sleep
+        # task 35: a shared NaiveBackoff (app.naive.backoff). With one, a 429/503 stops every
+        # Naïve call of the gateway (no retry here) and a call during it never leaves
+        self.backoff = backoff
         self._http = httpx.AsyncClient(
             base_url=self.base_url,
             headers={
@@ -251,9 +255,20 @@ class NaiveClient:
         query = _compact(params or {})
         attempt = 0
         while True:
+            if self.backoff is not None and self.backoff.blocked():
+                wait = self.backoff.remaining()
+                raise NaiveError(429, "backoff", f"Naïve calls are paused for {wait:.0f} s",
+                                 retry_after=wait)
             response = await self._http.request(
                 method, path, params=query, json=json_body, headers=headers
             )
+            if self.backoff is not None:
+                if response.status_code in (429, 503):
+                    self.backoff.trip(response.status_code, _parse_retry_after(
+                        response.headers.get("Retry-After")))
+                    return self._handle(response)  # raises: no retry into a busy service
+                if response.is_success:
+                    self.backoff.ok()
             if response.status_code == 429 and attempt < self.max_retries:
                 wait = _parse_retry_after(response.headers.get("Retry-After"))
                 # UNVERIFIED: the docs promise Retry-After on every 429; fall back to backoff.

@@ -38,13 +38,18 @@ ONCE_PREFIXES = ("New case ", "FAST PATH ", "New applicant ")
 
 
 class WakeFailed(RuntimeError):
-    pass
+    def __init__(self, message: str, *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        # task 35: set when the shared Naïve backoff holds it: the gateway retries the wake
+        # once that clears (no escalating attempts, no stack trace)
+        self.retry_after = retry_after
 
 
 class NaiveWaker:
     def __init__(self, api_key: str, api_base: str = "https://api.vetta.sh", *,
                  transport: httpx.BaseTransport | None = None, timeout: float = 8.0,
-                 clock=time.monotonic, trigger_of=None) -> None:
+                 clock=time.monotonic, trigger_of=None, backoff=None) -> None:
+        self.backoff = backoff  # task 35: the gateway's shared NaiveBackoff
         # 22b: message -> the id of the event that triggered it (Gateway.wake_trigger)
         self._trigger_of = trigger_of
         # short: wakes run on request threads and at boot; a hung Naive must not hold them
@@ -74,6 +79,7 @@ class NaiveWaker:
         for _ in range(20):
             response = self._http.get("/agents", params={"limit": 100,
                                                          **({"after": after} if after else {})})
+            self._saw(response)
             if not response.is_success:
                 raise WakeFailed(f"agent lookup answered {response.status_code}")
             body: dict[str, Any] = response.json()
@@ -97,8 +103,25 @@ class NaiveWaker:
             self.agent_id = agent_id
         return agent_id
 
+    def _saw(self, response: httpx.Response) -> None:
+        """Task 35: a 429/503 trips the shared backoff; a success clears its level."""
+        if self.backoff is None:
+            return
+        if response.status_code in (429, 503):
+            from app.naive.client import _parse_retry_after
+
+            wait = self.backoff.trip(response.status_code,
+                                     _parse_retry_after(response.headers.get("Retry-After")))
+            raise WakeFailed(f"Naïve answered {response.status_code}; retry in {wait:.0f} s",
+                             retry_after=wait)
+        if response.is_success:
+            self.backoff.ok()
+
     def __call__(self, message: str) -> None:
         """Deliver one wake, or raise (the gateway retries with backoff)."""
+        if self.backoff is not None and self.backoff.blocked():
+            wait = self.backoff.remaining()
+            raise WakeFailed(f"Naïve calls are paused; retry in {wait:.0f} s", retry_after=wait)
         if self._clock() < self._down_until:
             raise WakeFailed("Naïve was down a moment ago; retried with backoff")
         try:
@@ -130,6 +153,7 @@ class NaiveWaker:
         except httpx.HTTPError as exc:
             self._down_until = self._clock() + DOWN_SECONDS
             raise WakeFailed(f"Naïve unreachable: {exc}") from exc
+        self._saw(response)  # a 429/503 raises here, with the backoff's wait
         if response.status_code == 404:  # the agent was re-created: look it up again
             with self._lock:
                 self.agent_id = None
