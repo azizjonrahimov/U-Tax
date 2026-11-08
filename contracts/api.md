@@ -1,4 +1,4 @@
-# API contract (v1.15): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.16): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -302,6 +302,16 @@ For Replay mode and catch-up. Ordered by `id`.
 - `POST /api/ceo/undo` `{undo_id}` (admin or session).
 - Events `ceo.said` `{conversation_id, text_len}` (the text is private) and `ceo.replied`
   `{conversation_id, actions}`.
+
+## 5a-quater. Session transport (v1.16, backend 36/39 + frontend D32)
+
+- The CEO session is accepted ONLY as `Authorization: Bearer <session>`, never in a URL. `/api/state` and
+  `/api/events` with `?token=<session>` answer 401; `?token=<THEATER_TOKEN>` stays for the public theater.
+- `POST /api/stream-ticket` (Bearer admin or session) → `{ticket, expires_at}`: HMAC-signed, 60 s, single use,
+  valid only as `GET /api/events/stream?ticket=<t>&after_id=<n>`. A used, expired or forged ticket answers 401.
+  On a stream error the console closes it, takes a fresh ticket and reopens after the last id seen.
+- A ticket is never a bearer, and a session is never a ticket. `/api/brief/audio` and `/api/docs/*` are
+  fetched with Bearer and played or saved as blobs.
 
 ## 5b. CEO voice console (v1.8, design D28)
 
@@ -707,6 +717,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.16 (2026-11-08, backend 36/39 + frontend D32/D33): session transport (Bearer only, stream tickets); the product shell routes.
 
 - v1.15.1 (2026-11-07, backend 38b): hr_record stage outreach_declined; event hr.outreach_declined.
 

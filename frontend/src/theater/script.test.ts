@@ -662,3 +662,19 @@ describe("parseJsonl", () => {
     expect(bad.map((b) => b.line)).toEqual([2, 3, 4]);
   });
 });
+
+describe("v1.12 tool.called on the projector", () => {
+  it("costs the projector no time: every step it makes holds 0 ms and moves no cursor", async () => {
+    const { stepHoldMs, movesCursor } = await import("./timing");
+    const { steps } = buildScript([ev(1, "tool.called", { tool: "send_email", status: "done" }, { actor: "intake" })], quiet);
+    const mine = steps.filter((x) => x.eventId === 1);
+    expect(mine.length).toBeGreaterThan(0);
+    for (const x of mine) {
+      expect(stepHoldMs(x)).toBe(0);
+      expect(movesCursor(x)).toBe(false);
+    }
+    // Other status steps keep their hold.
+    const other = buildScript([ev(2, "case.status", { from: "NEW", to: "INTAKE" }, { case_id: "c1" })], quiet).steps.find((x) => x.action === "status");
+    if (other) expect(stepHoldMs(other)).toBeGreaterThan(0);
+  });
+});

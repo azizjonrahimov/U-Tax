@@ -176,6 +176,38 @@ If either page can't hear you at all: check Chrome's site permission (the lock i
   - The real gateway (backend task 23 is merged) was not run with these pages; the payloads were checked against `perform.py`.
   - The no-orders layout position after the four-row grid change was not measured in a browser.
 
+## The product shell, sign-in and the voice loop (D32, D33, contract v1.12 to v1.13.1, tasks 36/39)
+
+- **Routes.** `/` is now the landing page (free checkup). `/signup` is client sign-up. `/login` is the CEO sign-in. `/office` is the firm: the Overview (the theater) plus one live workspace per department, with auto-follow. `/ceo` is the console.
+- **Sign-in.** Email and password go to `/api/auth/login`, which returns a 12 h session kept in this tab only. No screen asks for the admin token any more; a leftover one is wiped.
+  - The session goes as a Bearer header everywhere, and is never in a URL.
+  - The `/office` stream opens with a fresh single-use ticket each time.
+  - A refused session signs the tab out.
+  - Sign out is in the `/office` sidebar and the `/ceo` header.
+- **Voice loop (merged f3ce11e).**
+  - One utterance is one order: browser re-deliveries, restarts and the console's own echo are dropped.
+  - One reply is said once. Readbacks always play in full.
+  - "Stop everything", fillers allowed, takes the STOP path. A stop command closes the open card.
+- **Auto-follow** leaves the Overview only for a live agent step: never the history replayed on open, and never in `?source=` replays.
+- **Decisions taken with the recommended option** (the owner: "use the recommended options for all"):
+  - D32 + login ship together, with the criticals and highs fixed and the rest listed as known.
+  - All the review's regression tests were written.
+  - The gate edit is kept as justified: the 401 wording test changed with its sentence.
+  - The stream uses the contract's ticket flow (task 36/39), not a fetch-based Bearer stream.
+- **Known, not fixed yet** (next READY with D34 and the panel):
+  - The landing page polls every 15 s.
+  - Sign-up error wording and maxLength.
+  - The mock logs sign-up details.
+  - Design polish: `.how .after .note` margin, `.follow` hover, visited color, `.shot` max-height, selection and caret.
+  - Seat colors are defined 4 times; there are two STATUS_WORD maps.
+  - Theater re-renders inside the office.
+  - Two SSE streams per tab, and the lookback is diluted by `tool.called`.
+  - Auto-follow uses the browser clock (±15 s).
+  - The flag hides only mail fields; the masked client name stays in earlier non-mail steps.
+- **Backend items raised:**
+  - The login limiter can be used to lock out the CEO's sign-in: the per-key limit is IP plus email, and the global cap is 200.
+  - The logout denylist is in memory only.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.

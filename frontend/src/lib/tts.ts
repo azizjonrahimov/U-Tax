@@ -79,7 +79,7 @@ export interface SpeakerOptions {
   purpose: TtsPurpose;
   /** The gateway's base URL (…/api). */
   api: string;
-  /** The admin token (purpose "ceo"); never in a URL. */
+  /** The CEO session (purpose "ceo"); never in a URL. */
   token?: () => string | null;
   /** Something started or stopped playing (the page mutes its listening meanwhile). */
   onAudio?: (on: boolean) => void;

@@ -1,10 +1,11 @@
 "use client";
 
-// The CEO console (/ceo, contract §5 and §8). The CEO signs in with the admin token (typed
-// here, kept only in this tab, sent only as a Bearer header), hears and reads the login brief,
+// The CEO console (/ceo, contract §5 and §8). The CEO signs in on /login with email and password
+// (D33: a session kept only in this tab, sent only as a Bearer header), hears and reads the brief,
 // and makes the calls only a human makes: approvals, standing orders, hiring, blocked cases.
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
 import { briefAudioUrl, fetchAllEvents, type Endpoints } from "@/theater/live";
@@ -29,7 +30,6 @@ import {
   readableSummary,
   readLastSeen,
   STAGE_LABEL,
-  TOKEN_KEY,
   UNBLOCK,
   type ActionType,
   type Approval,
@@ -38,6 +38,7 @@ import {
   type LogView,
 } from "@/ceo/ceo";
 import { announceAgentAudio, CeoVoice } from "./CeoVoice";
+import { logout, useSessionToken, writeSession } from "@/ceo/session";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
 
@@ -47,33 +48,6 @@ const NO_QUERY_TOKEN: Endpoints = { base: API_URL, token: "" };
 const POLL_MS = 4000;
 /** Data older than this is marked stale in the header. */
 const STALE_MS = 15000;
-
-// ------------------------------------------------------------------ the token, per tab
-
-const tokenListeners = new Set<() => void>();
-let memoryToken: string | null = null;
-const readToken = () => {
-  try {
-    return sessionStorage.getItem(TOKEN_KEY);
-  } catch {
-    return memoryToken; // storage off: the token lives until the page closes
-  }
-};
-function writeToken(t: string | null) {
-  memoryToken = t;
-  try {
-    if (t) sessionStorage.setItem(TOKEN_KEY, t);
-    else sessionStorage.removeItem(TOKEN_KEY);
-  } catch {
-    /* memoryToken holds it */
-  }
-  tokenListeners.forEach((l) => l());
-}
-const subscribeToken = (l: () => void) => {
-  tokenListeners.add(l);
-  return () => tokenListeners.delete(l);
-};
-const noToken = () => null;
 
 const hasSpeech = () => typeof window !== "undefined" && "speechSynthesis" in window;
 /** The brief, read by the browser. Voice mode counts it as agent audio (and mutes its mic) while it plays. */
@@ -134,10 +108,9 @@ interface Confirm {
 }
 
 export function Ceo() {
-  const token = useSyncExternalStore(subscribeToken, readToken, noToken);
-  const [draftToken, setDraftToken] = useState("");
+  const token = useSessionToken();
+  /** Why the console signed out (a 401: the session expired or was revoked), shown on the sign-in link. */
   const [signInError, setSignInError] = useState<string | null>(null);
-  const [signingIn, setSigningIn] = useState(false);
   const [brief, setBrief] = useState<Brief | null>(null);
   const [view, setView] = useState<Console | null>(null);
   const [log, setLog] = useState<LogView>(emptyLog);
@@ -186,7 +159,8 @@ export function Ceo() {
     (why: string | null) => {
       session.current += 1;
       stopAudio();
-      writeToken(null);
+      if (why === null) void logout(); // the CEO's own Sign out revokes the session
+      else writeSession(null); // a 401: it is already dead at the gateway
       briefRef.current = null;
       logRef.current = emptyLog();
       setBrief(null);
@@ -209,7 +183,7 @@ export function Ceo() {
     [stopAudio],
   );
 
-  /** A 401 means the token is wrong or rotated: back to sign-in. Anything else shows in the banner. */
+  /** A 401 means the session expired or was revoked: back to sign-in. Anything else shows in the banner. */
   const fail = useCallback(
     (e: unknown) => {
       if (e instanceof ApiError && e.status === 401) return signOut(errorOf(e));
@@ -362,28 +336,6 @@ export function Ceo() {
     if (highlight) document.getElementById(`row-${highlight}`)?.scrollIntoView({ block: "center" });
   }, [highlight]);
 
-  const signIn = async () => {
-    const t = draftToken.trim();
-    if (!t || signingIn) return;
-    setSigningIn(true);
-    setSignInError(null);
-    try {
-      // The brief needs the admin token, so it is the check: a wrong token never lands in storage.
-      const st = consoleFromState(await authJson<unknown>(t, `${API}/state`));
-      const b = await loadBrief(t, st?.lastEventId ?? null);
-      setDraftToken("");
-      briefRef.current = b;
-      setBrief(b);
-      rememberSeen(b);
-      writeToken(t);
-      void playBrief(b, t); // inside the click, so the browser lets it play
-    } catch (e) {
-      setSignInError(e instanceof ApiError && e.status === 401 ? "That token isn't the admin token." : errorOf(e));
-    } finally {
-      setSigningIn(false);
-    }
-  };
-
   /** One action at a time; the lists refresh right after, in order. */
   const act = async (key: string, path: string, body: unknown, done: string) => {
     if (busy || !token) return;
@@ -444,38 +396,19 @@ export function Ceo() {
           <span className="title">U-Tax · CEO console</span>
         </header>
         <main className="signin">
-          <h1>Sign in</h1>
-          <p className="dim">Paste the admin token. It stays in this browser tab only.</p>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void signIn();
-            }}
-          >
-            <label htmlFor="token">Admin token</label>
-            <div className="row">
-              {/* Not a password: no autofill or save prompt (the token must not be synced to a password manager). */}
-              <input
-                id="token"
-                type="password"
-                autoComplete="off"
-                data-1p-ignore
-                data-lpignore="true"
-                spellCheck={false}
-                value={draftToken}
-                onChange={(e) => setDraftToken(e.target.value)}
-              />
-              <button className="primary" type="submit" disabled={!draftToken.trim() || signingIn || !HAS_GATEWAY}>
-                {signingIn ? "Checking…" : "Sign in"}
-              </button>
-            </div>
-            {signInError && (
-              <p className="error" role="alert">
-                {signInError}
-              </p>
-            )}
-            {!HAS_GATEWAY && <p className="dim">No gateway is configured in this build.</p>}
-          </form>
+          <h1>Signed out</h1>
+          {signInError && (
+            <p className="error" role="alert">
+              {signInError}
+            </p>
+          )}
+          <p className="dim">Sign in with your email and password to run the firm from here.</p>
+          <p>
+            <Link className="primary signin-link" href="/login?next=/ceo">
+              Sign in
+            </Link>
+          </p>
+          {!HAS_GATEWAY && <p className="dim">No gateway is configured in this build.</p>}
         </main>
       </div>
     );

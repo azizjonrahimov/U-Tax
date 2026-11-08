@@ -1,5 +1,5 @@
 // The CEO console (/ceo, contract §5 and §8): pure logic, tested without a browser or a
-// gateway. The admin token lives only in this tab and travels only as a Bearer header.
+// gateway. The CEO session (D33, src/ceo/session.ts) lives only in this tab and travels as a Bearer header.
 
 import type { UTaxEvent } from "@/theater/events";
 
@@ -47,7 +47,6 @@ export function parseBrief(raw: unknown): Brief | null {
 
 /** Where the last login brief left off, kept on this device so the next brief covers only what's new. */
 export const LAST_SEEN_KEY = "utax.ceo.lastSeen";
-export const TOKEN_KEY = "utax.ceo.token";
 
 export function readLastSeen(raw: string | null): number {
   const n = raw !== null && /^\d{1,15}$/.test(raw) ? Number(raw) : 0;
@@ -242,7 +241,7 @@ export const orderBody = (text: string) => ({ text: text.trim().slice(0, MAX_ORD
 
 /** Gateway error → a sentence for the CEO. */
 export function ceoError(status: number, code: string, message: string): string {
-  if (status === 401 || code === "unauthorized") return "The admin token was rejected. Sign in again.";
+  if (status === 401 || code === "unauthorized") return "Your sign-in expired or was ended. Sign in again.";
   if (code === "timeout") return "The gateway is taking too long. Check the list before trying again.";
   if (status === 0 || code === "network_error") return "Can't reach the gateway. Check it's running and try again.";
   if (code === "superseded") return "That approval is outdated: a newer version replaced it. The list is refreshing.";

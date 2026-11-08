@@ -3,6 +3,8 @@
 // can prove what the console sent (e.g. that no /api/ceo/confirm followed a model "confirmed").
 //
 //   PORT=8020 ADMIN_TOKEN=admin-test MOCK_VOICE=0 node scripts/mock-ceo-gateway.mjs
+// Task 36/39: POST /api/stream-ticket (Bearer) → {ticket, expires_at}, 60 s single use, for
+// GET /api/events/stream?ticket=; a session is never accepted from a URL.
 //
 // MOCK_VOICE=1 mints a fake Realtime session (the browser's WebRTC must be stubbed by the test);
 // otherwise /api/voice/session answers 503 voice_unavailable and the console falls back.
@@ -12,12 +14,40 @@
 // D31 (v1.11.1): a confirmed CEO order (or POST /api/dev/order {text}) emits the CEO's voice.command, then
 // plays each named department's steps with order_id ("advertise" → Marketing, "hire" → HR, "follow up" →
 // Intake), MOCK_PACE ms apart (default 1600). The ad image is served at GET /assets/ad_<n>.svg.
+// D32 (v1.12): every department action is preceded by tool.called {tool, status}; POST /api/signup
+// {name, company, email, request_id?} (public) opens a case like an inbound email and plays the case
+// flow (Intake, Tax, QA, Accounting) with tool calls.
+// D33 (v1.13 §5a-bis): POST /api/auth/login {email, password} (CEO_EMAIL default ceo@u-tax.test,
+// CEO_PASSWORD default utax-demo) answers {session, expires_at}; the session works like the admin
+// token, as a Bearer only. POST /api/auth/logout revokes it (always 200).
 
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.PORT || 8020);
 const ADMIN = process.env.ADMIN_TOKEN || "admin-test";
 const THEATER = process.env.THEATER_TOKEN || "theater-test";
+const CEO_EMAIL = (process.env.CEO_EMAIL || "ceo@u-tax.test").toLowerCase();
+const CEO_PASSWORD = process.env.CEO_PASSWORD || "utax-demo";
+const SESSION_MS = 12 * 3600 * 1000;
+/** session -> expiry (ms) */
+const sessions = new Map();
+const loginTries = [];
+/** Task 36: stream ticket -> expiry (ms); single use. */
+const tickets = new Map();
+const redeemTicket = (t) => {
+  const ok = typeof t === "string" && (tickets.get(t) ?? 0) > Date.now();
+  tickets.delete(t);
+  return ok;
+};
+const validSession = (t) => typeof t === "string" && (sessions.get(t) ?? 0) > Date.now();
+const bearerOf = (req) => /^Bearer (.+)$/.exec(req.headers.authorization || "")?.[1] ?? null;
+/** The CEO: the admin token or a live session as a Bearer, or a live session as ?token= on a read. */
+const isAdmin = (req) => {
+  const b = bearerOf(req);
+  // As the gateway (task 39): the Authorization bearer only, never a session in a URL.
+  return b === ADMIN || validSession(b);
+};
 const VOICE = process.env.MOCK_VOICE === "1";
 const TTL_MS = Number(process.env.PROPOSAL_TTL_MS || 60_000);
 const TYPES = ["email", "social_post", "calendar_invite", "voice_screen"];
@@ -136,7 +166,7 @@ function command(text) {
   if (has(text, "everything") && (has(text, "stop") || has(text, "pause"))) return tool("pause", { action_type: "everything" }, "command");
   if (has(text, "stop posting")) return tool("pause", { action_type: "social_post" }, "command");
   if (open) return [200, { kind: "say", say: "Say confirm or cancel." }];
-  if (/^(?:(?:hey|hi|hello|test|testing)\s*)+$/.test(w) || /can you hear me|are you there|is this working/.test(w)) return [200, { kind: "say", say: "I'm listening. Tell me an order." }];
+  if (/^(?:(?:hey|hi|hello|test|testing|okay)\s*)+$/.test(w) || /can you hear me|are you there|is this working/.test(w)) return [200, { kind: "say", say: "I'm listening. Tell me an order." }];
   if (has(text, "approve")) return tool("approve", { approval: "latest" }, "command");
   if (has(text, "deny")) return tool("deny", { approval: "latest" }, "command");
   if (has(text, "money")) return tool("get_money", {}, "command");
@@ -195,8 +225,11 @@ function order(text, via) {
   const at = (fn) => steps.push(fn);
   const handoff = (seat, tool) => {
     at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: "cos", tool: "send_to_agent", decision: "allow", read_people: false }));
+    at(() => emit("tool.called", { tool: "send_to_agent", status: "done", order_id: ref }, { actor: "cos" }));
     at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: seat, tool, decision: "allow", read_people: false }));
+    at(() => emit("tool.called", { tool, status: "done", order_id: ref }, { actor: seat }));
   };
+  const call = (seat, tool, status = "done") => at(() => emit("tool.called", { tool, status, order_id: ref }, { actor: seat }));
   const w = words(text);
   if (/advertis|\bads?\b|post|linkedin|market/.test(w)) {
     handoff("mkt", "make_ad");
@@ -205,6 +238,7 @@ function order(text, via) {
       emit("ad.created", { kind: "client", headline: "Your Delaware franchise tax, done right", image_url: `http://127.0.0.1:${PORT}/assets/ad_${n}.svg`, order_id: ref }, { actor: "mkt" });
     });
     for (const channel of ["x", "linkedin"]) {
+      call("mkt", "post_social");
       at(() =>
         emit("post.published", { channel, text: "Delaware sent you an $85,165 franchise tax bill? Most startups owe $450. U-Tax checks yours free.", url: `https://${channel}.com/utax/status/${events.length}`, image_url: `http://127.0.0.1:${PORT}/assets/ad_${ads}.svg`, order_id: ref }, { actor: "mkt" }),
       );
@@ -215,10 +249,12 @@ function order(text, via) {
     handoff("hr", "source_candidates");
     at(() => emit("tool.bought", { tool: "monid.search", provider: "monid", order_id: ref }, { actor: "hr", cost_usd: "0.05" }));
     at(() => emit("hr.sourced", { count: 3, source: "monid", order_id: ref }, { actor: "hr" }));
+    call("hr", "list_candidates");
     for (let i = 0; i < want; i++) {
       const label = `Candidate ${String.fromCharCode(65 + (candidates++ % 26))}`;
       const id = `cand_${candidates}`;
       const start = new Date(Date.now() + 86400000 + i * 3600000).toISOString();
+      call("hr", "hr_outreach");
       at(() => emit("hr.outreach", { candidate_id: id, label, slot: start, order_id: ref }, { actor: "hr" }));
       at(() => emit("call.booked", { start, minutes: 20, invitee_masked: label, kind: "candidate", order_id: ref }, { actor: "hr" }));
     }
@@ -229,6 +265,37 @@ function order(text, via) {
   }
   steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
   return o.id;
+}
+
+let signups = 0;
+/** §5a POST /api/signup: a case opened like an inbound email, then the crew works it, step by step. */
+function signup(name, company, email) {
+  const n = 40 + ++signups;
+  const caseId = `case_${n}`;
+  const masked = `Team #${n}`;
+  const [user, host] = email.split("@");
+  const from = `${user.slice(0, 1)}***@${host}`;
+  cases.push({ case_id: caseId, masked_name: masked, status: "INTAKE_PENDING", flagged: false });
+  emit("email.received", { masked_name: masked, from_masked: from, subject: "Free checkup sign-up", body: "(sign-up form: the welcome email asks for the numbers)", source: "signup" }, { actor: "intake", case_id: caseId });
+  const steps = [];
+  const at = (fn) => steps.push(fn);
+  const call = (seat, tool, status = "done") => at(() => emit("tool.called", { tool, status }, { actor: seat, case_id: caseId }));
+  call("cos", "list_open_cases");
+  at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: "cos", tool: "send_to_agent", decision: "allow", read_people: false }));
+  call("cos", "send_to_agent");
+  call("intake", "get_case");
+  call("intake", "extract_facts");
+  at(() => emit("facts.extracted", { facts: { incorporated_delaware: true, authorized_shares: 10000000, issued_shares: 8000000, stated_par: "0.00001", gross_assets_cents: 50000000, foreign_owner_25: false }, quotes: {}, assumed: [] }, { actor: "intake", case_id: caseId }));
+  call("tax", "law_search");
+  at(() => emit("law.searched", { query: "Delaware franchise tax assumed par value capital method", results: [{ cite: "8 Del. C. § 503", snippet: "assumed par value capital method" }] }, { actor: "tax", case_id: caseId }));
+  call("tax", "compute_tax");
+  at(() => emit("tax.computed", { authorized_method_cents: 8516500, assumed_par_method_cents: 40000, chosen: "assumed_par", annual_report_fee_cents: 5000, fee_source: "snapshot", total_cents: 45000, due_date: "2027-03-01", form5472_flag: false, rnd_flag: false, engine_version: "mock" }, { actor: "tax", case_id: caseId }));
+  call("qa", "qa_check");
+  at(() => emit("qa.passed", { checks: [{ field: "total", ok: true, note: "engine re-run matches" }, { field: "assumed_par_method", ok: true, note: "matches" }] }, { actor: "qa", case_id: caseId }));
+  call("acct", "send_memo", "needs_approval");
+  at(() => requestApproval(`memo for ${masked}`, caseId));
+  steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
+  return { case_id: caseId, masked_name: masked };
 }
 
 /** The ad as the gateway would render it (an SVG stand-in for its PNG): firm name, headline, the real example. */
@@ -290,12 +357,53 @@ const server = createServer(async (req, res) => {
     body = null;
   }
   const out = (status, json) => {
-    console.log(JSON.stringify({ t: Date.now(), method: req.method, path: url.pathname, body, status }));
+    // A password never reaches the log, whatever the path.
+    const logged = body && typeof body === "object" && "password" in body ? { ...body, password: "[redacted]" } : body;
+    console.log(JSON.stringify({ t: Date.now(), method: req.method, path: url.pathname, body: logged, status }));
     res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
   };
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
+  // D33: the CEO sign-in. Never logs the password (the line says only whether each field matched).
+  if (req.method === "POST" && url.pathname === "/api/auth/login") {
+    const now = Date.now();
+    while (loginTries.length && now - loginTries[0] > 15 * 60_000) loginTries.shift();
+    const email = body && typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const ok = email === CEO_EMAIL && body && body.password === CEO_PASSWORD;
+    const reply = (status, json) => {
+      console.log(JSON.stringify({ t: now, method: "POST", path: url.pathname, body: { email_ok: email === CEO_EMAIL, ok }, status }));
+      res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
+    };
+    if (loginTries.length >= 10) return reply(429, { error: { code: "rate_limited", message: "too many sign-in attempts" } });
+    if (!ok) {
+      loginTries.push(now);
+      return reply(401, { error: { code: "bad_login", message: "wrong email or password" } });
+    }
+    const session = `sess.${randomUUID()}`;
+    sessions.set(session, now + SESSION_MS);
+    return reply(200, { session, expires_at: new Date(now + SESSION_MS).toISOString() });
+  }
+  if (req.method === "POST" && url.pathname === "/api/stream-ticket") {
+    if (!isAdmin(req)) return out(401, { error: { code: "unauthorized", message: "admin token or a CEO session required" } });
+    const ticket = `tk.${randomUUID()}`;
+    tickets.set(ticket, Date.now() + 60_000);
+    return out(200, { ticket, expires_at: new Date(Date.now() + 60_000).toISOString() });
+  }
+  if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+    const b = bearerOf(req);
+    sessions.delete(b); // as the gateway: always 200, known session or not
+    return out(200, { ok: true });
+  }
   const ad = req.method === "GET" && /^\/assets\/ad_([0-9]{1,6})\.svg$/.exec(url.pathname);
   if (ad) return res.writeHead(200, { ...cors, "Content-Type": "image/svg+xml", "Cache-Control": "no-store" }).end(adSvg(ad[1]));
+  // §5a: the client sign-up is public (the /talk per-IP limits apply on the real gateway).
+  if (req.method === "POST" && url.pathname === "/api/signup") {
+    const f = (k) => (body && typeof body[k] === "string" ? body[k].trim().slice(0, 200) : "");
+    const name = f("name"), company = f("company"), email = f("email");
+    if (!name || !company || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return out(400, { error: { code: "bad_input", message: "name, company and a valid email are required" } });
+    if (process.env.MOCK_SIGNUP === "429") return out(429, { error: { code: "at_capacity", message: "U-Tax is at capacity today. Email checkup@u-tax.app and we'll get to you tomorrow." } });
+    signup(name, company, email);
+    return out(200, { ok: true }); // v1.12.2: never says who is already a client
+  }
   // The customer mint (/talk) is public, like the gateway's; with no voice provider it is 503 (D30).
   if (req.method === "POST" && url.pathname === "/api/voice/session" && (!body || body.mode !== "ceo")) {
     return out(503, { error: { code: "voice_unavailable", message: "no Realtime provider" } });
@@ -305,7 +413,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/api/tts") {
     const purpose = body && body.purpose;
     if (purpose !== "ceo" && purpose !== "talk") return out(400, { error: { code: "bad_input", message: "purpose" } });
-    if (purpose === "ceo" && req.headers.authorization !== `Bearer ${ADMIN}`) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
+    if (purpose === "ceo" && !isAdmin(req)) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
     let text = "";
     if (purpose === "ceo") text = typeof body.text === "string" ? body.text : "";
     else {
@@ -323,11 +431,19 @@ const server = createServer(async (req, res) => {
     return res.writeHead(200, { ...cors, "Content-Type": "audio/wav" }).end(silentWav(Math.min(4000, 300 + text.length * 25)));
   }
   // The theater token reads (state, events, stream), so the projector can be checked against this mock.
-  if (req.method === "GET" && url.searchParams.get("token") === THEATER && req.headers.authorization === undefined) {
-    if (url.pathname === "/api/state") return out(200, { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
+  const readToken = url.searchParams.get("token");
+  // Theater reads: the theater token as ?token=, or the CEO (Bearer, or a session as ?token=) with the full view.
+  const ticket = url.pathname === "/api/events/stream" ? url.searchParams.get("ticket") : null;
+  if (ticket !== null && !redeemTicket(ticket)) return out(401, { error: { code: "unauthorized", message: "stream ticket expired or used; get a new one from POST /api/stream-ticket" } });
+  const ceoRead = ticket !== null || isAdmin(req);
+  if (req.method === "GET" && (ceoRead || (readToken === THEATER && req.headers.authorization === undefined))) {
+    if (url.pathname === "/api/state" && !ceoRead) return out(200, { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
     if (url.pathname === "/api/events/stream") {
       let after = Number(url.searchParams.get("after_id") || 0);
+      const reader = ticket !== null ? "ticket" : bearerOf(req) ? "bearer" : validSession(readToken) ? "SESSION-IN-URL" : "theater";
+      console.log(JSON.stringify({ t: Date.now(), method: "GET", path: "/api/events/stream", body: { reader, token_in_url: Boolean(readToken), after }, status: 200 }));
       res.writeHead(200, { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      res.write(": open\n\n"); // as the gateway's heartbeat: the browser sees the stream open at once
       const pump = () => {
         for (const e of events.filter((x) => x.id > after)) {
           res.write(`id: ${e.id}\ndata: ${JSON.stringify(e)}\n\n`);
@@ -340,7 +456,7 @@ const server = createServer(async (req, res) => {
       return;
     }
   }
-  if (req.headers.authorization !== `Bearer ${ADMIN}` && !(req.method === "GET" && url.pathname === "/api/events" && url.searchParams.get("token") === THEATER)) {
+  if (!isAdmin(req) && !(req.method === "GET" && url.pathname === "/api/events" && readToken === THEATER)) {
     return out(401, { error: { code: "unauthorized", message: "admin token required" } });
   }
   if (body === null) return out(400, { error: { code: "bad_json", message: "bad JSON" } });

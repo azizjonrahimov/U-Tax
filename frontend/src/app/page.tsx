@@ -1,5 +1,5 @@
-import { Theater } from "@/components/theater/Theater";
+import { Landing } from "@/components/site/Site";
 
 export default function Home() {
-  return <Theater />;
+  return <Landing />;
 }

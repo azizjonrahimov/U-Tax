@@ -21,6 +21,7 @@
 
 .ceo main { width: 100%; max-width: 920px; margin: 0 auto; padding: 32px 24px 64px; display: flex; flex-direction: column; gap: 32px; }
 .ceo main.signin { max-width: 520px; gap: 14px; padding-top: 72px; }
+.ceo .signin-link { display: inline-flex; align-items: center; min-height: 44px; padding: 0 20px; border-radius: 8px; text-decoration: none; font-weight: 600; }
 .ceo h1 { font-size: 30px; line-height: 1.2; font-weight: 800; margin: 0; }
 .ceo h2 { font-size: 19px; font-weight: 800; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
 .ceo .count { font: 700 14px var(--font-jetbrains-mono), "JetBrains Mono", monospace; color: var(--dim); border: 1px solid var(--line); border-radius: 99px; padding: 1px 9px; }
