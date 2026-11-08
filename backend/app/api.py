@@ -826,6 +826,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             "link_id": session.get("payment_link"),
             "amount_cents": session.get("amount_total"), "currency": session.get("currency")})
         if result.status == "done":
+            if result.data.get("receipt") == "failed":  # recorded; Stripe's retry resends it
+                raise APIError(503, "unavailable", "payment recorded; the receipt will retry")
             return {"ok": True, **result.data}
         code = (result.error or {}).get("code", "error")
         if result.status == "refused" and code in ("not_found", "bad_input"):

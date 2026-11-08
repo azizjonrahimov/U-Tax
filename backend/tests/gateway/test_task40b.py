@@ -20,6 +20,7 @@ from app.main import create_app
 ADMIN = "admin-" + "a" * 30
 WHSEC = "whsec_" + "s" * 32
 SK = "sk_test_" + "k" * 24
+BOOKING = "https://cal.u-tax.test/intro"
 
 
 class FakeStripe:
@@ -49,7 +50,8 @@ class FakeStripe:
 
 @pytest.fixture
 def h(make_harness):
-    harness = make_harness(admin_token=ADMIN, stripe_webhook_secret=WHSEC)
+    harness = make_harness(admin_token=ADMIN, stripe_webhook_secret=WHSEC,
+                           ceo_email="ceo@u-tax.test", hr_booking_url=BOOKING)
     harness.fake = FakeStripe()
     harness.ports.pay = StripePay(SK, transport=httpx.MockTransport(harness.fake))
     return harness
@@ -148,7 +150,7 @@ def test_the_memo_carries_the_link_and_the_theater_never_sees_it(h):
             + case_id) in mail["body"]
     [sent] = h.events("memo.sent")
     assert "buy.stripe.com" not in sent.payload["body"]
-    assert "Want hands-on help" not in sent.payload["body"]  # the whole line, not "...call:"
+    assert "hands-on" not in sent.payload["body"]  # the whole line, not "...call:"
     assert "buy.stripe.com" not in json.dumps([e.payload for e in h.store.since(0)])
 
 
@@ -158,8 +160,8 @@ def test_the_agents_memo_line_drops_whole_without_a_link(tmp_path):
     memo = tmp_path / "memo.md"
     memo.write_text(
         "Hi {{greeting_name}}, your total is {{total}}.\n"
-        "Want hands-on help? For $49, U-Tax prepares your Delaware annual report worksheet "
-        "and walks you through filing it yourself on a 20-minute call: {{payment_link}}\n"
+        "Want hands-on help? For $49, a member of our team walks you through filing your "
+        "Delaware annual report yourself on a 20-minute call: {{payment_link}}\n"
         "Educational estimate — not tax advice.\n\nReference: {{memo_ref}}\n",
         encoding="utf-8")
     t = Templates(tmp_path, memo)
@@ -259,6 +261,62 @@ def test_locked_books_answer_503_so_stripe_retries(h, c, monkeypatch):
     assert h.events("payment.received") == []
     monkeypatch.setattr(documents, "append_revenue", real)
     assert hook(c, paid_event(case_id)).status_code == 200  # Stripe's retry
+    assert len(h.events("payment.received")) == 1
+
+
+# ---------------------------------------------------------------- fulfilment
+
+
+def mails(h):
+    return [json.loads(p.read_text(encoding="utf-8")) for p in h.outbox()]
+
+
+def test_a_payment_sends_one_receipt_and_tells_the_ceo(h, c):
+    case_id = h.to_sent()
+    [memo] = h.events("memo.sent")
+    before = len(mails(h))
+    out = hook(c, paid_event(case_id))
+    assert out.status_code == 200 and out.json()["receipt"] == "sent"
+    new = mails(h)[before:]
+    [receipt] = [m for m in new if m["to"] == "founder@team7.dev"]
+    assert receipt["subject"] == h.gw.PAYMENT_RECEIPT_SUBJECT
+    assert receipt["in_reply_to"] == memo.payload["message_id"]  # the memo's thread
+    assert "Your $49 payment is in. Pick a time for your 20-minute call here: " + BOOKING \
+        in receipt["body"]
+    assert "not tax advice" in receipt["body"]
+    [ceo] = [m for m in new if m["to"] == "ceo@u-tax.test"]
+    assert ceo["subject"] == "U-Tax: Team #1 paid $49: book their 20-minute call"
+    [notice] = [e for e in h.events("ceo.notified") if e.payload["reason"] == "paid"]
+    assert BOOKING in notice.payload["summary"] and case_id in notice.payload["summary"]
+    [followed] = h.events("client.followed_up")
+    assert followed.payload == {"kind": "payment_receipt"}
+    hook(c, paid_event(case_id, event="evt_2"))  # a redelivery mails nobody again
+    assert len(mails(h)) == before + 2
+
+
+def test_no_booking_url_sends_no_receipt_and_says_so_to_the_ceo(make_harness):
+    h = make_harness(admin_token=ADMIN, stripe_webhook_secret=WHSEC, ceo_email="ceo@u-tax.test")
+    h.ports.pay = StripePay(SK, transport=httpx.MockTransport(FakeStripe()))
+    case_id = h.to_sent()
+    with TestClient(create_app(h.gw, start_background=False)) as c:
+        assert hook(c, paid_event(case_id)).json()["receipt"] == "no_booking_url"
+    assert not [m for m in mails(h) if m["subject"] == h.gw.PAYMENT_RECEIPT_SUBJECT]
+    [notice] = [e for e in h.events("ceo.notified") if e.payload["reason"] == "paid"]
+    assert "No HR_BOOKING_URL" in notice.payload["summary"]
+
+
+def test_a_failed_receipt_answers_503_and_stripes_retry_sends_it_once(h, c):
+    from app.gateway.ports import Unavailable
+
+    case_id = h.to_sent()
+    h.ports.mail.faults.add(*[Unavailable() for _ in range(5)])
+    assert hook(c, paid_event(case_id)).status_code == 503
+    assert len(h.events("payment.received")) == 1  # the money is recorded already
+    out = hook(c, paid_event(case_id))  # Stripe's retry
+    assert out.status_code == 200 and out.json() == {
+        "ok": True, "case_id": case_id, "duplicate": True, "receipt": "sent"}
+    assert len([m for m in mails(h) if m["subject"] == h.gw.PAYMENT_RECEIPT_SUBJECT]) == 1
+    assert len([e for e in h.events("ceo.notified") if e.payload["reason"] == "paid"]) == 1
     assert len(h.events("payment.received")) == 1
 
 

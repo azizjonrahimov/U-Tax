@@ -2840,8 +2840,11 @@ class Gateway:
         session_id = _str(args, "session_id", max_len=255)
         key = f"stripe:{session_id}"
         done = self._done_from(key)
-        if done is not None:
-            return {"case_id": done.case_id, "duplicate": True}
+        if done is not None:  # a redelivery: only what didn't go out is retried
+            known = self.state.cases.get(done.case_id or "")
+            follow = self._payment_followups(known, key, int(done.payload["amount_cents"])) \
+                if known is not None else {}
+            return {"case_id": done.case_id, "duplicate": True, **follow}
         case = None
         for candidate in (args.get("case_id"), args.get("client_reference_id"),
                           self.state.payment_links.get(str(args.get("link_id") or ""))):
@@ -2873,7 +2876,56 @@ class Gateway:
                              private={"session_id": session_id,
                                       "event_id": str(args.get("event_id") or "")[:255]})])
         return {"case_id": case.case_id, "amount_cents": amount, "currency": currency,
-                "books_row": row}
+                "books_row": row, **self._payment_followups(case, key, amount)}
+
+    PAYMENT_RECEIPT_SUBJECT = "Your U-Tax call: pick a time"
+
+    def _payment_followups(self, case: Case, key: str, amount: int) -> dict:
+        """Task 40b: who fulfils the $49 (no agent does). The CEO gets one ceo.notified
+        email ("Team #N paid $49: book their 20-minute call", reason "paid"), and the client
+        ONE receipt in their memo thread (payment-receipt, HR_BOOKING_URL), logged as
+        client.followed_up kind payment_receipt. Each step is keyed, so a Stripe redelivery
+        only retries what didn't go out. receipt: "sent" | "failed" | "no_booking_url" |
+        "no_address"."""
+        booking = self.settings.hr_booking_url
+        receipt_key = f"{key}:receipt"
+        receipt = "sent" if self._done_from(receipt_key) is not None else None
+        if receipt is None and not case.reply_to:
+            receipt = "no_address"
+        elif receipt is None and not booking:
+            receipt = "no_booking_url"
+        elif receipt is None:
+            try:
+                sent = self._with_retry("payment receipt", lambda: self.ports.mail.send(
+                    OutMail(to=case.reply_to, subject=self.PAYMENT_RECEIPT_SUBJECT,
+                            body=self.templates.render("payment-receipt", {
+                                "greeting_name": self._greeting(case),
+                                "booking_url": booking}),
+                            in_reply_to=case.memo_message_id), receipt_key))
+            except ToolError as err:
+                log.warning("payment receipt for %s failed: %s", case.case_id, err)
+                receipt = "failed"
+            else:
+                self._emit([NewEvent(type="client.followed_up", actor="acct",
+                                     case_id=case.case_id, provider=self.ports.mail.provider,
+                                     payload={"kind": "payment_receipt"},
+                                     idempotency_key=receipt_key,
+                                     private={"message_id": sent.message_id,
+                                              "public": case.priority})])
+                receipt = "sent"
+        notice_key = f"ceo:paid:{key}"
+        if self._done_from(notice_key) is None:
+            subject = f"{case.masked_name} paid {format_usd(amount)}: book their 20-minute call"
+            lines = {"sent": "They got a receipt with the booking link"
+                             + (f" ({booking})" if booking else "") + ".",
+                     "failed": "Their receipt didn't go out yet (it retries); write to them.",
+                     "no_booking_url": "No HR_BOOKING_URL is set, so no receipt went out: "
+                                       "reply to them with a time.",
+                     "no_address": "The case has no reply address: no receipt went out."}
+            self._notify_ceo("paid", subject, f"{case.masked_name} ({case.case_id}) paid "
+                             f"{format_usd(amount)} for filing help. {lines[receipt]}",
+                             key=notice_key)
+        return {"receipt": receipt}
 
     def _memo_body(self, case: Case, *, outgoing: bool = False, memo_ref: str,
                    payment_url: str | None = None) -> str:

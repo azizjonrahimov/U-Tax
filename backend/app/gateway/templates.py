@@ -69,6 +69,7 @@ ACTION_LINES = {
     "flagged": "Have a look at the case in the console.",
     "shortlisted": "Hire or decline in the console.",
     "paused": "Resume it in the console when you're ready.",
+    "paid": "Book their 20-minute call: no agent does it for you.",
 }
 LEADS = {
     "approval": "An action is waiting for your OK.",
@@ -76,6 +77,7 @@ LEADS = {
     "flagged": "QA flagged a case for you to look at.",
     "shortlisted": "A candidate is shortlisted; the hiring decision is yours.",
     "paused": "Sends of one kind are paused until you resume them.",
+    "paid": "A client paid $49 for filing help.",
 }
 
 _TOKEN = re.compile(r"\{\{\s*([a-z0-9_]+)\s*\}\}")
@@ -117,10 +119,15 @@ SPECS: dict[str, Spec] = {
         "estimated 2026 Delaware franchise tax drops from {{authorized_method}} to "
         "{{assumed_par_method}} (+{{annual_report_fee}} annual report fee = {{total}}), "
         "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n"
-        "Want hands-on help? For $49, U-Tax prepares your Delaware annual report worksheet "
-        "and walks you through filing it yourself on a 20-minute call: {{payment_link}}\n"
+        "Want hands-on help? For $49, a member of our team walks you through filing your "
+        "Delaware annual report yourself on a 20-minute call: {{payment_link}}\n"
         + DISCLAIMER
         + "\n\nReference: {{memo_ref}}")),
+    # task 40b: the one receipt after a paid filing-help link (the gateway sends it)
+    "payment-receipt": Spec(("greeting_name", "booking_url"), required=("booking_url",),
+                            lines=(DISCLAIMER,), builtin=(
+        "Hi {{greeting_name}},\n\nThanks. Your $49 payment is in. Pick a time for your "
+        "20-minute call here: {{booking_url}}\n\n" + SIGN_OFF + "\n\n" + DISCLAIMER)),
     "ask-client": Spec(("greeting_name", "masked_name", "missing_list", "problems_line"),
                        required=("missing_list",), lines=(DISCLAIMER,), builtin=_BUILTIN_ASK),
     **{f"not-eligible-{reason}": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,), builtin=(
