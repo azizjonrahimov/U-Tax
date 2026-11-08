@@ -46,6 +46,7 @@
 /* One department */
 .office .dept { height: 100%; display: flex; flex-direction: column; gap: 16px; padding: 20px 24px; min-height: 0; }
 .office .dept-head { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.office h1, .office h2 { text-wrap: balance; }
 .office .dept-head h1 { margin: 0; display: flex; align-items: center; gap: 10px; font: 800 clamp(22px, 2.2vw, 30px) var(--font-display), var(--font-inter), sans-serif; letter-spacing: -0.01em; }
 .office .dept-head h1 .dot { width: 14px; height: 14px; border-radius: 50%; background: var(--c); }
 .office .dept-head p { margin: 4px 0 0; color: var(--dim); font-size: 14px; }

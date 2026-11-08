@@ -39,6 +39,7 @@
 /* Hero: the claim and the math */
 .site .hero { padding: 72px 0 64px; }
 .site .hero .wrap { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+.site h1, .site h2 { text-wrap: balance; }
 .site h1 { margin: 0 0 20px; font: 800 clamp(36px, 4.2vw, 60px)/1.05 var(--font-display), var(--font-inter), sans-serif; letter-spacing: -0.02em; max-width: 14ch; }
 .site .lead { margin: 0 0 28px; font-size: 18px; color: var(--muted); max-width: 52ch; }
 .site .ctas { display: flex; gap: 12px; flex-wrap: wrap; }
