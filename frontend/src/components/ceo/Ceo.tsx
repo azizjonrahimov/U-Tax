@@ -39,6 +39,10 @@ import {
 } from "@/ceo/ceo";
 import { announceAgentAudio, CeoVoice } from "./CeoVoice";
 import { logout, useSessionToken, writeSession } from "@/ceo/session";
+import { foldOrders, type OrderCard } from "@/ceo/orders";
+import { useConsoleLock } from "@/ceo/popout";
+import { current } from "@/office/artifact";
+import { SEAT_NAME } from "@/office/workspace";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
 
@@ -107,7 +111,54 @@ interface Confirm {
   approval?: Approval;
 }
 
-export function Ceo() {
+/**
+ * The CEO console. `variant="panel"`: inside /office (the office has its own header and
+ * sign-out). Otherwise the standalone /ceo page. One console is live at a time across every
+ * window (src/ceo/popout.ts): a /ceo window takes it over when it opens, the panel waits for it.
+ * A console that isn't live renders a notice only (no polling, no ear, no voice).
+ */
+export function Ceo({ variant = "page", onElsewhere }: { variant?: "page" | "panel"; onElsewhere?: (elsewhere: boolean) => void } = {}) {
+  const token = useSessionToken();
+  const { state, take, everElsewhere } = useConsoleLock(!!token, variant === "page");
+  useEffect(() => {
+    onElsewhere?.(!!token && state === "elsewhere");
+  }, [onElsewhere, state, token]);
+  // No Web Locks: only the /ceo page runs a console (two could never be fenced from each other).
+  if (token && variant === "panel" && state === "unsupported") {
+    return (
+      <div className="ceo in-panel">
+        <main className="elsewhere">
+          <p>This browser can&rsquo;t share the console between windows, so it runs on its own page.</p>
+          <a className="secondary signin-link" href="/ceo" target="_blank" rel="opener">
+            Open the CEO console
+          </a>
+        </main>
+      </div>
+    );
+  }
+  if (token && (state === "waiting" || state === "elsewhere")) {
+    return (
+      <div className={`ceo${variant === "panel" ? " in-panel" : ""}`}>
+        <main className="elsewhere">
+          {state === "waiting" ? (
+            <p className="dim">Opening the console…</p>
+          ) : (
+            <>
+              <p>The console is open in another window, so it listens and speaks there.</p>
+              <button className="secondary" onClick={take}>
+                Use it here
+              </button>
+            </>
+          )}
+        </main>
+      </div>
+    );
+  }
+  // The brief reads itself only when a /ceo window opens (not the panel, not a tab getting the console back later).
+  return <CeoConsole variant={variant} autoplay={variant === "page" && !everElsewhere} />;
+}
+
+function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay: boolean }) {
   const token = useSessionToken();
   /** Why the console signed out (a 401: the session expired or was revoked), shown on the sign-in link. */
   const [signInError, setSignInError] = useState<string | null>(null);
@@ -126,6 +177,9 @@ export function Ceo() {
   const [notice, setNotice] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
+  /** D37: the CEO's orders, each with its live steps (folded from the same admin log the console reads). */
+  const [orders, setOrders] = useState<OrderCard[]>([]);
+  const ordersRef = useRef<OrderCard[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [announce, setAnnounce] = useState("");
@@ -159,6 +213,8 @@ export function Ceo() {
     (why: string | null) => {
       session.current += 1;
       stopAudio();
+      ordersRef.current = [];
+      setOrders([]);
       if (why === null) void logout(); // the CEO's own Sign out revokes the session
       else writeSession(null); // a 401: it is already dead at the gateway
       briefRef.current = null;
@@ -251,6 +307,16 @@ export function Ceo() {
           if (mine !== session.current) return;
         }
         logRef.current = foldLog(logRef.current, events as UTaxEvent[]);
+        {
+          const names = new Map(st?.cases.map((c) => [c.caseId, c.name]) ?? []);
+          const fl = new Set(st?.cases.filter((c) => c.flagged).map((c) => c.caseId) ?? []);
+          ordersRef.current = foldOrders(reset ? [] : ordersRef.current, events as UTaxEvent[], {
+            name: (id) => (id !== null && fl.has(id) ? "a flagged client" : id !== null ? (names.get(id) ?? "a client") : "a client"),
+            flagged: (id) => id !== null && fl.has(id),
+            image: () => undefined,
+          });
+          setOrders(ordersRef.current);
+        }
         setLog(logRef.current);
         voiceFeed.current?.(events as UTaxEvent[], reset);
         if (st) setView(st);
@@ -304,9 +370,11 @@ export function Ceo() {
         if (mine !== session.current) return;
         briefRef.current = b;
         setBrief(b);
-        rememberSeen(b);
         setBriefError(null);
-        void playBrief(b, token);
+        if (autoplay) {
+          rememberSeen(b);
+          if (document.visibilityState === "visible") void playBrief(b, token); // the panel shows the brief; its Play button reads it
+        }
       } catch (e) {
         if (mine !== session.current) return;
         if (e instanceof ApiError && e.status === 401) fail(e);
@@ -327,7 +395,7 @@ export function Ceo() {
       clearTimeout(timer);
       clearInterval(clock);
     };
-  }, [token, refreshNow, loadBrief, playBrief, fail]);
+  }, [token, refreshNow, loadBrief, playBrief, fail, autoplay]);
 
   useEffect(() => () => stopAudio(), [stopAudio]);
 
@@ -452,22 +520,25 @@ export function Ceo() {
     ) : null;
 
   return (
-    <div className="ceo">
+    // In the panel the root takes focus on a click inside, so Esc (STOP EVERYTHING) still works there.
+    <div className={`ceo${variant === "panel" ? " in-panel" : ""}`} tabIndex={variant === "panel" ? -1 : undefined}>
       <header>
-        <span className="logo">U</span>
-        <span className="title">U-Tax · CEO console</span>
-        <span className={`updated${stale ? " stale" : ""}`} role="status">
+        {variant === "page" && <span className="logo">U</span>}
+        <span className="title">{variant === "page" ? "U-Tax · CEO console" : "CEO console"}</span>
+        <span className={`updated${stale ? " stale" : ""}`} role={variant === "page" ? "status" : undefined}>
           {updatedAt === null ? "Loading…" : stale ? "Not updating · retrying" : `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`}
         </span>
-        <button className="ghost" onClick={() => signOut(null)}>
-          Sign out
-        </button>
+        {variant === "page" && (
+          <button className="ghost" onClick={() => signOut(null)}>
+            Sign out
+          </button>
+        )}
       </header>
       <main>
         <p className="sr-only" role="status" aria-live="polite">
           {announce}
         </p>
-        <CeoVoice key={token} token={token} refresh={refreshAfterVoice} signOut={voiceSignOut} feedRef={voiceFeed} names={caseNames} flagged={flaggedCases} />
+        <CeoVoice key={token} token={token} refresh={refreshAfterVoice} signOut={voiceSignOut} feedRef={voiceFeed} names={caseNames} flagged={flaggedCases} escInside={variant === "panel"} />
         {actionError && (
           <p className="error banner" role="alert">
             {actionError}{" "}
@@ -729,6 +800,37 @@ export function Ceo() {
             </ul>
           )}
         </section>
+
+        {orders.length > 0 && (
+          <section aria-labelledby="ord-h" className="orders">
+            <h2 id="ord-h">Your orders, live</h2>
+            <ol>
+              {orders.map((o) => (
+                <li key={o.id} className="order-card">
+                  <p className="order-text">
+                    <q>{o.text}</q>
+                  </p>
+                  {o.live && current(o.live.ts, now) && (
+                    <p className="order-live">
+                      {o.live.text}
+                    </p>
+                  )}
+                  {o.steps.length === 0 ? (
+                    <p className="dim">Waiting for the Chief of Staff to pick it up…</p>
+                  ) : (
+                    <ol className="order-steps">
+                      {o.steps.map((st) => (
+                        <li key={st.key} className={st.status}>
+                          <span className="who">{st.seat ? SEAT_NAME[st.seat] : "U-Tax"}</span> {st.text}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
 
         <section aria-labelledby="or-h">
           <h2 id="or-h">Order to the Chief of Staff</h2>

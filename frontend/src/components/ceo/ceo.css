@@ -108,7 +108,7 @@
 .ceo .vlog .chip.undone { border-left-color: var(--dim); color: var(--dim); }
 .ceo .vlog .chip.undone .chip-text { text-decoration: line-through; }
 .ceo .vlog .chip-note { padding: 0 8px; font-size: 13px; color: var(--dim); }
-.ceo .vlog .chip .undo { min-height: 32px; padding: 0 10px; font-size: 14px; }
+.ceo .vlog .chip .undo { min-height: 32px; padding: 0 10px; font-size: 14px; white-space: nowrap; flex: none; }
 .ceo .vlog li { overflow-wrap: anywhere; }
 .ceo .vlog b { font-size: 13px; letter-spacing: .05em; text-transform: uppercase; color: var(--dim); margin-right: 6px; }
 .ceo .vlog .you b { color: var(--blue); }
@@ -136,3 +136,25 @@
 .ceo .heard { margin: 6px 0 0; font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ceo .heard q { color: var(--text); font-size: 17px; font-weight: 600; }
 .ceo .heard .note { color: var(--amber); }
+
+/* D33: the console inside the /office panel: no page height, a compact header */
+.ceo.in-panel { min-height: 0; font-size: 16px; }
+.ceo.in-panel header { padding: 8px 14px; }
+.ceo.in-panel main { padding: 12px 14px 24px; max-width: none; gap: 20px; }
+
+/* D37: the CEO's orders, each with its live steps */
+.ceo .orders ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.ceo .order-card { padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.ceo .order-text { margin: 0 0 6px; font-weight: 600; }
+.ceo .order-live { margin: 0 0 6px; color: var(--green); font-size: 15px; }
+.ceo .order-steps { display: grid; gap: 4px; font-size: 15px; }
+.ceo .order-steps li { padding-left: 14px; position: relative; color: var(--dim); }
+.ceo .order-steps li::before { content: "✓"; position: absolute; left: 0; color: var(--green); }
+.ceo .order-steps li.needs_approval::before { content: "⏳"; }
+.ceo .order-steps li.refused::before, .ceo .order-steps li.error::before { content: "✕"; color: var(--red); }
+.ceo .order-steps .who { color: var(--text); font-weight: 600; margin-right: 4px; }
+/* D33 review: the dock spans the panel's own padding (no horizontal scroll); the notice while elsewhere */
+.ceo.in-panel .voice-dock { margin: -8px -14px 0; padding: 12px 14px; }
+.ceo main.elsewhere { padding: 20px 16px; gap: 12px; }
+.ceo main.elsewhere p { margin: 0; color: var(--dim); font-size: 15px; }
+.ceo.in-panel:focus { outline: none; }

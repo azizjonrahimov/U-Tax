@@ -11,6 +11,8 @@ import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
 import { logout, useSessionToken } from "@/ceo/session";
+import { canPopOut, popOut } from "@/ceo/popout";
+import { Ceo } from "@/components/ceo/Ceo";
 import { followDelay, followTarget, initialView, type View } from "@/office/follow";
 import { ARTIFACT_MS, current, DRAFT_MS, type Desk } from "@/office/artifact";
 import { ActivityPill, AgentNotes, ArtifactView } from "./Artifact";
@@ -27,6 +29,10 @@ export function Office() {
   const session = useSessionToken();
   const { office, numbers, status, live, studio } = useFirmFeed(session);
   const theater = useMemo(() => <Theater />, []);
+  /** D33: the CEO console as a panel on the right (signed in). Nothing mounts until the viewer's layout is read. */
+  const [panelReady, setPanelReady] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [panelW, setPanelW] = useState(PANEL_W);
   const [view, setView] = useState<View>("overview");
   const [follow, setFollow] = useState(true);
   const lastSwitch = useRef(0);
@@ -42,6 +48,11 @@ export function Office() {
       const init = initialView(window.location.search);
       if (!init.follow) setFollow(false);
       if (init.view !== "overview") setView(init.view);
+      const saved = readPanel();
+      // First visit: open on a wide screen only (the theater needs the room on a laptop).
+      setPanelOpen(saved ? saved.open : window.innerWidth >= 1600);
+      if (saved) setPanelW(saved.width);
+      setPanelReady(true);
     }, 0);
     const tick = setInterval(() => setNow(Date.now()), 4000);
     return () => {
@@ -83,7 +94,7 @@ export function Office() {
   };
 
   return (
-    <div className="office" style={SEAT_VARS}>
+    <div className={`office${session ? " with-panel" : ""}`} style={SEAT_VARS}>
       <nav className="side" aria-label="Departments">
         <Link href="/" className="side-brand" aria-label="U-Tax home">
           <span className="mark" aria-hidden>
@@ -122,7 +133,7 @@ export function Office() {
           })}
           <li className="side-sep">
             <Link href="/ceo" className="side-item">
-              <span className="dot ceo" aria-hidden />
+              <span className="dot ceo-dot" aria-hidden />
               <span className="side-name">CEO console</span>
               <span className="side-meta">↗</span>
             </Link>
@@ -155,7 +166,123 @@ export function Office() {
           <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} />
         )}
       </div>
+      {session && panelReady && (
+        <CeoPanel
+          open={panelOpen}
+          width={panelW}
+          onOpen={(o) => {
+            setPanelOpen(o);
+            savePanel({ open: o, width: panelW });
+          }}
+          onWidth={(w, done) => {
+            setPanelW(w);
+            if (done) savePanel({ open: panelOpen, width: w });
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+// ------------------------------------------------------------------ D33: the CEO console panel
+
+const PANEL_W = 460;
+const PANEL_MIN = 360;
+const PANEL_MAX = 780;
+const PANEL_KEY = "utax.office.ceoPanel";
+const clampW = (w: number) => Math.round(Math.min(PANEL_MAX, Math.max(PANEL_MIN, w)));
+/** The viewer's own layout (open or hidden, width): a convenience, so storage may be off. */
+function readPanel(): { open: boolean; width: number } | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(PANEL_KEY) ?? "null") as { open?: unknown; width?: unknown } | null;
+    if (!v) return null;
+    return { open: v.open !== false, width: typeof v.width === "number" && Number.isFinite(v.width) ? clampW(v.width) : PANEL_W };
+  } catch {
+    return null;
+  }
+}
+function savePanel(v: { open: boolean; width: number }) {
+  try {
+    localStorage.setItem(PANEL_KEY, JSON.stringify(v));
+  } catch {
+    /* storage off: the layout resets next time */
+  }
+}
+
+function CeoPanel({ open, width, onOpen, onWidth }: { open: boolean; width: number; onOpen: (open: boolean) => void; onWidth: (w: number, done: boolean) => void }) {
+  /** The console is live in another window (a pop-out, a /ceo tab): the panel shrinks to a notice. */
+  const [elsewhere, setElsewhere] = useState(false);
+  const [blocked, setBlocked] = useState(false);
+  // One element for the life of the panel: resizing or the office's clock never re-renders the console.
+  const console_ = useMemo(() => <Ceo variant="panel" onElsewhere={setElsewhere} />, []);
+  if (!open) {
+    return (
+      <aside className="ceo-panel closed" aria-label="CEO console (hidden)">
+        <button className="ceo-tab" onClick={() => onOpen(true)}>
+          <span aria-hidden>‹</span> CEO console
+        </button>
+      </aside>
+    );
+  }
+  // Drag the left edge to resize (or use the arrow keys on it).
+  const drag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const x0 = e.clientX;
+    const w0 = width;
+    const el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    let w = w0;
+    const move = (m: PointerEvent) => {
+      w = clampW(w0 + (x0 - m.clientX));
+      onWidth(w, false);
+    };
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      onWidth(w, true);
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+  };
+  return (
+    <aside className={`ceo-panel${elsewhere ? " elsewhere" : ""}`} style={elsewhere ? undefined : { width }} aria-label="CEO console">
+      {!elsewhere && (
+        <div
+          className="ceo-grip"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize the CEO console"
+          aria-valuemin={PANEL_MIN}
+          aria-valuemax={PANEL_MAX}
+          aria-valuenow={width}
+          tabIndex={0}
+          onPointerDown={drag}
+          onKeyDown={(e) => {
+            if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+              e.preventDefault();
+              onWidth(clampW(width + (e.key === "ArrowLeft" ? 24 : -24)), true);
+            }
+          }}
+        />
+      )}
+      <div className="ceo-bar">
+        {canPopOut() && (
+          <button className="ghost" onClick={() => setBlocked(!popOut())} title="Open the console in its own window (or bring it to the front)">
+            {elsewhere ? "Show the window" : "Pop out"} <span aria-hidden>↗</span>
+          </button>
+        )}
+        <button className="ghost" onClick={() => onOpen(false)} title="Hide the console">
+          Hide <span aria-hidden>›</span>
+        </button>
+      </div>
+      {blocked && (
+        <p className="popped-note" role="alert">
+          Your browser blocked the window. Allow pop-ups for this site, then press Pop out again.
+        </p>
+      )}
+      <div className="ceo-body">{console_}</div>
+    </aside>
   );
 }
 

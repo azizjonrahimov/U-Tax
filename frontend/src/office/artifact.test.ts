@@ -171,3 +171,34 @@ describe("D37 red team: the real gateway's orderings and failures", () => {
     expect(art?.kind === "docs" ? [art.workpaper?.verified, art.state, art.workpaper?.cells.Inputs.A1] : []).toEqual([null, "drafting", "v2"]);
   });
 });
+
+describe("v1.18.2 cell formats", () => {
+  it("money to the cent, counts grouped, par at full precision, text as written", async () => {
+    const { cellText } = await import("./artifact");
+    expect(cellText(85165, "usd")).toBe("$85,165.00");
+    expect(cellText(400.5, "usd")).toBe("$400.50");
+    expect(cellText(10000000, "int")).toBe("10,000,000");
+    expect(cellText(0.00001, "par")).toBe("0.00001");
+    expect(cellText(0.0625, "par")).toBe("0.0625");
+    expect(cellText("From the client's email", "text")).toBe("From the client's email");
+    expect(cellText(null, "usd")).toBe("");
+  });
+});
+
+describe("v1.18.2 money at full precision", () => {
+  it("keeps the gateway's digits, never shows -$0.00", async () => {
+    const { cellText } = await import("./artifact");
+    expect(cellText(1000000.004, "usd")).toBe("$1,000,000.004");
+    expect(cellText(-0, "usd")).toBe("$0.00");
+    expect(cellText(-1234.5, "usd")).toBe("-$1,234.50");
+  });
+});
+
+describe("money without float noise", () => {
+  it("0.1 + 0.2 is $0.30; real extra digits stay", async () => {
+    const { cellText } = await import("./artifact");
+    expect(cellText(0.1 + 0.2, "usd")).toBe("$0.30");
+    expect(cellText(1234.5600000000002, "usd")).toBe("$1,234.56");
+    expect(cellText(625000.0625, "usd")).toBe("$625,000.0625");
+  });
+});

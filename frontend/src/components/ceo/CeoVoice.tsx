@@ -84,6 +84,8 @@ type Link = "off" | "connecting" | "realtime" | "fallback";
 type Flow = "listening" | "thinking" | "speaking" | "idle";
 /** A transcript line; a D34 reply carries the actions the assistant took (chips, with Undo). */
 type Line = { who: "you" | "firm" | "alert"; text: string; n: number; actions?: TalkAction[] };
+/** A failed STOP from a console that unmounted mid-STOP, for the next console in this tab to show. */
+const STOP_FAILED_KEY = "utax.ceo.stopFailed";
 /** A talk turn waits this long at most per request (the gateway holds it up to 25 s). */
 const TALK_REQUEST_MS = 35_000;
 interface Card extends Proposal {
@@ -124,6 +126,8 @@ export interface VoiceProps {
   feedRef: MutableRefObject<((events: readonly UTaxEvent[], reset: boolean) => void) | null>;
   names: ReadonlyMap<string, string>;
   flagged: ReadonlySet<string>;
+  /** In the /office panel: Esc is STOP EVERYTHING only while focus is inside the console (the office is the rest of the page). */
+  escInside?: boolean;
 }
 
 /** Gateway refusals for voice actions, as sentences. */
@@ -163,7 +167,7 @@ const IGNORED =
 /** Refusals after which the action certainly did not run. */
 const NOT_RUN = new Set(["expired", "superseded", "flagged", "console_only", "not_a_confirm", "not_found", "bad_args", "unknown_tool", "nothing_pending"]);
 
-export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: VoiceProps) {
+export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, escInside = false }: VoiceProps) {
   const [link, setLink] = useState<Link>("off");
   const [flow, setFlow] = useState<Flow>("idle");
   const [micOn, setMicOn] = useState(false);
@@ -181,6 +185,19 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const [notice, setNotice] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null);
   const [stopNote, setStopNote] = useState<{ ok: boolean | null; text: string } | null>(null);
+  // A STOP that failed in a console that went away mid-STOP (hidden, popped out): say so here.
+  useEffect(() => {
+    let text: string | null = null;
+    try {
+      text = sessionStorage.getItem(STOP_FAILED_KEY);
+      sessionStorage.removeItem(STOP_FAILED_KEY);
+    } catch {
+      /* storage off */
+    }
+    if (!text) return;
+    const t = setTimeout(() => setStopNote({ ok: false, text: text as string }), 0);
+    return () => clearTimeout(t);
+  }, []);
   const [draft, setDraft] = useState("");
   const [canListen, setCanListen] = useState(true);
 
@@ -1260,7 +1277,16 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         signedOut = true;
         return;
       }
-      if (alive.current) setStopNote({ ok: false, text: `STOP didn't reach the gateway: ${voiceError(e)} Press it again.` });
+      const text = `STOP didn't reach the gateway: ${voiceError(e)} Press it again.`;
+      if (alive.current) setStopNote({ ok: false, text });
+      else {
+        // This console went away mid-STOP (hidden, popped out): the next one says so.
+        try {
+          sessionStorage.setItem(STOP_FAILED_KEY, text);
+        } catch {
+          /* storage off */
+        }
+      }
     } finally {
       stopping.current = false;
       if (!signedOut && alive.current) refresh();
@@ -1273,12 +1299,13 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.repeat || e.isComposing) return;
+      if (escInside && !(e.target instanceof Element && e.target.closest(".ceo.in-panel"))) return;
       e.preventDefault();
       void stopRef.current();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [escInside]);
 
   // The console's brief (gateway audio or browser speech) is agent audio too: counted, and the mic muted meanwhile.
   useEffect(() => {

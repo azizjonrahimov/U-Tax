@@ -130,7 +130,7 @@ const DOC_LABEL = { workpaper: "Workpaper", memo: "Memo", books: "Books" } as co
 const MAX_GRID_ROWS = 24;
 const MAX_GRID_COLS = 9;
 /** A value that is a number (money, a count, a percentage): right-aligned (labels like "1. Total gross assets" aren't). */
-const NUMERIC = /^[-($]?[\d,]+(\.\d+)?\)?%?$/;
+const NUMERIC = /^-?\(?\$?[\d,]+(\.\d+)?\)?%?$/;
 
 /** The case's documents, played back in the order they were built: cells, then sections, then the books row. */
 function Docs({ art }: { art: Extract<Artifact, { kind: "docs" }> }) {

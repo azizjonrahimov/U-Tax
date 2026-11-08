@@ -259,6 +259,29 @@ If either page can't hear you at all: check Chrome's site permission (the lock i
   - Public `/api/events` filters activity after slicing by id, so the 300-event lookback can come back nearly empty.
 - **Known, not built yet:** the "CEO order card with the live step list" belongs to the CEO panel, which is next.
 
+## The CEO console in the office (D33 panel + pop-out, order cards)
+
+- **Panel:** in signed-in `/office`, the CEO console is a panel on the right.
+  - It can be resized by dragging the edge or with the arrow keys, and hidden to a side tab. The layout is kept per viewer.
+  - On first visit it opens by default only on screens ≥ 1600px.
+- **Pop out:** opens `/ceo` in its own window, which takes the session along, or brings an open one to the front. It says so when the browser blocks the window.
+- **One console across every window** (Web Locks):
+  - A `/ceo` window takes the console over; the panel shrinks to "open in another window" with "Use it here".
+  - A console that isn't live does nothing: no polling, no ear, no voice.
+  - With no Web Locks (an old browser, or plain http on a LAN address), only `/ceo` runs a console.
+- **"Your orders, live":** each order the CEO gave, the D34 assistant's included, with every step done for it and what an agent is doing now.
+- **Esc** is STOP EVERYTHING only inside the panel.
+- **The brief** reads itself only when a `/ceo` window opens.
+- **Sign-out:** signing out in one window signs out the others with the same session.
+- **Workpaper cells** follow v1.18.2 formats: money as $#,##0.00 with full precision kept, counts grouped, par as is.
+- **Decisions taken with the recommended option:**
+  - Web Locks rather than a BroadcastChannel heartbeat (crash-safe, not throttled).
+  - The /ceo window wins on open.
+  - The panel doesn't auto-play the brief.
+- **Known:**
+  - The theater's speech and the console's voice share one window in `/office`; the theater doesn't announce its audio to the console's ear.
+  - Hiding the panel mid-turn drops that turn's on-screen result (the gateway still runs it).
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
