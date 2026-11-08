@@ -166,7 +166,7 @@ const MEMO_PLACEHOLDERS = (() => {
 // optional: placeholders that may render empty; every empty/filled combination must render cleanly.
 // dropLine: optional placeholders whose whole line goes when empty (not only a line holding just it).
 // priceLine: the one line, word for word, that may name a price in a client template.
-const PAYMENT_LINE = "Want U-Tax to file it for you? Pay $49 here: {{payment_link}}";
+const PAYMENT_LINE = "Want hands-on help? For $49, U-Tax prepares your Delaware annual report worksheet and walks you through filing it yourself on a 20-minute call: {{payment_link}}";
 /** Every dollar amount in a text, as a number ("$ 49", "$49.00", "49 dollars", "USD 49", "49 bucks"). */
 function amountsIn(text) {
   const re = /\$\s*(\d[\d,]*(?:\.\d+)?)|\b(\d[\d,]*(?:\.\d+)?)\s*(?:us\s*)?(?:dollars?|bucks)\b|\busd\s*(\d[\d,]*(?:\.\d+)?)/gi;
@@ -176,7 +176,7 @@ for (const [text, want] of [["$ 49 or $49.00", "49,49"], ["49 dollar, 5 US dolla
   if (amountsIn(text).join() !== want) fail(`amount self-test: "${text}" gave ${amountsIn(text)}, expected ${want}`);
 const TEMPLATE_RULES = {
   // contract v1.7 §7: the phone check finds the memo only by its last line
-  // D36: the $49 filing offer is one whole line, which the gateway's D36 renderer drops when the
+  // D36: the $49 worksheet-and-call offer (U-Tax files nothing) is one whole line, which the gateway's D36 renderer drops when the
   // case has no Stripe link; it is the only price a client mail may name. payment_link is added
   // here until contract §7 lists it (the controller's edit); the Set keeps it single after that.
   "memo.md": { body: true, client: true, placeholders: [...new Set([...MEMO_PLACEHOLDERS, "payment_link"])],
