@@ -15,7 +15,9 @@ import { useFirmFeed, type FeedStatus } from "@/office/feed";
 import { logout, useSessionToken } from "@/ceo/session";
 import { canPopOut, popOut } from "@/ceo/popout";
 import { Ceo } from "@/components/ceo/Ceo";
-import { followDelay, followTarget, initialView, type View } from "@/office/follow";
+import { followDelay, followTarget, followWhileTouring, initialView, TOUR_DWELL_MS, type View } from "@/office/follow";
+import { activeTask, taskLabel, tourTarget, type TourOrder, type TourTask } from "@/office/tour";
+import { TaskBanner } from "./TaskBanner";
 import { ARTIFACT_MS, current, DRAFT_MS, type Desk } from "@/office/artifact";
 import { ActivityPill, AgentNotes, ArtifactView } from "./Artifact";
 import { SEAT_NAME, SEAT_ROLE, SEATS, type Seat, type Workspace, type WsStep } from "@/office/workspace";
@@ -30,7 +32,7 @@ const seatColor = (seat: Seat) => `var(--seat-${seat})`;
 
 export function Office() {
   const session = useSessionToken();
-  const { office, numbers, status, live, studio } = useFirmFeed(session);
+  const { office, numbers, status, live, studio, tour } = useFirmFeed(session);
   const theater = useMemo(() => <Theater />, []);
   /** D33: the CEO console as a panel on the right (signed in). Nothing mounts until the viewer's layout is read. */
   const [panelReady, setPanelReady] = useState(false);
@@ -39,6 +41,12 @@ export function Office() {
   const [view, setView] = useState<View>("overview");
   const [follow, setFollow] = useState(true);
   const lastSwitch = useRef(0);
+  /** D41 F48: the desk the tour is "clicking" (the sidebar press), the task that just ended, the order-done toast. */
+  const [pressing, setPressing] = useState<Seat | null>(null);
+  const [ended, setEnded] = useState<{ order: TourOrder; task: TourTask } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const followRef = useRef(follow);
+  const seenEnd = useRef(new Set<string>());
   /** Wall clock for the "working" dots, refreshed every few seconds (render stays pure). */
   const [now, setNow] = useState(0);
 
@@ -66,8 +74,9 @@ export function Office() {
 
   // Auto-follow: open the department that just acted, no faster than one every DWELL_MS. Only a
   // real, recent agent step counts: the log folded on open (the initial replay) never moves the view.
+  const running = activeTask(tour);
   useEffect(() => {
-    const target = followTarget(follow, live, office, Date.now());
+    const target = followWhileTouring(activeTask(tour) !== null, followTarget(follow, live, office, Date.now()));
     if (!target) return;
     const wait = followDelay(lastSwitch.current, Date.now());
     const t = setTimeout(() => {
@@ -78,7 +87,73 @@ export function Office() {
       });
     }, wait);
     return () => clearTimeout(t);
-  }, [follow, live, office]);
+  }, [follow, live, office, tour]);
+
+  useEffect(() => {
+    followRef.current = follow;
+  }, [follow]);
+
+  // D41 F48: the task tour. While a CEO task runs, the office shows the department doing it: the
+  // sidebar row is pressed, then the desk opens (follow stays on; ?d= is left alone).
+  useEffect(() => {
+    if (!follow) return;
+    const target = tourTarget(tour);
+    if (!target || target === view) return;
+    let press: ReturnType<typeof setTimeout> | undefined;
+    const t = setTimeout(() => {
+      setPressing(target);
+      press = setTimeout(() => {
+        setPressing(null);
+        setView(target);
+        lastSwitch.current = Date.now();
+      }, 650);
+    }, followDelay(lastSwitch.current, Date.now(), TOUR_DWELL_MS));
+    return () => {
+      clearTimeout(t);
+      if (press) clearTimeout(press);
+    };
+  }, [follow, tour, view]);
+
+  // A task that just ended shows "✓ Task 2 done" (or its status) for 2.5 s; an order that just
+  // finished shows "All 3 tasks done ✓" for 4 s, then the Overview. History never replays these.
+  useEffect(() => {
+    const fresh = (ts?: string) => {
+      const at = ts ? Date.parse(ts) : NaN;
+      return Number.isFinite(at) && Math.abs(Date.now() - at) < 15_000;
+    };
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (const order of tour) {
+      for (const task of order.tasks) {
+        const k = `${order.id}:${task.no}`;
+        if (!task.endedAt || seenEnd.current.has(k)) continue;
+        seenEnd.current.add(k);
+        if (!fresh(task.endedAt)) continue;
+        timers.push(setTimeout(() => setEnded({ order, task }), 0));
+        timers.push(setTimeout(() => setEnded((e) => (e && e.order.id === order.id && e.task.no === task.no ? null : e)), 2500));
+      }
+      const k = `${order.id}:done`;
+      if (!order.done || seenEnd.current.has(k)) continue;
+      seenEnd.current.add(k);
+      if (!fresh(order.doneAt)) continue;
+      const done = order.tasks.filter((t) => t.status === "done").length;
+      const text = done === order.tasks.length ? `All ${order.tasks.length} tasks done ✓` : `${done} of ${order.tasks.length} tasks done`;
+      timers.push(setTimeout(() => setToast(text), 0));
+      timers.push(
+        setTimeout(() => {
+          setToast(null);
+          if (followRef.current) setView("overview");
+        }, 4000),
+      );
+    }
+    return () => timers.forEach(clearTimeout);
+  }, [tour]);
+
+  /** The task a desk's banner shows: the running one at its desk (and at the CoS), else the one that just ended there. */
+  const bannerFor = (seat: Seat): { order: TourOrder; task: TourTask } | null => {
+    if (running && (running.task.seat === seat || seat === "cos")) return running;
+    if (ended && (ended.task.seat === seat || seat === "cos")) return ended;
+    return null;
+  };
 
   const open = useCallback((v: View) => {
     setFollow(false);
@@ -124,7 +199,7 @@ export function Office() {
             return (
               <button
                 key={seat}
-                className={["dept", view === seat ? "on" : "", busy ? "busy" : ""].join(" ").trim()}
+                className={["dept", view === seat ? "on" : "", busy ? "busy" : "", pressing === seat ? "tour-press" : "", running && tourTarget(tour) === seat ? "tour-on" : ""].join(" ").trim()}
                 aria-current={view === seat ? "page" : undefined}
                 onClick={() => open(seat)}
                 style={{ "--c": seatColor(seat) } as CSSProperties}
@@ -143,7 +218,7 @@ export function Office() {
             <FeedDot status={status} />
             <div className="follow-sw">
               <Switch on={follow} onChange={() => setFollow((f) => !f)} label="Follow live (open whichever department acts)" />
-              <span aria-hidden>{follow ? "Following live" : "Follow live"}</span>
+              <span aria-hidden>{follow && running ? `Touring ${taskLabel(running.order, running.task).toLowerCase()}` : follow ? "Following live" : "Follow live"}</span>
             </div>
             <Link href="/ceo" className="sbtn">
               CEO console ↗
@@ -168,7 +243,12 @@ export function Office() {
             {theater}
           </div>
         ) : (
-          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} served={studio.served} />
+          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} served={studio.served} banner={bannerFor(view)} />
+        )}
+        {toast && (
+          <div className="tour-toast" role="status">
+            {toast}
+          </div>
         )}
       </div>
       {session && panelReady && (
@@ -313,11 +393,12 @@ function FeedDot({ status }: { status: FeedStatus }) {
 
 // ------------------------------------------------------------------ one department
 
-function Department({ desk, studio, numbers, working, following, now, session, served }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null; served: Record<string, string[]> }) {
+function Department({ desk, studio, numbers, working, following, now, session, served, banner }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null; served: Record<string, string[]>; banner: { order: TourOrder; task: TourTask } | null }) {
   const seat = desk.seat;
   const step = desk.steps[0];
   return (
-    <main className="of-dept" style={{ "--c": seatColor(seat) } as CSSProperties}>
+    <main className={banner ? "of-dept touring" : "of-dept"} style={{ "--c": seatColor(seat) } as CSSProperties}>
+      {banner && <TaskBanner order={banner.order} task={banner.task} />}
       <header className="dept-head">
         <div>
           <h1>
@@ -339,7 +420,7 @@ function Department({ desk, studio, numbers, working, following, now, session, s
             ) : (
               <ol>
                 {desk.steps.slice(0, 14).map((s, i) => (
-                  <li key={s.key} className={`${i === 0 ? "now " : ""}${s.kind} ${s.status}`}>
+                  <li key={s.key} className={`${i === 0 ? "now " : ""}${s.kind} ${s.status}${banner && s.order === banner.order.id && s.task === banner.task.no ? " in-task" : ""}`}>
                     <span className="st" aria-hidden>
                       {STATUS_ICON[s.status]}
                     </span>

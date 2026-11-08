@@ -58,6 +58,9 @@ export interface WsStep {
   caseId?: string;
   /** An email step: its sender fields are hidden if the case is flagged later. */
   mail?: true;
+  /** D41 F48: the CEO order and task this step worked for (contract v1.20 stamps order_id and task_no). */
+  order?: string;
+  task?: number;
 }
 
 export interface Workspace {
@@ -227,6 +230,14 @@ interface Draft {
  * learns it from email.received); `flagged` cases never show their mail fields; `image` passes
  * an image URL only when it already passed the script's URL check (the caller hands those in).
  */
+/** v1.20: the order and task an event belongs to, when the gateway stamped them. */
+function orderOf(ev: UTaxEvent): { order?: string; task?: number } {
+  const p = (ev.payload ?? {}) as P;
+  const order = typeof p.order_id === "string" && /^order_\d{1,12}$/.test(p.order_id) ? p.order_id : undefined;
+  const task = typeof p.task_no === "number" && Number.isSafeInteger(p.task_no) && p.task_no > 0 ? p.task_no : undefined;
+  return { ...(order ? { order } : {}), ...(order && task ? { task } : {}) };
+}
+
 export function stepOf(ev: UTaxEvent, name: (caseId: string | null) => string, flagged: (caseId: string | null) => boolean, image: (url: unknown) => string | undefined): Draft | null {
   const p = (ev.payload ?? {}) as P;
   const actor = ev.actor;
@@ -416,7 +427,7 @@ export function applyEvent(prev: Office, ev: UTaxEvent, ctx: StepCtx): Office {
   const key = `${ev.id}`;
   const desk = prev.desks[d.seat];
   if (desk.steps.some((x) => x.key === key)) return prev; // replay
-  const step: WsStep = { key, eventId: ev.id, ts: ev.ts, seat: d.seat, kind: d.kind, text: d.text, status: d.status ?? "done", site: d.site, fields: d.fields ?? [], focus: d.focus ?? 0, ...(d.image ? { image: d.image } : {}), ...(ev.case_id ? { caseId: ev.case_id } : {}), ...(d.mail ? { mail: true as const } : {}) };
+  const step: WsStep = { key, eventId: ev.id, ts: ev.ts, seat: d.seat, kind: d.kind, text: d.text, status: d.status ?? "done", site: d.site, fields: d.fields ?? [], focus: d.focus ?? 0, ...(d.image ? { image: d.image } : {}), ...(ev.case_id ? { caseId: ev.case_id } : {}), ...(d.mail ? { mail: true as const } : {}), ...orderOf(ev) };
   const tabs = [...desk.tabs.filter((t) => t !== d.site), d.site].slice(-MAX_TABS);
   const counts = d.count ? { ...desk.counts, [d.count]: (desk.counts[d.count] ?? 0) + 1 } : desk.counts;
   const next: Workspace = { ...desk, steps: [step, ...desk.steps].slice(0, MAX_STEPS), tabs, counts };
