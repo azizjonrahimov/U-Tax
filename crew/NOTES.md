@@ -207,3 +207,4 @@ after the fact; a correction is a new line. The digest is derived from here.
 - 2026-11-08 02:17 local: READY frontend-docs eeb4c28 MERGED (verified docs download via Bearer blob). SECURITY from its review: an XLSX formula injection (a client quote starting with = runs when the CEO opens the workpaper) → backend task 44 URGENT.
 - 2026-11-08 02:21 local: READY backend-44 1386fbd (SECURITY: xlsx literal cells, heal old books) MERGED with contract v1.18.3. Live needs a gateway restart (owner).
 - 2026-11-08 02:51 local: READY frontend-stt 41bd1afc (D36: both ears through /api/stt) MERGED; GitHub CI green. Frontend queue D34/D37/panel/D35/D36 complete → F1 (a CEO-panel cases list with doc downloads). Backend task 45 (/api/stt books server-bounded seconds).
+- 2026-11-08 02:57 local: READY backend-45 81b6b02 MERGED with contract v1.18.4. Decision (rule 16, recommended): keep the 6 kbps floor; the frontend records at 8 kbps opus (folded into F1).
