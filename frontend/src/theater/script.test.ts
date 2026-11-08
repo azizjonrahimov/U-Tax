@@ -664,10 +664,17 @@ describe("parseJsonl", () => {
 });
 
 describe("v1.12 tool.called on the projector", () => {
-  it("only lights a desk: no hold, so busy agents never slow the theater", async () => {
-    const { stepHoldMs } = await import("./timing");
-    const step = { eventId: 1, ts: "2026-11-07T21:00:00.000Z", caseId: null, pane: "rail", key: "1:0", target: "rail.tool", agent: null, action: "status", text: "send_email", meta: { seat: "intake", tool: "send_email", status: "done" } } as unknown as Parameters<typeof stepHoldMs>[0];
-    expect(stepHoldMs(step)).toBe(0);
-    expect(stepHoldMs({ ...step, target: "rail.cases" } as typeof step)).toBe(250);
+  it("costs the projector no time: every step it makes holds 0 ms and moves no cursor", async () => {
+    const { stepHoldMs, movesCursor } = await import("./timing");
+    const { steps } = buildScript([ev(1, "tool.called", { tool: "send_email", status: "done" }, { actor: "intake" })], quiet);
+    const mine = steps.filter((x) => x.eventId === 1);
+    expect(mine.length).toBeGreaterThan(0);
+    for (const x of mine) {
+      expect(stepHoldMs(x)).toBe(0);
+      expect(movesCursor(x)).toBe(false);
+    }
+    // Other status steps keep their hold.
+    const other = buildScript([ev(2, "case.status", { from: "NEW", to: "INTAKE" }, { case_id: "c1" })], quiet).steps.find((x) => x.action === "status");
+    if (other) expect(stepHoldMs(other)).toBeGreaterThan(0);
   });
 });

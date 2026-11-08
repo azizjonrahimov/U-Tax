@@ -59,7 +59,22 @@ describe("D32 workspaces: tool.called drives each department's browser", () => {
     flaggedSet.add("case_9");
     const d = stepOf(ev(1, "email.received", { masked_name: "Team #9", from_masked: "x***@y.dev", subject: "s", body: "b" }, { actor: "intake", case_id: "case_9" }), ctx.name, ctx.flagged, ctx.image);
     expect(d?.fields).toEqual([{ label: "From", value: "Hidden: flagged by QA" }]);
+    expect(JSON.stringify(d)).not.toMatch(/Team #9|x\*\*\*@y\.dev/);
+    expect(d).toMatchObject({ text: "Opened a new email (flagged by QA: hidden)", mail: true, count: "emails" });
     flaggedSet.delete("case_9");
+  });
+
+  it("hiding a flagged case's mail: only possible_injection; seatless and replayed flags too; the follow keys stay put", () => {
+    const mail = ev(1, "email.received", { masked_name: "Team #5", from_masked: "z***@evil.dev", subject: "s", body: "b" }, { actor: "intake", case_id: "case_5" });
+    const base = applyEvent(emptyOffice(), mail, ctx);
+    expect(JSON.stringify(applyEvent(base, ev(2, "case.flagged", { kind: "needs_review" }, { actor: "qa", case_id: "case_5" }), ctx).desks.intake)).toContain("z***@evil.dev");
+    const seatless = applyEvent(base, ev(3, "case.flagged", { kind: "possible_injection" }, { actor: "system", case_id: "case_5" }), ctx);
+    expect(JSON.stringify(seatless.desks)).not.toContain("z***@evil.dev");
+    expect([seatless.lastSeat, seatless.lastKey]).toEqual([base.lastSeat, base.lastKey]);
+    const flag = ev(4, "case.flagged", { kind: "possible_injection" }, { actor: "qa", case_id: "case_5" });
+    const twice = applyEvent(applyEvent(base, flag, ctx), flag, ctx);
+    expect(JSON.stringify(twice.desks)).not.toContain("z***@evil.dev");
+    expect(twice.desks.qa.steps).toHaveLength(1);
   });
 
   it("a possible-injection flag that comes later hides the sender of the email already shown", () => {

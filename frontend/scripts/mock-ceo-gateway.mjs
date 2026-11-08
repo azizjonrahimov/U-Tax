@@ -3,6 +3,8 @@
 // can prove what the console sent (e.g. that no /api/ceo/confirm followed a model "confirmed").
 //
 //   PORT=8020 ADMIN_TOKEN=admin-test MOCK_VOICE=0 node scripts/mock-ceo-gateway.mjs
+// Task 36/39: POST /api/stream-ticket (Bearer) → {ticket, expires_at}, 60 s single use, for
+// GET /api/events/stream?ticket=; a session is never accepted from a URL.
 //
 // MOCK_VOICE=1 mints a fake Realtime session (the browser's WebRTC must be stubbed by the test);
 // otherwise /api/voice/session answers 503 voice_unavailable and the console falls back.
@@ -17,7 +19,7 @@
 // flow (Intake, Tax, QA, Accounting) with tool calls.
 // D33 (v1.13 §5a-bis): POST /api/auth/login {email, password} (CEO_EMAIL default ceo@u-tax.test,
 // CEO_PASSWORD default utax-demo) answers {session, expires_at}; the session works like the admin
-// token as a Bearer, and as ?token= on state/events reads. POST /api/auth/logout revokes it.
+// token, as a Bearer only. POST /api/auth/logout revokes it (always 200).
 
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
@@ -31,12 +33,20 @@ const SESSION_MS = 12 * 3600 * 1000;
 /** session -> expiry (ms) */
 const sessions = new Map();
 const loginTries = [];
+/** Task 36: stream ticket -> expiry (ms); single use. */
+const tickets = new Map();
+const redeemTicket = (t) => {
+  const ok = typeof t === "string" && (tickets.get(t) ?? 0) > Date.now();
+  tickets.delete(t);
+  return ok;
+};
 const validSession = (t) => typeof t === "string" && (sessions.get(t) ?? 0) > Date.now();
 const bearerOf = (req) => /^Bearer (.+)$/.exec(req.headers.authorization || "")?.[1] ?? null;
 /** The CEO: the admin token or a live session as a Bearer, or a live session as ?token= on a read. */
-const isAdmin = (req, url) => {
+const isAdmin = (req) => {
   const b = bearerOf(req);
-  return b === ADMIN || validSession(b) || (req.method === "GET" && validSession(url.searchParams.get("token")));
+  // As the gateway (task 39): the Authorization bearer only, never a session in a URL.
+  return b === ADMIN || validSession(b);
 };
 const VOICE = process.env.MOCK_VOICE === "1";
 const TTL_MS = Number(process.env.PROPOSAL_TTL_MS || 60_000);
@@ -347,7 +357,9 @@ const server = createServer(async (req, res) => {
     body = null;
   }
   const out = (status, json) => {
-    console.log(JSON.stringify({ t: Date.now(), method: req.method, path: url.pathname, body, status }));
+    // A password never reaches the log, whatever the path.
+    const logged = body && typeof body === "object" && "password" in body ? { ...body, password: "[redacted]" } : body;
+    console.log(JSON.stringify({ t: Date.now(), method: req.method, path: url.pathname, body: logged, status }));
     res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
   };
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
@@ -370,10 +382,15 @@ const server = createServer(async (req, res) => {
     sessions.set(session, now + SESSION_MS);
     return reply(200, { session, expires_at: new Date(now + SESSION_MS).toISOString() });
   }
+  if (req.method === "POST" && url.pathname === "/api/stream-ticket") {
+    if (!isAdmin(req)) return out(401, { error: { code: "unauthorized", message: "admin token or a CEO session required" } });
+    const ticket = `tk.${randomUUID()}`;
+    tickets.set(ticket, Date.now() + 60_000);
+    return out(200, { ticket, expires_at: new Date(Date.now() + 60_000).toISOString() });
+  }
   if (req.method === "POST" && url.pathname === "/api/auth/logout") {
     const b = bearerOf(req);
-    if (!validSession(b)) return out(401, { error: { code: "unauthorized", message: "no session" } });
-    sessions.delete(b);
+    sessions.delete(b); // as the gateway: always 200, known session or not
     return out(200, { ok: true });
   }
   const ad = req.method === "GET" && /^\/assets\/ad_([0-9]{1,6})\.svg$/.exec(url.pathname);
@@ -396,7 +413,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/api/tts") {
     const purpose = body && body.purpose;
     if (purpose !== "ceo" && purpose !== "talk") return out(400, { error: { code: "bad_input", message: "purpose" } });
-    if (purpose === "ceo" && !isAdmin(req, url)) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
+    if (purpose === "ceo" && !isAdmin(req)) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
     let text = "";
     if (purpose === "ceo") text = typeof body.text === "string" ? body.text : "";
     else {
@@ -415,12 +432,18 @@ const server = createServer(async (req, res) => {
   }
   // The theater token reads (state, events, stream), so the projector can be checked against this mock.
   const readToken = url.searchParams.get("token");
-  if (req.method === "GET" && (readToken === THEATER || validSession(readToken)) && req.headers.authorization === undefined) {
-    if (url.pathname === "/api/state") return out(200, validSession(readToken) ? state() : { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
+  // Theater reads: the theater token as ?token=, or the CEO (Bearer, or a session as ?token=) with the full view.
+  const ticket = url.pathname === "/api/events/stream" ? url.searchParams.get("ticket") : null;
+  if (ticket !== null && !redeemTicket(ticket)) return out(401, { error: { code: "unauthorized", message: "stream ticket expired or used; get a new one from POST /api/stream-ticket" } });
+  const ceoRead = ticket !== null || isAdmin(req);
+  if (req.method === "GET" && (ceoRead || (readToken === THEATER && req.headers.authorization === undefined))) {
+    if (url.pathname === "/api/state" && !ceoRead) return out(200, { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
     if (url.pathname === "/api/events/stream") {
       let after = Number(url.searchParams.get("after_id") || 0);
-      console.log(JSON.stringify({ t: Date.now(), method: "GET", path: "/api/events/stream", body: { reader: validSession(readToken) ? "session" : "theater", after }, status: 200 }));
+      const reader = ticket !== null ? "ticket" : bearerOf(req) ? "bearer" : validSession(readToken) ? "SESSION-IN-URL" : "theater";
+      console.log(JSON.stringify({ t: Date.now(), method: "GET", path: "/api/events/stream", body: { reader, token_in_url: Boolean(readToken), after }, status: 200 }));
       res.writeHead(200, { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+      res.write(": open\n\n"); // as the gateway's heartbeat: the browser sees the stream open at once
       const pump = () => {
         for (const e of events.filter((x) => x.id > after)) {
           res.write(`id: ${e.id}\ndata: ${JSON.stringify(e)}\n\n`);
@@ -433,7 +456,7 @@ const server = createServer(async (req, res) => {
       return;
     }
   }
-  if (!isAdmin(req, url) && !(req.method === "GET" && url.pathname === "/api/events" && readToken === THEATER)) {
+  if (!isAdmin(req) && !(req.method === "GET" && url.pathname === "/api/events" && readToken === THEATER)) {
     return out(401, { error: { code: "unauthorized", message: "admin token required" } });
   }
   if (body === null) return out(400, { error: { code: "bad_json", message: "bad JSON" } });

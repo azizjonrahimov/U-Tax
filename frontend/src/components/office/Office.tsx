@@ -11,24 +11,15 @@ import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
 import { logout, useSessionToken } from "@/ceo/session";
+import { followDelay, followTarget, initialView, type View } from "@/office/follow";
 import { SEAT_NAME, SEAT_ROLE, SEATS, type Seat, type Workspace, type WsStep } from "@/office/workspace";
 import "./office.css";
 
-type View = "overview" | Seat;
-/** Auto-follow stays on a department at least this long before moving to the next one that acted. */
-const DWELL_MS = 6000;
 /** A desk counts as working while its last step is this recent (wall clock, live feed). */
 const WORKING_MS = 20_000;
-/** A step older than this (by its log time) is history, not something to follow. */
-const FOLLOW_FRESH_MS = 15_000;
 
 const seatColor = (seat: Seat) => `var(--seat-${seat})`;
 
-function viewFromUrl(): View {
-  if (typeof window === "undefined") return "overview";
-  const d = new URLSearchParams(window.location.search).get("d");
-  return d && (SEATS as readonly string[]).includes(d) ? (d as Seat) : "overview";
-}
 
 export function Office() {
   const session = useSessionToken();
@@ -45,11 +36,9 @@ export function Office() {
     lastSwitch.current = Date.now();
     const t = setTimeout(() => {
       setNow(Date.now());
-      const v = viewFromUrl();
-      // A replay or fixture (?source=) plays on the Overview's theater only: the desks follow the
-      // live firm, so nothing should pull the view away from it.
-      if (v !== "overview" || new URLSearchParams(window.location.search).has("source")) setFollow(false);
-      if (v !== "overview") setView(v);
+      const init = initialView(window.location.search);
+      if (!init.follow) setFollow(false);
+      if (init.view !== "overview") setView(init.view);
     }, 0);
     const tick = setInterval(() => setNow(Date.now()), 4000);
     return () => {
@@ -61,11 +50,9 @@ export function Office() {
   // Auto-follow: open the department that just acted, no faster than one every DWELL_MS. Only a
   // real, recent agent step counts: the log folded on open (the initial replay) never moves the view.
   useEffect(() => {
-    if (!follow || !live) return;
-    const target = live.seat;
-    const at = Date.parse(office.desks[target].steps[0]?.ts ?? "");
-    if (!Number.isFinite(at) || Math.abs(Date.now() - at) > FOLLOW_FRESH_MS) return;
-    const wait = Math.max(0, lastSwitch.current + DWELL_MS - Date.now());
+    const target = followTarget(follow, live, office, Date.now());
+    if (!target) return;
+    const wait = followDelay(lastSwitch.current, Date.now());
     const t = setTimeout(() => {
       setView((v) => {
         if (v === target) return v;
@@ -74,7 +61,7 @@ export function Office() {
       });
     }, wait);
     return () => clearTimeout(t);
-  }, [follow, live, office.desks]);
+  }, [follow, live, office]);
 
   const open = useCallback((v: View) => {
     setFollow(false);

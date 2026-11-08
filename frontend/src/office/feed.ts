@@ -11,6 +11,7 @@ import type { UTaxEvent } from "@/theater/events";
 import { assetAllowed, eventsUrl, numbersFromState, originOf, parseAssetHosts, reconnectDelayMs, seedFromState, stateUrl, streamUrl, type Endpoints } from "@/theater/live";
 import type { FirmNumbers } from "@/theater/rail";
 import { appendEvents, startScript, type ScriptCursor } from "@/theater/script";
+import { writeSession } from "@/ceo/session";
 import { applyEvent, emptyOffice, type Office, type Seat, type StepCtx } from "./workspace";
 
 const GATEWAY: Endpoints = { base: API_URL, token: process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "" };
@@ -32,16 +33,43 @@ export interface Feed {
   live: { seat: Seat; key: string } | null;
 }
 
-async function fetchJson(url: string): Promise<unknown> {
-  const r = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
+/** The gateway refused the CEO session: it was revoked, or the gateway's secret changed. */
+class DeadSession extends Error {}
+
+async function fetchJson(url: string, bearer: string | null): Promise<unknown> {
+  const r = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(10_000), ...(bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : {}) });
+  if (bearer && (r.status === 401 || r.status === 403)) throw new DeadSession();
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
 
 /**
- * The firm's live feed. Signed in (D33), the CEO's session is the read token (`?token=`, since an
- * EventSource can't send a header), so the desks see what the console sees; otherwise the theater
- * token. A change of session reconnects.
+ * A 60 s single-use stream ticket (contract task 36/39): the CEO's session is never in a URL, so
+ * a signed-in EventSource opens with `?ticket=`. Throws DeadSession when the session is refused.
+ */
+async function streamTicket(session: string): Promise<string> {
+  const r = await fetch(`${API_URL}/api/stream-ticket`, { method: "POST", headers: { Authorization: `Bearer ${session}` }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
+  if (r.status === 401 || r.status === 403) throw new DeadSession();
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const { ticket } = (await r.json()) as { ticket?: unknown };
+  if (typeof ticket !== "string" || !ticket) throw new Error("no ticket");
+  return ticket;
+}
+
+/** The stream URL with a ticket (and never a session). */
+export function ticketStreamUrl(base: string, afterId: number, ticket: string): string {
+  const u = new URL(`${base}/api/events/stream`);
+  u.searchParams.set("after_id", String(Math.max(0, afterId)));
+  u.searchParams.set("ticket", ticket);
+  return u.toString();
+}
+
+/**
+ * The firm's live feed. Signed in (D33), state and events carry the CEO's session as a Bearer
+ * header and the stream opens with a fresh single-use ticket each time (never a session in a URL),
+ * so the desks see what the console sees; otherwise the theater token as `?token=`. A change of
+ * session reconnects; a session the gateway refuses signs this tab out, and the feed falls back
+ * to the theater token.
  */
 export function useFirmFeed(session: string | null = null): Feed {
   const [office, setOffice] = useState<Office>(emptyOffice);
@@ -52,7 +80,8 @@ export function useFirmFeed(session: string | null = null): Feed {
 
   useEffect(() => {
     if (!HAS_GATEWAY) return;
-    const ep: Endpoints = session ? { base: API_URL, token: session } : GATEWAY;
+    // Signed in: no query token at all (the session rides the header).
+    const ep: Endpoints = session ? { base: API_URL, token: "" } : GATEWAY;
     let alive = true;
     let es: EventSource | null = null;
     let cursor: ScriptCursor = startScript();
@@ -61,7 +90,8 @@ export function useFirmFeed(session: string | null = null): Feed {
     let attempt = 0;
 
     const ctx: StepCtx = {
-      name: (id) => (id !== null && Object.hasOwn(cursor.state.caseNames, id) ? cursor.state.caseNames[id] : "a new client"),
+      // A case flagged as a possible injection is never named by its mail again.
+      name: (id) => (id !== null && flagged.has(id) ? "a flagged client" : id !== null && Object.hasOwn(cursor.state.caseNames, id) ? cursor.state.caseNames[id] : "a new client"),
       flagged: (id) => id !== null && flagged.has(id),
       image: (url) => (typeof url === "string" && assetAllowed(url, HOSTS, GATEWAY_ORIGIN) ? url : undefined),
     };
@@ -79,38 +109,72 @@ export function useFirmFeed(session: string | null = null): Feed {
       setOffice(o);
     };
 
+    /** The session is dead at the gateway: sign this tab out (the effect re-runs with the theater token). */
+    const dead = () => {
+      if (!alive) return;
+      alive = false;
+      writeSession(null);
+    };
+
     const pollState = async () => {
       try {
-        const s = await fetchJson(stateUrl(ep));
+        const s = await fetchJson(stateUrl(ep), session);
         if (!alive) return;
         const n = numbersFromState(s);
         if (n) setNumbers(n);
         return s;
-      } catch {
+      } catch (e) {
+        if (e instanceof DeadSession) dead();
         return null;
       }
     };
 
-    const connect = (after: number) => {
-      es?.close();
-      es = new EventSource(streamUrl(ep, after));
-      es.onopen = () => {
+    const onMessage = (data: string) => {
+      try {
+        fold([JSON.parse(data) as UTaxEvent], true);
+      } catch {
+        /* a malformed message is skipped, as on the theater */
+      }
+    };
+    const retryLater = () => {
+      if (!alive) return;
+      setStatus("reconnecting");
+      retry = setTimeout(() => alive && connect(cursor.lastId), reconnectDelayMs(attempt++));
+    };
+
+    const wire = (src: EventSource) => {
+      src.onopen = () => {
         attempt = 0;
         if (alive) setStatus("live");
       };
-      es.onmessage = (msg) => {
-        try {
-          fold([JSON.parse(msg.data) as UTaxEvent], true);
-        } catch {
-          /* a malformed message is skipped, as on the theater */
-        }
+      src.onmessage = (msg) => onMessage(msg.data);
+      // Closed at once: the browser's own retry would reuse a spent ticket (401). A fresh one
+      // (or the theater token again) reopens from the last event seen.
+      src.onerror = () => {
+        src.close();
+        retryLater();
       };
-      es.onerror = () => {
-        es?.close();
-        if (!alive) return;
-        setStatus("reconnecting");
-        retry = setTimeout(() => alive && connect(cursor.lastId), reconnectDelayMs(attempt++));
-      };
+    };
+
+    const connect = (after: number) => {
+      es?.close();
+      es = null;
+      if (!session) {
+        es = new EventSource(streamUrl(ep, after));
+        wire(es);
+        return;
+      }
+      streamTicket(session).then(
+        (ticket) => {
+          if (!alive) return;
+          es = new EventSource(ticketStreamUrl(API_URL, after, ticket));
+          wire(es);
+        },
+        (e) => {
+          if (e instanceof DeadSession) dead();
+          else retryLater();
+        },
+      );
     };
 
     (async () => {
@@ -119,16 +183,19 @@ export function useFirmFeed(session: string | null = null): Feed {
       const seed = seedFromState(s);
       for (const c of seed.cases) if (c.flagged) flagged.add(c.caseId);
       cursor = startScript({ caseNames: seed.caseNames });
-      // A new read token (signed in or out) starts the desks over: the lookback is folded once.
+      // A new read token (signed in or out) starts the desks over: the lookback is folded once, and
+      // nothing from the old connection may arm auto-follow.
       officeRef.current = emptyOffice();
       setOffice(officeRef.current);
+      setLive(null);
       const last = seed.lastId ?? 0;
       if (last > 0) {
         try {
-          const page = await fetchJson(eventsUrl(ep, Math.max(0, last - LOOKBACK), LOOKBACK));
+          const page = await fetchJson(eventsUrl(ep, Math.max(0, last - LOOKBACK), LOOKBACK), session);
           const data = (page as { data?: unknown }).data;
           if (alive && Array.isArray(data)) fold((data as UTaxEvent[]).filter((e) => typeof e?.id === "number" && e.id <= last));
-        } catch {
+        } catch (e) {
+          if (e instanceof DeadSession) return dead();
           /* no history: the desks fill from the stream */
         }
       }

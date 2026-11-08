@@ -91,3 +91,68 @@ describe("D33 sign-in", () => {
     for (const bad of ["https://evil.example", "//evil.example", "/\\evil.example", "ceo"]) expect(nextPath(bad)).toBe("/office");
   });
 });
+
+describe("D33 review: sign-in edges", () => {
+  it("never follows a path the URL parser turns into another site", () => {
+    for (const bad of ["/\t/evil.example", "/\n/evil.example", "/\r/evil.example", "/\t\evil.example", " //evil.example", "/\u0000/evil.example"]) {
+      expect(nextPath(bad)).toBe("/office");
+    }
+    expect(nextPath(new URLSearchParams("next=/%09/evil.example").get("next"))).toBe("/office");
+    expect(nextPath("/ceo?x=1#a")).toBe("/ceo?x=1#a");
+    expect(nextPath("/office?d=tax")).toBe("/office?d=tax");
+  });
+
+  it("a cached session expires on the clock, without a storage change", () => {
+    const t = Date.now();
+    writeSession({ session: "s.t", expiresAt: t + 10_000 });
+    const a = readSession(t + 9_999);
+    expect(a?.session).toBe("s.t");
+    expect(readSession(t + 9_999)).toBe(a); // a stable snapshot for React
+    expect(readSession(t + 10_000)).toBeNull();
+    store.setItem(SESSION_KEY, JSON.stringify({ session: "s.u", expiresAt: t + 20_000 }));
+    expect(readSession(t + 10_001)?.session).toBe("s.u"); // a storage change is re-read
+  });
+
+  it("with storage off, the session lives in memory until sign-out", () => {
+    delete g.sessionStorage;
+    writeSession({ session: "s.mem", expiresAt: 9e15 });
+    expect(readSession()?.session).toBe("s.mem");
+    writeSession(null);
+    expect(readSession()).toBeNull();
+  });
+
+  it("a session that is already over, or has no usable expiry, is not a sign-in, and nothing is stored", async () => {
+    for (const body of [{ session: "s", expires_at: "2000-01-01T00:00:00Z" }, { session: "s" }, { session: "s", expires_at: "soon" }, { session: 5, expires_at: "2099-01-01T00:00:00Z" }]) {
+      const f = (async () => json(200, body)) as unknown as typeof fetch;
+      expect((await login("a@b.c", "x", f)).ok).toBe(false);
+      expect(readSession()).toBeNull();
+    }
+    expect(loginMessage(400, "bad_input")).toMatch(/Enter your email/);
+  });
+
+  it("a good login stores only the session: no email or password anywhere", async () => {
+    const f = (async () => json(200, { session: "s.k", expires_at: "2099-01-01T00:00:00Z" })) as unknown as typeof fetch;
+    await login("ceo@u-tax.test", "hunter2-secret", f);
+    expect([...store.m.keys()]).toEqual([SESSION_KEY]);
+    expect(JSON.stringify([...store.m.values()])).not.toMatch(/hunter2|ceo@u-tax/);
+  });
+
+  it("logout without a session calls nothing; a failed revoke still signs out quietly, with keepalive", async () => {
+    let n = 0;
+    await logout((async () => {
+      n++;
+      return json(200, {});
+    }) as unknown as typeof fetch);
+    expect(n).toBe(0);
+    writeSession({ session: "s.x", expiresAt: Date.now() + 60_000 });
+    let init: RequestInit | undefined;
+    await expect(
+      logout((async (_u: string, i?: RequestInit) => {
+        init = i;
+        throw new TypeError("down");
+      }) as unknown as typeof fetch),
+    ).resolves.toBeUndefined();
+    expect(init?.keepalive).toBe(true);
+    expect(readSession()).toBeNull();
+  });
+});
