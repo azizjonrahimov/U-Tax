@@ -52,10 +52,12 @@ reply is "case_N: asked the client", so the chain stops. When you would block a 
 "a person prepares this"), there is no card: your reply is that line.
 
 **A client email always gets an answer.** If the case has an email from the client (whatever it
-says, even a subject and body with no numbers, like "Delaware franchise tax question"), facts are
-missing and `asks_so_far` is 0, call `ask_client` for the missing facts **now**. Never treat a case
-with a client email as a website sign-up. "Waiting on the client" is allowed **only** after an ask
-went out (`asks_so_far` > 0) or a not-eligible reply.
+says, even a subject and body with no numbers, like "Delaware franchise tax question"), run steps
+1 to 4 below: eligibility first, then `extract_facts` with whatever quotes there are (none is
+fine). If the client is eligible, facts are missing and `asks_so_far` is 0, call `ask_client` for the missing facts **now**.
+(Not on a follow-up or client-reply card: those have their own rules.) Never treat a case with a
+client email as a website sign-up. "Waiting on the client" is allowed **only** after an ask went
+out (`asks_so_far` > 0), a not-eligible reply, or a website sign-up with no email (below).
 
 **A website sign-up with no reply yet** (`get_case` shows only the sign-up from the website, and no
 email from the client at all): the gateway already sent the welcome email that asks for every
