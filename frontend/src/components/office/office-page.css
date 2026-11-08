@@ -1,0 +1,138 @@
+/* D41 F46: the /office Overview, from docs/designs/inside/office-prototype.html <style>, verbatim, scoped under .ox.
+   Scoping: :root and html,body -> .ox; .app -> .ox.app; every other selector -> .ox <selector>.
+   Global resets (*, button) and the sample cursors (.cur) are under :where(.ox), zero specificity, so the theater's
+   own rules (speed-scaled cursors, the docked CEO panel's buttons) always win. Numbers unchanged. */
+.ox{
+  --bg:#050505; --panel:rgba(18,20,16,.78); --panel-2:#13150F; --line:rgba(255,255,255,.08); --line-2:rgba(255,255,255,.14);
+  --text:#F2F3EE; --dim:#A1A39B; --faint:#7A7C73; --lime:#BEF243; --on-lime:#0B0D06;
+  --cos:#FF4D3D; --intake:#4DA3FF; --tax:#FFB547; --qa:#3DDC84; --acct:#C77DFF; --mkt:#FF6FB5; --hr:#2EE6D6;
+  --r:14px; --pill:999px;
+  --sans:"Geist",system-ui,sans-serif; --mono:"Geist Mono",ui-monospace,monospace; --serif:"Instrument Serif",Georgia,serif; --tmono:"JetBrains Mono",monospace;
+}
+:where(.ox) *{box-sizing:border-box;margin:0;padding:0}
+.ox{height:100%;background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);-webkit-font-smoothing:antialiased;overflow:hidden}
+:where(.ox) button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+.office.app{display:grid;grid-template-columns:248px minmax(0,1fr);height:100vh}
+/* sidebar */
+.ox .side{border-right:1px solid var(--line);padding:18px 14px;display:flex;flex-direction:column;gap:4px;background:linear-gradient(#070807,#050505)}
+.ox .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:17px;margin:0 6px 16px}
+.ox .mark{width:30px;height:30px;border-radius:9px;background:var(--lime);color:var(--on-lime);display:grid;place-items:center;font-weight:700}
+.ox .brand small{font:12px var(--mono);color:var(--faint);font-weight:400}
+.ox .ov{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:rgba(190,242,67,.08);box-shadow:inset 2px 0 0 var(--lime);font-weight:500;margin-bottom:10px}
+.ox .ov svg{width:18px;height:18px}
+.ox .ov span{margin-left:auto;font:11.5px var(--mono);color:var(--faint)}
+.ox .side h6{font:500 11px var(--mono);color:var(--faint);margin:8px 8px 6px}
+.ox .dept{display:grid;grid-template-columns:30px 1fr auto;align-items:center;gap:10px;padding:7px 8px;border-radius:10px;color:var(--dim);transition:background .15s}
+.ox .dept:hover{background:rgba(255,255,255,.04);color:var(--text)}
+.ox .dept svg{width:30px;height:30px}
+.ox .dept b{font-weight:500;color:var(--text);font-size:13.5px;display:block}
+.ox .dept i{display:block;height:3px;border-radius:2px;background:var(--line);margin-top:4px;overflow:hidden}
+.ox .dept i::after{content:"";display:block;height:100%;width:var(--w);background:var(--c)}
+.ox .dept em{font:11.5px var(--mono);font-style:normal;color:var(--faint)}
+.ox .side .bottom{margin-top:auto;display:flex;flex-direction:column;gap:8px}
+.ox .livepill{display:flex;align-items:center;gap:8px;font:12px var(--mono);color:var(--dim);padding:0 8px}
+.ox .dot{width:7px;height:7px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime);animation:p 2s infinite}
+@keyframes p{50%{opacity:.4}}
+.ox .sbtn{text-decoration:none;color:var(--dim);display:flex;align-items:center;justify-content:center;gap:8px;height:38px;border-radius:10px;border:1px solid var(--line-2);font-size:13px;color:var(--dim)}
+.ox .sbtn:hover{color:var(--text);border-color:var(--lime)}
+/* main */
+.ox main{display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;gap:14px;padding:16px 20px;min-width:0;min-height:0}
+.ox .head{display:flex;align-items:center;gap:14px}
+.ox .head h1{font-weight:500;font-size:26px;letter-spacing:-.03em}
+.ox .head h1 em{font-family:var(--serif);font-style:italic;font-weight:400}
+.ox .head p{font:12.5px var(--mono);color:var(--faint)}
+.ox .pills{margin-left:auto;display:flex;gap:8px;align-items:center}
+.ox .pill{display:flex;align-items:center;gap:8px;font:12px var(--mono);border:1px solid var(--line-2);border-radius:var(--pill);padding:6px 12px}
+.ox .clock{font:600 13px var(--tmono);color:var(--dim);padding:0 4px}
+/* orders */
+.ox .orders{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.ox .ord{position:relative;padding:14px 16px;border-radius:var(--r);background:var(--panel);border:1px solid var(--line);min-height:128px;display:flex;flex-direction:column;gap:8px}
+.ox .ord.live{border-color:rgba(190,242,67,.45);box-shadow:0 0 0 1px rgba(190,242,67,.15),0 18px 50px -24px rgba(190,242,67,.45)}
+.ox .ord-h{display:flex;align-items:center;gap:8px;font:11.5px var(--mono);color:var(--faint)}
+.ox .ord-h .st{margin-left:auto;border-radius:var(--pill);padding:1px 8px;font-size:11px}
+.ox .st.done{color:var(--qa);background:rgba(61,220,132,.1)}
+.ox .st.run{color:var(--lime);background:rgba(190,242,67,.12)}
+.ox .st.wait{color:var(--tax);background:rgba(255,181,71,.12)}
+.ox .ord q{font-size:15.5px;font-weight:500;letter-spacing:-.01em;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;quotes:"“" "”"}
+.ox .step{display:grid;grid-template-columns:22px 1fr;gap:8px;align-items:start;font-size:13px;color:var(--dim)}
+.ox .step svg{width:22px;height:22px}
+.ox .step b{color:var(--text);font-weight:500}
+/* stage grid */
+.ox .stage{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr) minmax(0,1fr) 300px;grid-template-rows:minmax(0,1.15fr) minmax(0,1fr);gap:12px;min-height:0}
+.ox .pane{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;min-height:0;overflow:hidden;transition:border-color .3s,box-shadow .3s}
+.ox .pane.focus{border-color:var(--line-2);box-shadow:0 0 0 1px rgba(255,255,255,.04),0 24px 60px -30px rgba(0,0,0,.9)}
+.ox .ph{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line)}
+.ox .ph .ico{width:22px;height:22px;border-radius:7px;display:grid;place-items:center;background:rgba(255,255,255,.05)}
+.ox .ph .ico svg{width:13px;height:13px}
+.ox .ph b{font-weight:500;font-size:13.5px;white-space:nowrap}
+.ox .ph small{margin-left:auto;font:11px var(--mono);color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:55%}
+.ox .pb{padding:12px 14px;flex:1;min-height:0;overflow:hidden}
+.ox .empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center}
+.ox .empty svg{width:120px;height:75px;opacity:.95}
+.ox .empty b{font-weight:500;font-size:13.5px}
+.ox .empty span{font:11.5px var(--mono);color:var(--faint);max-width:220px}
+.ox .mail .msg{border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:var(--panel-2);margin-bottom:8px}
+.ox .sheet table{width:100%;border-collapse:collapse;font-size:13px}
+.ox .sheet td{padding:5px 2px;border-bottom:1px solid var(--line)}
+.ox .sheet td:first-child{color:var(--dim)}
+.ox .sheet td.v{text-align:right;font:500 13px var(--tmono);font-variant-numeric:tabular-nums}
+.ox .sheet td.win{color:var(--lime)}
+.ox .sheet td.lose{color:var(--faint);text-decoration:line-through}
+.ox .sheet .qa{display:inline-flex;margin-left:6px;font:10.5px var(--mono);color:var(--qa);border:1px solid rgba(61,220,132,.4);border-radius:5px;padding:0 5px}
+/* market */
+.ox .job{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--panel-2);display:flex;flex-direction:column;gap:10px}
+.ox .job-h{display:flex;align-items:center;gap:10px}
+.ox .job-h .ctr{width:30px;height:30px;border-radius:9px;border:1.5px dashed var(--line-2);display:grid;place-items:center;font:600 11px var(--mono);color:var(--dim)}
+.ox .job-h b{font-weight:500;font-size:13px}
+.ox .job-h span{display:block;font:11px var(--mono);color:var(--faint)}
+.ox .checks{display:flex;flex-wrap:wrap;gap:5px}
+.ox .checks span{font:10.5px var(--mono);color:var(--qa);border:1px solid rgba(61,220,132,.35);border-radius:5px;padding:1px 6px}
+.ox .pay{display:flex;align-items:center;gap:8px;font:11.5px var(--mono);color:var(--dim)}
+.ox .wallet{border:1px solid var(--line-2);border-radius:var(--pill);padding:3px 9px;white-space:nowrap}
+.ox .coin{width:16px;height:16px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#efffb8,var(--lime) 55%,#7fa61a);box-shadow:0 0 12px var(--lime);animation:fly 2.6s ease-in-out infinite}
+@keyframes fly{0%{transform:translateX(-26px);opacity:0}20%{opacity:1}80%{opacity:1}100%{transform:translateX(26px);opacity:0}}
+.ox .tx{font:11px var(--mono);color:var(--lime);text-decoration:none}
+.ox .thumb{display:block;width:100%;border-radius:8px;border:1px solid var(--line)}
+/* rail */
+.ox .rail{grid-column:4;grid-row:1/3;display:flex;flex-direction:column;gap:12px;min-height:0}
+.ox .metric{padding:14px 16px}
+.ox .metric h4{font:500 11px var(--mono);color:var(--faint);margin-bottom:8px;display:flex;justify-content:space-between}
+.ox .big{font:600 34px var(--tmono);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.ox .big.lime{color:var(--lime)}
+.ox .kv{display:flex;justify-content:space-between;font-size:12.5px;color:var(--dim);padding:5px 0;border-top:1px solid var(--line)}
+.ox .kv b{font:500 12.5px var(--tmono);color:var(--text)}
+.ox .tr{display:flex;gap:4px;margin-top:6px}
+.ox .tr i{flex:1;height:6px;border-radius:3px;background:var(--line-2)}
+.ox .tr i.on{background:var(--lime)}
+.ox .funnel{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.ox .funnel div{display:grid;grid-template-columns:78px 1fr 18px;align-items:center;gap:8px;font:11.5px var(--mono);color:var(--dim)}
+.ox .funnel i{height:8px;border-radius:4px;background:linear-gradient(90deg,var(--hr),rgba(46,230,214,.25))}
+/* bottom bar */
+.ox .bar{display:flex;align-items:center;gap:14px;padding:10px 14px;border-radius:16px;background:var(--panel);border:1px solid var(--line)}
+.ox .avs{display:flex}
+.ox .avs svg{width:28px;height:28px;margin-left:-6px;border-radius:9px;box-shadow:0 0 0 2px var(--bg)}
+.ox .avs svg:first-child{margin:0}
+.ox .bar .sum{font:500 13px var(--tmono);white-space:nowrap}
+.ox .prog{flex:1;height:4px;border-radius:3px;background:var(--line);overflow:hidden;min-width:60px}
+.ox .prog i{display:block;height:100%;width:62%;background:linear-gradient(90deg,var(--intake),var(--lime))}
+.ox .seg{display:flex;border:1px solid var(--line-2);border-radius:10px;overflow:hidden}
+.ox .seg button{padding:7px 12px;font:500 12.5px var(--tmono);color:var(--dim)}
+.ox .seg button.on{background:var(--lime);color:var(--on-lime)}
+.ox .tb{height:34px;padding:0 12px;border:1px solid var(--line-2);border-radius:10px;font-size:12.5px;color:var(--dim);display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.ox .tb:hover{color:var(--text);border-color:var(--lime)}
+.ox .tb.lime{background:var(--lime);color:var(--on-lime);border-color:var(--lime);font-weight:500}
+/* cursors */
+:where(.ox) .cur{position:fixed;left:0;top:0;pointer-events:none;z-index:20;transition:transform .7s cubic-bezier(.45,.05,.2,1)}
+:where(.ox) .cur span{position:absolute;left:14px;top:14px;font:600 10.5px var(--sans);color:#000;padding:2px 7px;border-radius:5px;white-space:nowrap;box-shadow:0 4px 14px -4px rgba(0,0,0,.6)}
+@media (prefers-reduced-motion:reduce){:where(.ox) *{animation:none!important;transition:none!important}
+}
+
+/* The prototype's rows are buttons here (keyboard and click): left-aligned, full width; the lime marks the open view. */
+.ox .ov,.ox .dept{width:100%;text-align:left}
+.ox .ov:not(.on){background:none;box-shadow:none;font-weight:400;color:var(--dim)}
+.ox .dept.on{background:rgba(190,242,67,.08);box-shadow:inset 2px 0 0 var(--lime)}
+.ox .dept.busy em{color:var(--c)}
+.ox .dept svg.pulse{animation:of-pulse .6s ease-out}
+.ox .follow-sw{display:flex;align-items:center;gap:10px;padding:0 8px;font-size:13px;color:var(--dim)}
+.ox .livepill .dot.off{background:var(--faint);box-shadow:none;animation:none}
+.ox .ov:focus-visible,.ox .dept:focus-visible,.ox .sbtn:focus-visible{outline:2px solid var(--lime);outline-offset:2px}

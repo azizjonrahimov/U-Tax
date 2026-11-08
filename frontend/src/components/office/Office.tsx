@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Theater } from "@/components/theater/Theater";
 import { DeptAvatar } from "@/components/ui/DeptAvatar";
+import { Switch } from "@/components/ui/Switch";
 import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
@@ -19,6 +20,7 @@ import { ARTIFACT_MS, current, DRAFT_MS, type Desk } from "@/office/artifact";
 import { ActivityPill, AgentNotes, ArtifactView } from "./Artifact";
 import { SEAT_NAME, SEAT_ROLE, SEATS, type Seat, type Workspace, type WsStep } from "@/office/workspace";
 import "./office.css";
+import "./office-page.css"; // D41 F46: after office.css and the theater CSS, so the prototype rules win ties
 
 /** A desk counts as working while its last step is this recent (wall clock, live feed). */
 const WORKING_MS = 20_000;
@@ -51,7 +53,7 @@ export function Office() {
       if (init.view !== "overview") setView(init.view);
       const saved = readPanel();
       // First visit: open on a wide screen only (the theater needs the room on a laptop).
-      setPanelOpen(saved ? saved.open : window.innerWidth >= 1600);
+      setPanelOpen(saved ? saved.open : false); // D41 F46: closed unless the CEO opened it
       if (saved) setPanelW(saved.width);
       setPanelReady(true);
     }, 0);
@@ -98,80 +100,66 @@ export function Office() {
   const maxSteps = Math.max(1, ...SEATS.map((s) => office.desks[s].steps.length));
 
   return (
-    <div className={`office${session ? " with-panel" : ""}`} style={SEAT_VARS}>
-      <nav className="side" aria-label="Departments">
-        <Link href="/" className="side-brand" aria-label="U-Tax home">
-          <span className="mark" aria-hidden>
-            U
-          </span>
-          <span>
+    <div className={session ? "office app with-panel" : "office app"} style={SEAT_VARS}>
+      {/* D41 F46: the prototype's sidebar DOM (office-prototype.html), classes as is; .ox scopes office-page.css to it. */}
+      <div className="ox" style={{ display: "contents" }}>
+        <nav className="side" aria-label="Departments">
+          <Link href="/" className="brand" aria-label="U-Tax home">
+            <span className="mark" aria-hidden>
+              U
+            </span>
             U-Tax <small>office</small>
-          </span>
-        </Link>
-        <ul>
-          <li>
-            <button className={`side-item${view === "overview" ? " on" : ""}`} aria-current={view === "overview" ? "page" : undefined} onClick={() => open("overview")}>
-              <svg className="side-ov" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <rect x="3.5" y="4.5" width="17" height="12" rx="2" />
-                <path d="M8 20h8M12 16.5V20" />
-              </svg>
-              <span className="side-name">Overview</span>
-              <span className="side-meta">theater</span>
-            </button>
-          </li>
-          <li className="side-h mono" aria-hidden>
-            departments · steps
-          </li>
+          </Link>
+          <button className={view === "overview" ? "ov on" : "ov"} aria-current={view === "overview" ? "page" : undefined} onClick={() => open("overview")}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true" focusable="false">
+              <rect x="3" y="4" width="18" height="13" rx="2" />
+              <path d="M8 21h8" />
+            </svg>
+            Overview<span>theater</span>
+          </button>
+          <h6 aria-hidden>departments · steps</h6>
           {SEATS.map((seat) => {
             const desk = office.desks[seat];
             const busy = working(seat);
             return (
-              <li key={seat}>
-                <button
-                  className={`side-item${view === seat ? " on" : ""}${busy ? " busy" : ""}`}
-                  aria-current={view === seat ? "page" : undefined}
-                  onClick={() => open(seat)}
-                  style={{ "--c": seatColor(seat) } as CSSProperties}
-                >
-                  {/* key: a new step re-runs the one-time pulse */}
-                  <span key={desk.steps[0]?.key ?? "idle"} className={`side-av${busy ? " pulse" : ""}`} aria-hidden>
-                    <DeptAvatar seat={seat} size={30} />
-                  </span>
-                  <span className="side-name">
-                    {SEAT_NAME[seat]}
-                    <i className="side-bar" style={{ "--w": `${Math.round((desk.steps.length / maxSteps) * 100)}%` } as CSSProperties} aria-hidden />
-                  </span>
-                  <span className="side-meta mono">{busy ? "working" : desk.steps.length ? `${desk.steps.length} steps` : "idle"}</span>
-                </button>
-              </li>
+              <button
+                key={seat}
+                className={["dept", view === seat ? "on" : "", busy ? "busy" : ""].join(" ").trim()}
+                aria-current={view === seat ? "page" : undefined}
+                onClick={() => open(seat)}
+                style={{ "--c": seatColor(seat) } as CSSProperties}
+              >
+                {/* key: a new step re-runs the one-time pulse */}
+                <DeptAvatar key={desk.steps[0]?.key ?? "idle"} seat={seat} size={30} className={busy ? "pulse" : undefined} />
+                <div>
+                  <b>{SEAT_NAME[seat]}</b>
+                  <i style={{ "--w": `${Math.round((desk.steps.length / maxSteps) * 100)}%`, "--c": seatColor(seat) } as CSSProperties} aria-hidden />
+                </div>
+                <em>{busy ? "working" : desk.steps.length || "idle"}</em>
+              </button>
             );
           })}
-          <li className="side-sep">
-            <Link href="/ceo" className="side-item">
-              <span className="side-av" aria-hidden>
-                <DeptAvatar seat="ceo" size={30} />
-              </span>
-              <span className="side-name">CEO console</span>
-              <span className="side-meta">↗</span>
+          <div className="bottom">
+            <FeedDot status={status} />
+            <div className="follow-sw">
+              <Switch on={follow} onChange={() => setFollow((f) => !f)} label="Follow live (open whichever department acts)" />
+              <span aria-hidden>{follow ? "Following live" : "Follow live"}</span>
+            </div>
+            <Link href="/ceo" className="sbtn">
+              CEO console ↗
             </Link>
-          </li>
-        </ul>
-        <div className="side-foot">
-          <FeedDot status={status} />
-          <button className={`follow${follow ? " on" : ""}`} aria-pressed={follow} onClick={() => setFollow((f) => !f)}>
-            {follow ? "Following live" : "Follow live"}
-          </button>
-          {session ? (
-            <button className="side-out" onClick={() => void logout()}>
-              Sign out
-            </button>
-          ) : (
-            <Link href="/login?next=/office" className="side-out">
-              CEO sign-in
-            </Link>
-          )}
-        </div>
-      </nav>
+            {session ? (
+              <button className="sbtn" onClick={() => void logout()}>
+                Sign out
+              </button>
+            ) : (
+              <Link href="/login?next=/office" className="sbtn">
+                CEO sign-in
+              </Link>
+            )}
+          </div>
+        </nav>
+      </div>
 
       {/* The Overview's theater brings its own <main>; a department view is one. */}
       <div className="office-main">
@@ -316,8 +304,8 @@ const SEAT_VARS = {
 function FeedDot({ status }: { status: FeedStatus }) {
   const label = { connecting: "Connecting…", live: "Live", reconnecting: "Reconnecting…", offline: "No gateway" }[status];
   return (
-    <span className={`feed ${status}`} role="status">
-      <span className="dot" aria-hidden />
+    <span className={`livepill feed ${status}`} role="status">
+      <span className={`dot${status === "live" ? "" : " off"}`} aria-hidden />
       {label}
     </span>
   );
