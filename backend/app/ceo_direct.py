@@ -6,8 +6,10 @@ internals as the console. What keeps that safe:
 
 - Ambiguous references are refused, never guessed: "latest", "it", a pronoun, or one that
   matches more than one item answers `{code: "ambiguous", candidates: [{id, summary}]}`.
-- A `set_trust RESUME` from a turn that began before the latest stop is refused
-  (`code: "stopped"`): a stop always wins over an LLM that was still mid-turn.
+- Task 41: EVERY start tool (approve, deny, decide_candidate, order, set_trust,
+  unblock_case) and an undo that would leave a pause, from a turn that began before the
+  latest stop, is refused (`code: "stopped"`): a stop always wins over an LLM that was
+  still mid-turn. Reads, pause and cancel_order stay allowed.
 - Undo: `pause` <-> RESUME, `set_trust` <-> the previous state, `order` -> `cancel_order`.
   `approve`, `deny` and `decide_candidate` can't be undone, and the summary says so.
 - The assistant's events carry the actor `ceo_assistant`; touches stay the CEO's (the
@@ -134,8 +136,9 @@ def _undo_id(gw: Any, record: dict) -> str:
 
 
 def _after_stop(gw: Any) -> None:
-    """v1.14.1: nothing the assistant started before the latest stop may undo that stop."""
-    stops, turn = gw._stops, gw._ceo_turn_stops
+    """v1.14.1 / task 41: nothing the assistant started before the latest stop may start
+    anything (the oldest open turn is the one under way)."""
+    stops, turn = gw._stops, gw.ceo_turn_stops()
     if stops and (turn is None or turn < stops):
         raise ToolRefused("stopped", "the CEO said stop after this request began; ask the "
                                      "CEO again before resuming")
@@ -154,9 +157,8 @@ def run(gw: Any, name: str, raw_args: Any, *, actor: str = ASSISTANT) -> dict:
     if tool.kind == "read":
         return {"kind": "read", "data": tool.read(gw, args)}
     check_reference(gw, name, args)
-    if name == "set_trust" and (args["state"] == "RESUME"
-                                or gw.state.trust.get(args["action_type"]) == "PAUSED"):
-        _after_stop(gw)  # RESUME (the contract), and AUTO/ASK out of a pause (the same)
+    if tool.kind == "start" and actor == ASSISTANT:
+        _after_stop(gw)  # task 41: a stop wins over every start tool of an older turn
     with acting_as(gw, actor), gw._channel("voice"):
         if tool.kind == "stop":
             target = args["action_type"]

@@ -87,6 +87,8 @@ def test_a_resume_from_a_turn_begun_before_the_stop_is_refused(mcp):
     assert ceo(client, "set_trust", action_type="social_post", state="AUTO")["code"] == "stopped"
     paused = h.gw.perform("ceo_direct", {"name": "pause", "args": {"action_type": "email"}})
     assert ceo(client, "undo", undo_id=paused.data["undo_id"])["code"] == "stopped"
+    # task 41: the talk layer collects turn 1's reply before turn 2 (a CEO asking again)
+    h.gw.perform("ceo_reply", {"conversation_id": "conv_a"})
     h.gw.perform("ceo_turn", {"conversation_id": "conv_a", "text": "now resume posting"})
     assert ceo(client, "set_trust", action_type="social_post", state="RESUME")["status"] == "done"
 
