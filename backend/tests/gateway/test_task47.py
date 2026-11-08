@@ -351,12 +351,8 @@ def test_wakes_name_the_job_its_order_and_the_failure(m, c):
     assert wakes[-1] == f"Job {late} failed: expired"
 
 
-def test_the_ttl_is_3_minutes_and_an_expired_verified_job_is_never_paid(m, c):
+def test_the_ttl_is_3_minutes(m, c):
     assert m.settings.market_job_ttl_minutes == 3
-    job_id = to_verified(m, c)
-    m.clock.advance(minutes=4)
-    m.gw.advance_market_jobs()
-    assert m.ok("get_job", job_id=job_id)["status"] == "expired" and m.wallet.paid == []
 
 
 def test_a_job_with_a_payment_in_flight_never_expires(m, c):

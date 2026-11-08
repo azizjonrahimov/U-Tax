@@ -3655,6 +3655,9 @@ class Gateway:
                 ad_image.render(kind, headline, path)
             return {"image_url": f"{self.settings.public_url}/assets/{name}",
                     "duplicate": True}
+        from app.gateway import market
+
+        market.expire_for_order(self, args.get("_order_id"))  # task 48: its own card wins
         number = self.state.ads_created + 1
         name = f"ad_{number}.png"
         ad_image.render(kind, headline, self.settings.data_dir / "assets" / name)

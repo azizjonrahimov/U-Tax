@@ -78,6 +78,20 @@ def contractor_for_token(gw: Any, token: str | None):
     return found
 
 
+def expire_for_order(gw: Any, order_id: str | None) -> list[str]:
+    """Task 48 (under the lock, from make_ad): Marketing made its own card for this CEO
+    order, so the order's open or claimed job is expired: no unused card is paid for."""
+    if not order_id or not on(gw):
+        return []
+    stale = [j for j in gw.state.jobs.values()
+             if j.get("order_id") == order_id and j["status"] in ("open", "claimed")]
+    if stale:
+        gw._emit([NewEvent(type="job.failed", actor="system",
+                           payload={"job_id": j["job_id"], "checks": j.get("checks") or [],
+                                    "reason": "expired"}) for j in stale])
+    return [j["job_id"] for j in stale]
+
+
 def _order_of(key: str) -> str | None:
     """§9.6: the CEO order a job serves, from Marketing's hire key "card:order_<id>"."""
     import re
@@ -307,14 +321,16 @@ def _fail(gw: Any, job: dict, reason: str) -> None:
         gw._market_wakes.append(f"Job {job['job_id']} failed: {reason}{_suffix(job)}")
 
 
+EXPIRING = ("open", "claimed", "submitted")  # task 48: the TTL stops once VERIFIED
+
+
 def expire(gw: Any) -> list[str]:
-    """§9.6: a job past its TTL can't be claimed, delivered or paid. A verified job with a
-    payment intent (money may have moved) is never expired: it is resolved first."""
-    intents = gw._pay_intents.load()
+    """§9.6 / task 48: a job past its TTL can't be claimed or submitted. The TTL stops once
+    the work is verified: the first contractor_pay always waits on the CEO, and an approval
+    must still pay for that work."""
     with gw._lock:
         stale = [j for j in gw.state.jobs.values()
-                 if j["status"] in ("open", "claimed", "submitted", "verified")
-                 and _expired(gw, j) and f"pay:{j['job_id']}" not in intents]
+                 if j["status"] in EXPIRING and _expired(gw, j)]
         if stale:
             gw._emit([NewEvent(type="job.failed", actor="system",
                                payload={"job_id": j["job_id"], "checks": j.get("checks") or [],
