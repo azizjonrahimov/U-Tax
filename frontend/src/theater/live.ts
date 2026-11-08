@@ -96,6 +96,13 @@ export const isAuthError = (e: unknown) => e instanceof HttpError && (e.status =
 
 const int = (v: unknown, fallback = 0) => (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : fallback);
 
+/** A testnet-token total from /api/state (number or decimal string); anything else is left out. */
+function tokenField(k: "contractor_paid_usd" | "agent_sales_usd", v: unknown): Partial<Record<typeof k, string>> {
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 1e12) return { [k]: String(v) };
+  if (typeof v === "string" && /^\d{1,12}(\.\d{1,18})?$/.test(v)) return { [k]: v };
+  return {};
+}
+
 /** GET /api/state → rail numbers. Missing or malformed fields read as zero, never as a crash. */
 export function numbersFromState(raw: unknown): FirmNumbers | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -114,6 +121,9 @@ export function numbersFromState(raw: unknown): FirmNumbers | null {
     money: {
       tax_saved_cents: int(money.tax_saved_cents),
       spent_usd: typeof money.spent_usd === "string" && /^\d+(\.\d+)?$/.test(money.spent_usd) ? money.spent_usd : "0",
+      // v1.19: the market's totals (top level per §9.1, or under money); absent = market off.
+      ...tokenField("contractor_paid_usd", s.contractor_paid_usd ?? money.contractor_paid_usd),
+      ...tokenField("agent_sales_usd", s.agent_sales_usd ?? money.agent_sales_usd),
     },
     // Theater token: counts only. "Shortlist ready" while shortlisted candidates still await a decision:
     // the gateway's own `awaiting` when it sends one; otherwise an estimate from the cumulative counts.

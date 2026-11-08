@@ -61,7 +61,37 @@ export function ArtifactView({ art, session = null, served = [] }: { art: Artifa
       return <Calc art={art} />;
     case "invite":
       return <Invite art={art} />;
+    case "job":
+      return <Job art={art} />;
   }
+}
+
+/** v1.19 (D38): an outside agent's job, step by step (testnet tokens, no real value). */
+function Job({ art }: { art: Extract<Artifact, { kind: "job" }> }) {
+  return (
+    <div className="art job">
+      <div className="sheet-file mono">Agent market · share card · testnet tokens</div>
+      <strong>{art.headline || "…"}</strong>
+      {art.price && <p className="job-price">{art.price} pathUSD to {art.contractor || "an outside agent"}</p>}
+      {art.image && (
+        // eslint-disable-next-line @next/next/no-img-element -- the gateway's own asset, rendered as given
+        <img className="job-card" src={art.image} alt="Share card made by the contractor" referrerPolicy="no-referrer" />
+      )}
+      <ol className="job-steps">
+        {art.steps.map((s, i) => (
+          <li key={i} className={s.ok === true ? "ok" : s.ok === false ? "bad" : undefined}>
+            {s.url ? (
+              <a href={s.url} target="_blank" rel="noopener noreferrer">
+                {s.text}
+              </a>
+            ) : (
+              s.text
+            )}
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
 }
 
 /** A file the CEO can save: a button while signed in, a plain chip otherwise. */

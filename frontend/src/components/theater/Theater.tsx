@@ -31,7 +31,7 @@ import { humanTouches, railFromEvents, type FirmNumbers } from "@/theater/rail";
 import { applyStep, emptyScreen, flaggedInLog, seedOrders, seedScreen, visibleOrders, type ScreenState } from "@/theater/screen";
 import { appendEvents, buildScript, startScript, type CursorStep, type Pane, type ScriptCursor } from "@/theater/script";
 import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
-import { CalendarPane, MailPane, OrdersStrip, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
+import { CalendarPane, MailPane, MarketPane, OrdersStrip, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
 import { PaneBoundary } from "./PaneBoundary";
 import "./theater.css";
 
@@ -48,6 +48,8 @@ const AGENTS: [Agent, string, string][] = [
 ];
 const SPEEDS = [1, 4, 16] as const;
 const FIXTURE_URL = "/fixtures/events.sample.jsonl";
+/** v1.19 (D38): `?market` adds the agent market's fixture events after the contract sample (rehearsal before the backend lands). */
+const MARKET_FIXTURE_URL = "/fixtures/market.sample.jsonl";
 const HAS_GATEWAY = Boolean(process.env.NEXT_PUBLIC_API_URL);
 const GATEWAY: Endpoints = { base: API_URL, token: process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "" };
 /** /api/state refresh after events land (live rail numbers), at most this often. */
@@ -375,9 +377,15 @@ export function Theater() {
 
       if (source === "fixture") {
         await loadLog(async () => {
-          const r = await fetch(FIXTURE_URL, { cache: "no-store", signal: aborter.signal });
-          if (!r.ok) throw new HttpError(r.status);
-          const { events, bad } = parseJsonl(await r.text());
+          const urls = new URLSearchParams(window.location.search).has("market") ? [FIXTURE_URL, MARKET_FIXTURE_URL] : [FIXTURE_URL];
+          const texts = await Promise.all(
+            urls.map(async (url) => {
+              const r = await fetch(url, { cache: "no-store", signal: aborter.signal });
+              if (!r.ok) throw new HttpError(r.status);
+              return r.text();
+            }),
+          );
+          const { events, bad } = parseJsonl(texts.join("\n"));
           if (bad.length) console.warn(`[theater] ${bad.length} unreadable log line(s)`, bad);
           return events;
         });
@@ -855,8 +863,10 @@ export function Theater() {
         <main data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined}>
           <div className="col left">
             <MailPane screen={screen} typed={typed} />
-            <div className="low">
+            {/* v1.19 (D38): the Market pane joins this row only once the market has a job (off: unchanged). */}
+            <div className={`low${screen.market.jobs.length ? " three" : ""}`}>
               <SocialPane screen={screen} typed={typed} />
+              <MarketPane screen={screen} />
               <PhonePane screen={screen} typed={typed} />
             </div>
           </div>

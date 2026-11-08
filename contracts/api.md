@@ -817,12 +817,14 @@ everything below.
 | `job.verified` | system | null | `job_id, checks` | checks = `[{name, ok}]` |
 | `job.failed` | system | null | `job_id, checks, reason` | reason: `checks_failed` / `expired` / `contractor_error` |
 | `payment.sent` | system | `tempo` or `local` | `job_id, contractor, amount_usd, token, tx_hash, explorer_url` | `cost_usd` = amount; status `failed` + private `unsure` on an unsure send |
-| `job.delivered` | system | null | `job_id, image_url` | image is now `/assets/ad_<n>.png` |
+| `job.delivered` | system | null | `job_id, image_url` | `image_url` is absolute: `https://<UTAX_PUBLIC_URL host>/assets/ad_<n>.png` (what `post_social` accepts) |
 | `agent.sale` | system | `tempo` or `stripe` | `amount_usd, token, tx_hash, explorer_url, payer_masked` | sell side; payer = `0x12…ab` |
 
 - `PROVIDERS += {"tempo"}`.
 - The same payment also writes `cost.booked` (`provider tempo|local`, `model "contractor:share_card"`,
-  `estimated false`), so the money panel's spend includes it. The gateway books money; no agent does.
+  `estimated false`), so the log keeps every payment. The gateway books money; no agent does.
+- **Testnet tokens are not dollars:** contractor payments count only in `contractor_paid_usd` (shown as
+  "Contractors paid (testnet)"), never in the dollar spend total or "Firm spent".
 - `public_state` adds `contractor_paid_usd` (Σ `payment.sent` ok) and `agent_sales_usd` (Σ `agent.sale`).
 
 **9.2 MCP tools (Marketing, `mkt`, only):**
@@ -860,6 +862,17 @@ everything below.
 - A payment over `MARKET_MAX_JOB_USD`, or one that would pass `MARKET_MAX_DAY_USD`, always asks.
 - Only the gateway pays, from its own tick, after the code checks pass; no agent ever holds a wallet key.
 - Testnet only: Tempo Moderato, chain 42431, token pathUSD. The tokens have no real value; say so on screen.
+
+**9.6 Wakes, expiry and posting a contractor's image** (agents A41 review):
+- Wakes to the chief of staff:
+  - On `job.delivered`: `Job job_N delivered (order_<id>)`.
+  - On `job.failed`: `Job job_N failed: <reason> (order_<id>)`.
+  - A `contractor_pay` approval wake names its type: `… (contractor_pay job_N)`.
+- `MARKET_JOB_TTL_MINUTES` defaults to **3**, matching Marketing's checks (about 9 × 20 s). A job past its TTL
+  expires and can no longer be claimed, delivered or paid.
+- **A contractor's image never posts unseen.** `post_social` with an `image_url` from a market job is ASK until
+  the CEO has approved one post with an image from that contractor. A third party's pixels are a new kind of
+  content: the format, size and headline checks are filters, not a review.
 
 ## Changelog
 
