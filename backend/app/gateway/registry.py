@@ -22,6 +22,7 @@ SPONSORS = {
 }
 
 
+
 log = logging.getLogger("utax.registry")
 
 
@@ -137,8 +138,49 @@ def _sponsor(name: str, choice: str, settings: Settings):
     return None
 
 
+def _voice_choice(settings: Settings, port: str) -> str:
+    """Task 40a: ADAPTER_TTS / ADAPTER_REALTIME / ADAPTER_STT, each from its own list."""
+    from app.gateway.settings import VOICE_CHOICES
+
+    voice = settings.adapters.get("voice", "none")
+    default = {"tts": voice, "realtime": "openai" if voice == "openai" else "none",
+               "stt": "none"}[port]  # the old one-switch setup (ADAPTER_VOICE) still works
+    choice = settings.adapters.get(port) or default
+    if choice == "local":
+        choice = "none"
+    if choice not in VOICE_CHOICES[port]:
+        raise AdapterNotReady(f"ADAPTER_{port.upper()}={choice!r} must be one of "
+                              f"{', '.join(VOICE_CHOICES[port])}")
+    return choice
+
+
+def build_realtime(settings: Settings, tts_choice: str, tts_port):
+    """None = the TTS port also mints (the same provider, as before the split)."""
+    choice = _voice_choice(settings, "realtime")
+    if choice == tts_choice or (choice == "none" and tts_port.provider is None):
+        return None
+    if choice == "openai" and settings.openai_api_key:
+        from app.gateway.adapters.openai_voice import OpenAIVoice
+
+        return OpenAIVoice(settings.openai_api_key)
+    return local.NoVoice()  # "none", or openai without a key: /api/voice/session 503s
+
+
+def build_stt(settings: Settings):
+    choice = _voice_choice(settings, "stt")
+    if choice == "openai" and settings.openai_api_key:
+        from app.gateway.adapters.openai_voice import OpenAISTT
+
+        return OpenAISTT(settings.openai_api_key)
+    if choice == "openai":
+        log.warning("ADAPTER_STT=openai without OPENAI_API_KEY: /api/stt answers 503")
+    return local.NoSTT()
+
+
 def build_port(name: str, settings: Settings):
     choice = settings.adapters.get(name, "local")
+    if name == "voice":  # task 40a: the voice port is the TTS port (ADAPTER_TTS)
+        choice = _voice_choice(settings, "tts")
     if choice in ("local", "none"):
         return _local(name, settings)
     if name == "voice" and choice == "openai":
@@ -165,9 +207,12 @@ def build_port(name: str, settings: Settings):
 
 
 def build_ports(settings: Settings) -> Ports:
-    return Ports(**{name: build_port(name, settings) for name in
-                    ("mail", "llm", "crm", "device", "scrape", "toolbuy", "voice", "calendar",
-                     "social", "pay")})
+    ports = Ports(**{name: build_port(name, settings) for name in
+                     ("mail", "llm", "crm", "device", "scrape", "toolbuy", "voice", "calendar",
+                      "social", "pay")})
+    ports.realtime = build_realtime(settings, _voice_choice(settings, "tts"), ports.voice)
+    ports.stt = build_stt(settings)
+    return ports
 
 
 def build_store(settings: Settings) -> EventStorePort:

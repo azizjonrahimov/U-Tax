@@ -54,6 +54,11 @@ MOBILERUN_RUN_USD = MOBILERUN_STEP_USD * MOBILERUN_MAX_STEPS
 # (Flash is about half a credit a character); booked with estimated: true.
 ELEVENLABS_USD_PER_1K_CHARS = Decimal("0.10")
 
+# Task 40a: OpenAI speech-to-text, per minute of audio (gpt-4o-transcribe and whisper-1 are
+# both listed at $0.006/min). UNVERIFIED against the owner's account; estimated: true.
+STT_USD_PER_MINUTE = Decimal("0.006")
+STT_MAX_SECONDS = 30  # one /api/stt call: the hold is the most a call may carry
+
 VOICE_USD = {
     "realtime": Decimal("0.30"),
     "tts": Decimal("0.02"),

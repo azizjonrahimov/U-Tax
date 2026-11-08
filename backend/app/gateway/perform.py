@@ -469,6 +469,7 @@ class Gateway:
         self._voice_pending: dict[str, int] = {}  # task 13: paid voice calls in flight
         self._voice_pending_usd = Decimal(0)
         self._tts_talk_pending = 0  # v1.10 §5c: /talk TTS characters in flight
+        self._stt_talk_pending = 0  # task 40a: /talk STT seconds in flight
         # failed wake deliveries: (message, waker, attempt, due monotonic time)
         self._wake_retries: list[tuple[str, Callable[[str], None], int, float]] = []
 
@@ -754,6 +755,60 @@ class Gateway:
                 "tokens_in": chars, "cost_usd": str(cost), "estimated": True})
         if result.status != "done":
             log.error("tts spend not booked after the call: %s", result.error)
+
+    @staticmethod
+    def _stt_usd(seconds: int) -> Decimal:
+        from app.gateway.pricing import STT_USD_PER_MINUTE
+
+        return max(STT_USD_PER_MINUTE * seconds / 60, Decimal("0.0001")).quantize(
+            Decimal("0.0001"))
+
+    def reserve_stt(self, purpose: str, seconds: int) -> str | None:
+        """Task 40a: hold an /api/stt call before the paid request, under the lock (like
+        reserve_tts). The hold is `seconds` (the most the call may carry). "budget" at
+        SPEND_CAP_USD, "unbooked" when the log can't be written, "talk_budget" when /talk's
+        STT_PUBLIC_SECONDS_PER_DAY would be passed (in-flight seconds count). A None must be
+        settled (settle_stt) with the same hold."""
+        hold = self._stt_usd(seconds)
+        cap = self.settings.spend_cap_usd
+        with self._lock:
+            if cap is not None and self.state.spent_usd() + self._voice_pending_usd + hold > cap:
+                return "budget"
+            try:
+                self.store.ensure_writable()
+            except EventWriteError as err:
+                log.warning("stt refused, spend can't be booked: %s", err)
+                return "unbooked"
+            if purpose == "talk":
+                day = iso_ts(self._now())[:10]
+                used = self.state.stt_talk_seconds_by_day.get(day, 0) + self._stt_talk_pending
+                if used + seconds > self.settings.stt_public_seconds_per_day:
+                    return "talk_budget"
+                self._stt_talk_pending += seconds
+            self._voice_pending["stt"] = self._voice_pending.get("stt", 0) + 1
+            self._voice_pending_usd += hold
+        return None
+
+    def settle_stt(self, purpose: str, held: int, seconds: int | None, model: str, *,
+                   ok: bool) -> None:
+        """Release a reserve_stt hold of `held` seconds; when the provider answered, book
+        `seconds` (the provider's measure, else the caller's) as cost.booked, seconds in
+        tokens_in (/talk's daily budget reads them)."""
+        with self._lock:
+            if purpose == "talk":
+                self._stt_talk_pending = max(0, self._stt_talk_pending - held)
+            self._voice_pending["stt"] = max(0, self._voice_pending.get("stt", 0) - 1)
+            self._voice_pending_usd = max(Decimal(0),
+                                          self._voice_pending_usd - self._stt_usd(held))
+            if not ok:
+                return
+            booked = max(1, int(seconds if seconds is not None else held))
+            result = self.perform("book_spend", {
+                "provider": "openai", "model": f"stt:{purpose}:{model}"[:120],
+                "tokens_in": booked, "cost_usd": str(self._stt_usd(booked)),
+                "estimated": True})
+        if result.status != "done":
+            log.error("stt spend not booked after the call: %s", result.error)
 
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The

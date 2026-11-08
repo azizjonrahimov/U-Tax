@@ -450,6 +450,21 @@ the tool names, kinds and args are fixed here:
   The confirm grammar and the echo guard (v1.8.1/v1.8.4) apply to that path too: the mic is
   off while TTS audio plays, plus an 800 ms tail.
 
+- v1.16.1 (task 40a, D36): `POST /api/stt?purpose=ceo|talk&seconds=<0-30>`.
+  - The body is the recorded audio itself: `Content-Type` audio/webm|ogg|wav|mp4|mpeg|flac, ≤ 1 MB,
+    one utterance ≤ 30 s. → `200 {"text": "..."}`.
+  - `purpose: "ceo"` needs the admin bearer. `purpose: "talk"` is public: /talk's Send per-IP limits in
+    their own bucket, plus `STT_PUBLIC_SECONDS_PER_DAY` (default 7200) across all visitors.
+  - `seconds` is the recording's length; when it's missing, 30 is held and booked.
+  - Errors: `400 bad_input`, `401`, `413 too_large`, `415 bad_input` (not audio), `429 rate_limited`, and
+    `503 voice_unavailable` (no STT, no key, the spend cap, or an outage: use the browser recognizer).
+  - Booked as `cost.booked`, model `stt:<purpose>:<model>`, seconds in `tokens_in`, estimated.
+- Voice switches (v1.16.1):
+  - `ADAPTER_TTS` = elevenlabs|openai|none (default `ADAPTER_VOICE`) speaks /api/tts and the brief.
+  - `ADAPTER_REALTIME` = openai|none (default openai only when `ADAPTER_VOICE=openai`) mints
+    /api/voice/session.
+  - `ADAPTER_STT` = openai|none (default none) serves /api/stt.
+
 ## 6. MCP tools for Naïve agents
 
 Served at **`POST /mcp/<actor>`** (one MCP endpoint per agent seat: `/mcp/cos`, `/mcp/intake`,
@@ -717,6 +732,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.16.1 (2026-11-08, task 40a, D36): voice ports split (ADAPTER_TTS/REALTIME/STT); POST /api/stt (raw audio body) on OpenAI gpt-4o-transcribe.
 
 - v1.16 (2026-11-08, backend 36/39 + frontend D32/D33): session transport (Bearer only, stream tickets); the product shell routes.
 

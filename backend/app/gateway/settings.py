@@ -13,6 +13,11 @@ REPO_ROOT = BACKEND_DIR.parent
 PORT_NAMES = ("mail", "llm", "crm", "device", "scrape", "toolbuy", "voice", "calendar",
               "social", "pay")
 DEFAULT_ADAPTERS = {name: "local" for name in PORT_NAMES} | {"voice": "none", "pay": "none"}
+# task 40a (D36): the voice ports split. ADAPTER_VOICE keeps working as the TTS default;
+# Realtime defaults to openai only when ADAPTER_VOICE=openai (the old one-switch setup).
+VOICE_PORTS = ("tts", "realtime", "stt")
+VOICE_CHOICES = {"tts": ("elevenlabs", "openai", "none"), "realtime": ("openai", "none"),
+                 "stt": ("openai", "none")}
 
 
 def _env(name: str, default: str = "") -> str:
@@ -43,6 +48,7 @@ class Settings:
     elevenlabs_voice_id: str = "EXAVITQu4vr4xnSDxMaL"
     elevenlabs_model: str = "eleven_flash_v2_5"
     tts_public_chars_per_day: int = 200000
+    stt_public_seconds_per_day: int = 7200  # task 40a: /talk's daily speech-to-text budget
     talk_phrases_path: Path = REPO_ROOT / "naive" / "prompts" / "talk-phrases.json"
     cap_per_hour: int = 10
     # task 13: /talk cases a UTC day before "at capacity"; None = 50, or 200 in event mode
@@ -96,6 +102,11 @@ class Settings:
             value = _env(f"ADAPTER_{name.upper()}")
             if value:
                 adapters[name] = value.lower()
+        voice = adapters["voice"]
+        adapters["tts"] = (_env("ADAPTER_TTS") or voice).lower()
+        adapters["realtime"] = (_env("ADAPTER_REALTIME")
+                                or ("openai" if voice == "openai" else "none")).lower()
+        adapters["stt"] = (_env("ADAPTER_STT") or "none").lower()
         spend_cap = _env("SPEND_CAP_USD")
         tokens = {actor: _env(f"UTAX_TOOL_TOKEN_{actor.upper()}")
                   for actor in ("cos", "intake", "tax", "qa", "acct", "mkt", "hr",
@@ -126,6 +137,7 @@ class Settings:
             elevenlabs_voice_id=_env("ELEVENLABS_VOICE_ID") or "EXAVITQu4vr4xnSDxMaL",
             elevenlabs_model=_env("ELEVENLABS_MODEL") or "eleven_flash_v2_5",
             tts_public_chars_per_day=int(_env("TTS_PUBLIC_CHARS_PER_DAY") or 200000),
+            stt_public_seconds_per_day=int(_env("STT_PUBLIC_SECONDS_PER_DAY") or 7200),
             talk_phrases_path=Path(_env("UTAX_TALK_PHRASES")
                                    or REPO_ROOT / "naive" / "prompts" / "talk-phrases.json"),
             cap_per_hour=int(_env("CAP_PER_HOUR") or 10),

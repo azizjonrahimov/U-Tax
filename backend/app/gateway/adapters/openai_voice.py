@@ -23,6 +23,7 @@ from app.gateway.ports import (
     PortError,
     RateLimited,
     Rejected,
+    Transcript,
     Unavailable,
     VoiceSession,
 )
@@ -95,7 +96,7 @@ class OpenAIVoice:
         return VoiceSession(client_secret=value, model=model, expires_at=expires_at,
                             realtime_url=REALTIME_SDP_URL.format(model=quote(model, safe="")))
 
-    def speak(self, text: str) -> bytes:
+    def speak(self, text: str) -> bytes:  # (TTS: ADAPTER_TTS=openai)
         try:
             response = self._http.post("/audio/speech", json={
                 "model": self.tts_model, "voice": self.tts_voice, "input": text[:4000],
@@ -105,3 +106,70 @@ class OpenAIVoice:
         if not response.is_success:
             raise _map_error(response)
         return response.content
+
+
+# ------------------------------------------------------------------ task 40a: STT
+
+# file extension per audio type: OpenAI reads the format from the upload's file name
+# (flac, mp3, mp4, mpeg, mpga, m4a, ogg, wav, webm)
+STT_TYPES = {"audio/webm": "webm", "audio/ogg": "ogg", "audio/wav": "wav",
+             "audio/x-wav": "wav", "audio/wave": "wav", "audio/mpeg": "mp3",
+             "audio/mp3": "mp3", "audio/mp4": "mp4", "audio/m4a": "m4a",
+             "audio/x-m4a": "m4a", "audio/aac": "m4a", "audio/flac": "flac",
+             "audio/x-flac": "flac"}
+STT_FALLBACK = "whisper-1"
+
+
+class OpenAISTT:
+    """POST /v1/audio/transcriptions (multipart: file, model, response_format=json) ->
+    {"text", "usage"?}. gpt-4o-transcribe first (OPENAI_STT_MODEL); a model the key can't
+    use (a 400/404 naming the model) is retried once on whisper-1. usage.seconds (whisper's
+    `duration` usage) is passed on when the answer has it, for booking."""
+
+    provider = "openai"
+
+    def __init__(self, api_key: str, *, transport: httpx.BaseTransport | None = None,
+                 timeout: float = 30.0) -> None:
+        if not api_key:
+            raise NotConfigured("stt_unavailable: no OPENAI_API_KEY")
+        self.model = os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe")
+        self.language = os.environ.get("OPENAI_STT_LANGUAGE", "en")  # "" = auto-detect
+        self._http = httpx.Client(base_url=API, timeout=httpx.Timeout(timeout, connect=5.0),
+                                  transport=transport,
+                                  headers={"Authorization": f"Bearer {api_key}"})
+
+    def __repr__(self) -> str:  # never show the key
+        return f"OpenAISTT(model={self.model!r})"
+
+    def _post(self, model: str, audio: bytes, content_type: str) -> httpx.Response:
+        ext = STT_TYPES.get(content_type, "webm")
+        data = {"model": model, "response_format": "json"}
+        if self.language:
+            data["language"] = self.language
+        try:
+            return self._http.post("/audio/transcriptions", data=data,
+                                   files={"file": (f"speech.{ext}", audio, content_type)})
+        except httpx.TransportError as exc:
+            raise Unavailable(f"openai unreachable: {exc}") from exc
+
+    def transcribe(self, audio: bytes, content_type: str) -> Transcript:
+        model = self.model
+        response = self._post(model, audio, content_type)
+        if (response.status_code in (400, 404) and model != STT_FALLBACK
+                and "model" in response.text.lower()):
+            model = STT_FALLBACK  # the key can't use the newer model: whisper-1 instead
+            response = self._post(model, audio, content_type)
+        if not response.is_success:
+            raise _map_error(response)
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise Rejected("openai answered a transcript that isn't JSON") from exc
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str):
+            raise Rejected("openai returned no transcript text")
+        usage = body.get("usage") if isinstance(body.get("usage"), dict) else {}
+        seconds = usage.get("seconds") if usage.get("type") == "duration" else None
+        return Transcript(text=text.strip(), model=model,
+                          seconds=float(seconds) if isinstance(seconds, (int, float))
+                          and not isinstance(seconds, bool) else None)

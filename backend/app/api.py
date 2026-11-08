@@ -35,6 +35,7 @@ log = logging.getLogger("utax.api")
 
 HEARTBEAT_SECONDS = 15.0
 VOICE_MAX_BYTES = 1_000_000  # task 13: POST /api/voice body cap (200 turns of CJK fit)
+STT_MAX_BYTES = 1_000_000  # task 40a: POST /api/stt audio cap (30 s of 16 kHz WAV fits)
 # (per-IP, global) per minute, keyed by PUBLIC_MODE == "event"
 MINT_LIMITS = {False: (20, 120), True: (60, 360)}  # POST /api/voice/session (mints)
 SEND_LIMITS = {False: (30, 180), True: (90, 540)}  # POST /api/voice (customer Send)
@@ -184,6 +185,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     signup_daily = RateLimiter(limit=10, window=86400.0)
     # v1.10 §5c: /talk's TTS has the per-IP limits of a /talk Send, in its own bucket
     tts_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
+    # task 40a: /talk's speech-to-text has the per-IP limits of a /talk Send, its own bucket
+    stt_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
     phrases_cache: dict[str, Any] = {"stamp": None, "phrases": None}
     audio_cache: dict[int, bytes] = {}  # brief text never changes: one TTS call per brief
 
@@ -436,7 +439,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if not instructions:  # never mint a general assistant on the firm's key
             log.error("voice prompt %s missing or empty; refusing to mint", prompt_path)
             raise APIError(503, "voice_unavailable", "voice is unavailable; use typed chat")
-        voice = gw().ports.voice
+        voice = gw().ports.realtime_port()  # task 40a: ADAPTER_REALTIME
         paid = voice.provider == "openai"
         # task 13: budget, the case cap and the mint cap checked, and the estimate held,
         # before the paid call; booked only if a session comes back
@@ -699,6 +702,74 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         return StreamingResponse(stream(), media_type="audio/mpeg",
                                  headers={"Cache-Control": "no-store"},
                                  background=BackgroundTask(close))
+
+    @router.post("/api/stt")
+    async def stt(request: Request, purpose: str | None = Query(None),
+                  seconds: float | None = Query(None), authorization: str | None = Header(None)):
+        """Task 40a (D36): speech-to-text. The body is the recorded audio itself (Content-Type
+        audio/webm, audio/ogg, audio/wav, audio/mp4, audio/mpeg...), at most 1 MB and 30 s.
+        purpose "ceo" (admin): the CEO console; purpose "talk" (public): /talk's per-IP
+        limits and its own daily seconds budget. -> {"text"}."""
+        from app.gateway.adapters.openai_voice import STT_TYPES
+        from app.gateway.pricing import STT_MAX_SECONDS
+
+        if purpose == "ceo":
+            require_admin(authorization)
+        elif purpose != "talk":
+            raise APIError(400, "bad_input", 'purpose must be "ceo" or "talk"')
+        content_type = (request.headers.get("content-type") or "").split(";")[0].strip().lower()
+        if content_type not in STT_TYPES:
+            raise APIError(415, "bad_input", "send the audio as the body, with an audio/* "
+                                             "Content-Type (webm, ogg, wav, mp4, mpeg, flac)")
+        if seconds is not None and not 0 < seconds <= STT_MAX_SECONDS:
+            raise APIError(400, "bad_input", f"seconds must be over 0 and at most "
+                                             f"{STT_MAX_SECONDS} (one utterance)")
+        declared = request.headers.get("content-length", "")
+        if declared.isdigit() and int(declared) > STT_MAX_BYTES:
+            raise APIError(413, "too_large", "audio over 1 MB")
+        if purpose == "talk":  # before reading the body: a flood of uploads stops here
+            _talk_limit(stt_limiter, SEND_LIMITS)
+            stt_limiter.check(_client_ip(request))
+        raw = bytearray()
+        async for chunk in request.stream():
+            raw += chunk
+            if len(raw) > STT_MAX_BYTES:
+                raise APIError(413, "too_large", "audio over 1 MB")
+        if not raw:
+            raise APIError(400, "bad_input", "no audio in the body")
+        return await asyncio.to_thread(_stt_run, purpose, bytes(raw), content_type, seconds)
+
+    def _stt_run(purpose: str, audio: bytes, content_type: str, seconds: float | None) -> dict:
+        from app.gateway.pricing import STT_MAX_SECONDS
+
+        port = gw().ports.stt
+        if port is None or port.provider is None:
+            raise APIError(503, "voice_unavailable", "no speech-to-text; use the browser's")
+        # the hold is the call's most (30 s, or the declared length rounded up); the booking
+        # is the provider's own measure when it gives one
+        held = min(STT_MAX_SECONDS, int(-(-seconds // 1))) if seconds else STT_MAX_SECONDS
+        refusal = gw().reserve_stt(purpose, held)
+        if refusal == "talk_budget":
+            raise APIError(429, "rate_limited", "today's /talk listening is spent; type instead")
+        if refusal:
+            raise APIError(503, "voice_unavailable", "listening is resting; use the browser's")
+        try:
+            heard = port.transcribe(audio, content_type)
+        except Exception as exc:  # any failure releases the hold (never leaks the budget)
+            gw().settle_stt(purpose, held, None, getattr(port, "model", "stt"), ok=False)
+            if not isinstance(exc, PortError):
+                raise
+            log.warning("stt (%s) failed: %s", purpose, exc)
+            if isinstance(exc, NotConfigured):
+                raise APIError(503, "voice_unavailable", "no speech-to-text; use the "
+                                                         "browser's") from exc
+            if exc.code == "rejected":  # the audio itself (empty, unreadable, too long)
+                raise APIError(400, "bad_input", "that audio couldn't be read") from exc
+            raise APIError(503, "voice_unavailable", "listening is unavailable; use the "
+                                                     "browser's") from exc
+        gw().settle_stt(purpose, held, round(heard.seconds) if heard.seconds else None,
+                        heard.model, ok=True)
+        return {"text": heard.text}
 
     @router.get("/api/ceo/brief")
     def ceo_brief(since_id: int = Query(0, ge=0), authorization: str | None = Header(None)):

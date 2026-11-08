@@ -288,6 +288,22 @@ class PayPort(Protocol):
     def create_link(self, amount_cents: int, label: str, key: str) -> PaymentLink: ...
 
 
+# ------------------------------------------------------------------ stt (task 40a)
+
+
+@dataclass(frozen=True)
+class Transcript:
+    text: str
+    model: str
+    seconds: float | None = None  # the provider's own measure of the audio, when it gives one
+
+
+class STTPort(Protocol):
+    provider: str | None
+
+    def transcribe(self, audio: bytes, content_type: str) -> Transcript: ...
+
+
 @dataclass
 class Ports:
     """Everything perform() can act through. The store is separate (events are special)."""
@@ -302,4 +318,11 @@ class Ports:
     calendar: CalendarPort
     social: SocialPort
     pay: PayPort
+    # task 40a: `voice` is the TTS port. `realtime` None follows `voice` (one provider for
+    # both, as before the split); `stt` None is "no speech-to-text" (503).
+    realtime: Any = None
+    stt: Any = None
     extra: dict[str, Any] = field(default_factory=dict)
+
+    def realtime_port(self) -> Any:
+        return self.voice if self.realtime is None else self.realtime
