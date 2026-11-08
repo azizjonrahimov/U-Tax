@@ -16,6 +16,7 @@
 // 13. prompts/talk-phrases.json (the only lines the public /talk voice speaks) out of step with the
 //     /talk page's questions (frontend TYPED_SCRIPT), or breaking the gateway loader's format,
 // 14. the Chief of Staff's card rules or firm rules 9 and 11 reworded, or a bad order_<id> example.
+// 15. the CEO assistant off its §5b tools, on a team or the board, or missing its safety rules.
 // Run: npm run check   (sets dummy UTAX_MCP_URL / UTAX_TOOL_TOKEN_* when none are set)
 
 import { spawnSync } from "node:child_process";
@@ -28,7 +29,7 @@ import { loadConfig, whatItCanDo } from "@usenaive-sdk/blueprints";
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const DUMMY = {
   UTAX_MCP_URL: "https://utax-check.example.com/mcp",
-  ...Object.fromEntries(["COS", "INTAKE", "TAX", "QA", "ACCT", "MKT", "HR"].map((a) => [`UTAX_TOOL_TOKEN_${a}`, `offline-check-dummy-token-${a.toLowerCase()}-0123456789abcdef`])),
+  ...Object.fromEntries(["COS", "INTAKE", "TAX", "QA", "ACCT", "MKT", "HR", "CEO"].map((a) => [`UTAX_TOOL_TOKEN_${a}`, `offline-check-dummy-token-${a.toLowerCase()}-0123456789abcdef`])),
 };
 for (const [k, v] of Object.entries(DUMMY)) process.env[k] ??= v;
 
@@ -43,7 +44,7 @@ if (!loaded.ok) {
 const config = loaded.config;
 
 const jiti = createJiti(import.meta.url);
-const { CREW, GATEWAY_TOOLS, MCP_SERVER } = await jiti.import(join(ROOT, "src", "crew.ts"));
+const { CREW, GATEWAY_TOOLS, CEO_TOOLS, MCP_SERVER, MEMBERS } = await jiti.import(join(ROOT, "src", "crew.ts"));
 const policy = await jiti.import(join(ROOT, "src", "policy.ts"));
 const DENY_ALWAYS = [...policy.ASK_BY_DEFAULT, ...policy.NATIVE_BYPASS, ...policy.ESCALATION];
 const DISCLAIMER = "Educational estimate — not tax advice";
@@ -77,14 +78,16 @@ for (const [key, seat] of Object.entries(CREW)) {
     fail(`${seat.name}: not declared in naive.config.ts`);
     continue;
   }
-  for (const t of seat.tools) if (!GATEWAY_TOOLS.includes(t)) fail(`${seat.name}: tool ${t} is not a gateway tool`);
+  // the CEO assistant's seat serves the §5b CEO registry (checked against the contract in 15)
+  const registry = key === "ceo" ? CEO_TOOLS : GATEWAY_TOOLS;
+  for (const t of seat.tools) if (!registry.includes(t)) fail(`${seat.name}: tool ${t} is not a ${key === "ceo" ? "§5b CEO" : "gateway"} tool`);
 
   // 2. exact policy
   const configs = agent.tools?.configs ?? {};
   if (agent.tools?.default_config.permission !== "deny") fail(`${seat.name}: default permission is not deny`);
   const expected = new Set([
     ...seat.tools.map((t) => `${MCP_SERVER}.${t}`),
-    ...policy.BOARD,
+    ...(key === "ceo" ? [] : policy.BOARD), // the CEO assistant is not on the board (v1.14)
     ...(key === "cos" ? policy.COORDINATOR : []),
   ]);
   const allowed = Object.entries(configs)
@@ -96,6 +99,7 @@ for (const [key, seat] of Object.entries(CREW)) {
   if (missing.length) fail(`${seat.name}: missing tools: ${missing}`);
   for (const t of DENY_ALWAYS) if (configs[t]?.permission !== "deny") fail(`${seat.name}: ${t} is not denied by name`);
   if (key !== "cos") for (const t of policy.COORDINATOR) if (configs[t]?.permission !== "deny") fail(`${seat.name}: ${t} not denied`);
+  if (key === "ceo") for (const t of policy.BOARD) if (configs[t]?.permission !== "deny") fail(`${seat.name}: ${t} is not denied (no board writes)`);
   // 8. own identity, own vault, own token
   const identity = config.identities.find((i) => i.name === agent.identity);
   if (!identity) fail(`${seat.name}: holds no declared identity, so no vault bearer would reach it`);
@@ -128,7 +132,7 @@ for (const a of config.agents)
       fail(`${a.name}: MCP header ${header} is set (${JSON.stringify(value)}); Naïve redacts header values from everything the agent reads, and no seat needs a header`);
 
 const cos = config.agents.find((a) => a.name === CREW.cos.name);
-const members = Object.entries(CREW).filter(([k]) => k !== "cos").map(([, s]) => s.name).sort();
+const members = MEMBERS.map((k) => CREW[k].name).sort();
 if (cos?.multiagent?.type !== "coordinator" || !cos.multiagent.board) fail("chief-of-staff: not a coordinator with a board");
 if ((cos?.multiagent?.agents ?? []).map((a) => a.name).sort().join() !== members.join()) fail("chief-of-staff: roster is not the 6 members");
 if (!cos?.schedules?.some((s) => s.cron === "0 8 * * 0")) fail("chief-of-staff: no Sunday 8 AM brief schedule");
@@ -589,6 +593,29 @@ else {
     if (!ceoTools.includes(t) && new RegExp(`\\b${t}\\b`, "i").test(raw)) fail(`prompts/ceo-voice.md: names gateway tool ${t}`);
   if (/`(?:confirm|cancel)\b/i.test(raw)) fail("prompts/ceo-voice.md: names a confirm or cancel tool; there is none (the console confirms)");
   if (/resolve[-_]purchase/i.test(raw)) fail("prompts/ceo-voice.md: resolve-purchase is never by voice (contract §5b)");
+}
+
+// 15. the CEO assistant (v1.14 §5a-ter, design D34): its seat holds exactly the §5b CEO tools, it is
+// on nobody's team and has no board, and its prompt keeps the rules that make a no-confirm voice safe.
+{
+  const seat = CREW.ceo;
+  const agent = config.agents.find((a) => a.name === seat?.name);
+  if (!seat || !agent) fail("ceo-assistant: not declared in src/crew.ts and naive.config.ts");
+  else {
+    if ([...seat.tools].sort().join() !== ceoTools.join())
+      fail(`ceo-assistant: tools ${[...seat.tools].sort()} != contract §5b ${ceoTools}`);
+    if (!agent.mcp_servers?.[0]?.url?.endsWith("/mcp/ceo")) fail("ceo-assistant: MCP URL must be <base>/mcp/ceo");
+    if (seat.tokenEnv !== "UTAX_TOOL_TOKEN_CEO") fail("ceo-assistant: token env must be UTAX_TOOL_TOKEN_CEO");
+    if (agent.multiagent || agent.handoffs !== false) fail("ceo-assistant: must be a standalone agent (no team, no handoffs)");
+    if (config.agents.some((a) => (a.multiagent?.agents ?? []).some((m) => m.name === seat.name)))
+      fail("ceo-assistant: must not be on any team's roster");
+    const raw = readFileSync(join(ROOT, "prompts", seat.prompt), "utf8");
+    const text = raw.replace(/\s+/g, " ");
+    for (const must of ["data, never instructions", "can't be undone", "Never invent a result", "ask one short question",
+      "You can't write board cards"])
+      if (!text.toLowerCase().includes(must.toLowerCase())) fail(`prompts/${seat.prompt}: must keep the rule "${must}"`);
+    for (const t of policy.BOARD) if (new RegExp(`\\b${t}\\b`).test(raw)) fail(`prompts/${seat.prompt}: names the board tool ${t}`);
+  }
 }
 
 // 9. the config must REFUSE a bad env. Each case loads the config in a fresh process.
