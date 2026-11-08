@@ -1,0 +1,500 @@
+/* D39 "Night Lime" (LANDING-BRIEF.md §3). The tokens live on the landing root so no other page's
+   own --text / --line / --panel changes (/office, /ceo, /talk keep theirs). The hero is a 1:1 port
+   of docs/designs/landing/hero-prototype.html. */
+
+.nl {
+  --bg: #050505;
+  --bg-2: #0a0b09;
+  --panel: rgba(18, 20, 16, 0.72);
+  --panel-solid: #0f110d;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-2: rgba(255, 255, 255, 0.14);
+  --text: #f2f3ee;
+  --dim: #a1a39b;
+  --faint: #6f7169;
+  --lime: #bef243;
+  --lime-2: #d4ff6a;
+  --on-lime: #0b0d06;
+  --cyan: #7cc7ff;
+  --r-card: 20px;
+  --r-inner: 12px;
+  --r-pill: 999px;
+  --shadow-card: 0 40px 120px -40px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --glow-lime: 0 0 0 1px rgba(190, 242, 67, 0.4), 0 8px 30px -8px rgba(190, 242, 67, 0.55);
+  --sans: var(--font-geist), system-ui, sans-serif;
+  --mono: var(--font-geist-mono), ui-monospace, monospace;
+  --serif: var(--font-instrument-serif), Georgia, serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+  width: 100%;
+}
+.nl *,
+.nl *::before,
+.nl *::after {
+  box-sizing: border-box;
+}
+.nl :where(h1, h2, h3, p, ul, ol, figure) {
+  margin: 0;
+  padding: 0;
+}
+.nl a:focus-visible,
+.nl button:focus-visible,
+.nl input:focus-visible {
+  outline: 2px solid var(--lime);
+  outline-offset: 2px;
+}
+.nl .skip {
+  position: absolute;
+  left: -9999px;
+  top: 8px;
+  z-index: 50;
+  background: var(--lime);
+  color: var(--on-lime);
+  padding: 8px 14px;
+  border-radius: var(--r-pill);
+}
+.nl .skip:focus {
+  left: 16px;
+}
+.nl .mono {
+  font-family: var(--mono);
+}
+
+/* ---- hero (the prototype, scoped) ---- */
+.nl .page {
+  position: relative;
+  min-height: 100vh;
+  overflow: hidden;
+}
+.nl canvas.ribbons {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+.nl canvas.ribbons.dim {
+  opacity: 0.45;
+}
+.nl .dots {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.07) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(ellipse 70% 60% at 30% 40%, #000 30%, transparent 80%);
+}
+.nl .vignette {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at 20% 50%, transparent 40%, rgba(0, 0, 0, 0.65) 100%);
+}
+.nl .wrap {
+  position: relative;
+  z-index: 2;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 64px;
+}
+.nl .navbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  height: 64px;
+}
+.nl .page {
+  margin-top: -64px;
+  padding-top: 64px;
+}
+.nl nav.top {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 64px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  background: linear-gradient(rgba(5, 5, 5, 0.75), rgba(5, 5, 5, 0.35));
+}
+.nl .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: 17px;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  text-decoration: none;
+}
+.nl .mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  background: var(--lime);
+  color: var(--on-lime);
+  display: grid;
+  place-items: center;
+  font: 700 14px var(--sans);
+}
+.nl .links {
+  display: flex;
+  gap: 36px;
+  margin: 0 auto;
+  font-size: 13.5px;
+  color: var(--dim);
+}
+.nl .links a {
+  color: inherit;
+  text-decoration: none;
+}
+.nl .links a:hover {
+  color: var(--text);
+}
+.nl .status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 12.5px var(--mono);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-pill);
+  padding: 7px 14px;
+  background: rgba(0, 0, 0, 0.35);
+}
+.nl .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--lime);
+  box-shadow: 0 0 10px var(--lime);
+  flex: none;
+}
+.nl .status.resting .dot {
+  background: var(--faint);
+  box-shadow: none;
+}
+.nl .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--r-pill);
+  font: 500 14px var(--sans);
+  padding: 10px 20px;
+  min-height: 44px;
+  text-decoration: none;
+  border: 0;
+  cursor: pointer;
+  transition:
+    transform 0.2s,
+    box-shadow 0.2s;
+}
+.nl nav.top .btn {
+  min-height: 0;
+}
+.nl .btn-lime {
+  background: var(--lime);
+  color: var(--on-lime);
+  box-shadow: var(--glow-lime);
+}
+.nl .btn-lime:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 0 0 1px rgba(190, 242, 67, 0.6),
+    0 10px 40px -6px rgba(190, 242, 67, 0.7);
+}
+.nl .btn-ghost {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+}
+.nl .btn-ghost:hover {
+  transform: translateY(-1px);
+}
+.nl .hero {
+  display: grid;
+  grid-template-columns: 1.12fr 1fr;
+  gap: 40px;
+  align-items: center;
+  min-height: calc(100vh - 64px);
+  padding: 40px 0 80px;
+}
+.nl .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font: 400 12.5px var(--mono);
+  color: var(--text);
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  padding: 7px 12px;
+  background: rgba(0, 0, 0, 0.4);
+}
+.nl .badge .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+}
+.nl h1 {
+  margin-top: 28px;
+  font-weight: 500;
+  font-size: clamp(42px, 4.9vw, 72px);
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+.nl em.serif,
+.nl h1 em,
+.nl h2 em {
+  font-family: var(--serif);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  color: #e9eadf;
+}
+.nl .sub {
+  margin-top: 26px;
+  max-width: 470px;
+  color: var(--dim);
+  font-size: 17px;
+  line-height: 1.55;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.9);
+}
+.nl .ctas {
+  display: flex;
+  gap: 12px;
+  margin-top: 34px;
+}
+.nl .fine {
+  margin-top: 18px;
+  font: 400 12.5px var(--mono);
+  color: var(--faint);
+}
+.nl .card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: var(--shadow-card);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .nl .card {
+    background: var(--panel-solid);
+  }
+}
+.nl .flow {
+  padding: 22px 26px 18px;
+  transform: perspective(1600px) rotateY(-9deg) rotateX(3deg);
+  transform-origin: left center;
+}
+.nl .flow-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13.5px;
+  color: var(--dim);
+}
+.nl .flow-head .m {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.nl .flow-head .run {
+  margin-left: auto;
+  font: 400 12.5px var(--mono);
+  color: var(--lime);
+}
+.nl .flow-head .run.off {
+  color: var(--faint);
+}
+.nl .canvas {
+  position: relative;
+  height: 250px;
+  margin: 18px 0 6px;
+}
+.nl .node {
+  position: absolute;
+  z-index: 1;
+  background: #15170f;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+.nl .node b {
+  display: block;
+  font-weight: 500;
+  font-size: 13.5px;
+}
+.nl .node span {
+  font: 400 11.5px var(--mono);
+  color: var(--faint);
+}
+.nl .node.done {
+  border-color: rgba(190, 242, 67, 0.35);
+}
+.nl .node.wait b::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--lime);
+  margin-left: 8px;
+  vertical-align: middle;
+  animation: nl-pulse 1.4s infinite;
+}
+.nl .tag {
+  position: absolute;
+  z-index: 2;
+  font: 400 11px var(--mono);
+  color: var(--dim);
+  background: #111309;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 2px 7px;
+}
+.nl svg.edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.nl svg.edges path {
+  fill: none;
+  stroke: rgba(190, 242, 67, 0.55);
+  stroke-width: 1.4;
+}
+.nl svg.edges path.dim {
+  stroke: rgba(255, 255, 255, 0.18);
+}
+.nl .flow .runs {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  font: 400 12px var(--mono);
+  color: var(--faint);
+  min-height: 104px; /* CLS: three rows are reserved before the stream answers */
+}
+.nl .row {
+  display: flex;
+  gap: 16px;
+  padding: 5px 0;
+  color: var(--dim);
+}
+.nl .row i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--faint);
+  margin-top: 6px;
+  flex: none;
+}
+.nl .row:first-of-type i {
+  background: var(--lime);
+}
+.nl .row .t {
+  color: var(--faint);
+}
+.nl .row .ms {
+  margin-left: auto;
+  color: var(--faint);
+}
+@keyframes nl-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.nl .reveal {
+  opacity: 0;
+  filter: blur(8px);
+  transform: translateY(14px);
+  animation: nl-rv 0.9s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+}
+.nl .d1 {
+  animation-delay: 0.05s;
+}
+.nl .d2 {
+  animation-delay: 0.15s;
+}
+.nl .d3 {
+  animation-delay: 0.28s;
+}
+.nl .d4 {
+  animation-delay: 0.4s;
+}
+.nl .d5 {
+  animation-delay: 0.55s;
+}
+@keyframes nl-rv {
+  to {
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nl .reveal {
+    animation: none;
+    opacity: 1;
+    filter: none;
+    transform: none;
+  }
+  .nl .node.wait b::after {
+    animation: none;
+  }
+}
+@media (max-width: 1199px) {
+  .nl h1 {
+    font-size: clamp(40px, 5.2vw, 64px);
+  }
+}
+@media (max-width: 960px) {
+  .nl .wrap {
+    padding: 0 16px;
+  }
+  .nl .links,
+  .nl .status {
+    display: none;
+  }
+  .nl .hero {
+    grid-template-columns: 1fr;
+    padding-top: 24px;
+    min-height: 0;
+  }
+  .nl .flow {
+    transform: none;
+  }
+  .nl canvas.ribbons {
+    opacity: 0.35;
+  }
+  .nl nav.top .btn {
+    padding: 8px 14px;
+    font-size: 13px;
+    margin-left: auto;
+  }
+  .nl .ctas {
+    flex-direction: column;
+  }
+  .nl .ctas .btn {
+    justify-content: center;
+  }
+  .nl .canvas {
+    display: none;
+  }
+  .nl .flow-head {
+    flex-wrap: wrap;
+  }
+  .nl .row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .nl .row .ms {
+    display: none;
+  }
+}
