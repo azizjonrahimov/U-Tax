@@ -211,13 +211,14 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             return True
         return sessions().valid(bearer) or sessions().valid(token)
 
-    def require_theater(token: str | None, authorization: str | None) -> None:
+    def require_theater(token: str | None, authorization: str | None, *,
+                        query_session: bool = True) -> None:
         settings = gw().settings
         if not settings.theater_token:
             return
         if _same(token, settings.theater_token):
             return
-        if is_admin(authorization, token):
+        if is_admin(authorization, token if query_session else None):
             return  # the CEO console may read what the theater reads
         raise APIError(401, "unauthorized", "theater token required")
 
@@ -261,13 +262,22 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
 
     @router.get("/api/events/stream")
     async def stream(request: Request, after_id: int = Query(0, ge=0),
-                     token: str | None = Query(None), authorization: str | None = Header(None),
+                     token: str | None = Query(None), ticket: str | None = Query(None),
+                     authorization: str | None = Header(None),
                      last_event_id: str | None = Header(None)):
-        require_theater(token, authorization)
+        # task 36: the CEO console opens the stream with a 60 s single-use ?ticket= (POST
+        # /api/stream-ticket), never its 12 h session in the URL; ?token= is the theater's
+        if ticket is not None:
+            if not sessions().redeem_ticket(ticket):
+                raise APIError(401, "unauthorized", "stream ticket expired or used; get a "
+                                                    "new one from POST /api/stream-ticket")
+            admin = True
+        else:
+            require_theater(token, authorization, query_session=False)
+            admin = is_admin(authorization)
         start = after_id
         if last_event_id and last_event_id.strip().isdigit():
             start = max(start, int(last_event_id.strip()))
-        admin = is_admin(authorization, token)
         body = sse_events(gw(), start, is_disconnected=request.is_disconnected,
                           heartbeat=request.app.state.sse_heartbeat,
                           view=lambda e: gw().public_event(e, admin=admin))
@@ -296,6 +306,14 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             raise APIError(401, "bad_login", "wrong email or password")
         token, expires = sessions().issue()
         return {"session": token, "expires_at": iso_ts(
+            datetime.fromtimestamp(expires, tz=timezone.utc))}
+
+    @router.post("/api/stream-ticket")
+    def stream_ticket(authorization: str | None = Header(None)):
+        """Task 36: a 60 s, single-use ticket for GET /api/events/stream?ticket= (admin)."""
+        require_admin(authorization)
+        ticket, expires = sessions().issue_ticket()
+        return {"ticket": ticket, "expires_at": iso_ts(
             datetime.fromtimestamp(expires, tz=timezone.utc))}
 
     @router.post("/api/auth/logout")
