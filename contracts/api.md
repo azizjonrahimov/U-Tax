@@ -293,7 +293,8 @@ the tool names, kinds and args are fixed here:
     (`confirm`, `yes`, `do it`, `approve it`, `go ahead`, case-insensitive, whole words). A
     miss answers `400 not_a_confirm`. A cancel word (`no`, `cancel`, `stop`, `wait`) in `heard`
     always cancels.
-- `POST /api/ceo/command` `{text}`: the fallback, for browser speech or typing. The
+- `POST /api/ceo/command` `{text}`: the fallback, for browser speech or typing. v1.12.3: text the grammar can't parse (3–300 chars, not a confirm, cancel or question word)
+  becomes an `order` proposal ("Send this order to the Chief of Staff: \"<text>\". Say confirm."). The
   gateway's deterministic grammar maps the text to one tool call and answers exactly like
   `/api/ceo/tool`. Text it can't parse answers `200 {kind: "unknown", say}`, where `say`
   lists example commands. Confirm and cancel words are matched against the newest open
@@ -640,6 +641,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.12.3 (2026-11-07, owner UX): unparsed CEO command text becomes an order proposal.
 
 - v1.12.2 (2026-11-07, backend 28 review): /api/signup always answers {"ok": true}.
 
