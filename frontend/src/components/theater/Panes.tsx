@@ -4,7 +4,7 @@
 import { memo, type CSSProperties, type ReactNode } from "react";
 import type { FirmNumbers } from "@/theater/rail";
 import { humanTouches, TRAINABLE_ACTION_TYPES } from "@/theater/rail";
-import { visibleOrders, type Cell, type ScreenState } from "@/theater/screen";
+import { visibleOrders, type Cell, type MarketJob, type ScreenState } from "@/theater/screen";
 import type { Pane as PaneKey } from "@/theater/script";
 import { formatCents, formatClock, formatUsd } from "@/theater/format";
 import { assetAllowed, originOf, parseAssetHosts } from "@/theater/live";
@@ -298,6 +298,107 @@ export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Type
   );
 }
 
+const JOB_STATUS: Record<MarketJob["status"], string> = {
+  open: "posted · waiting for a contractor",
+  claimed: "claimed",
+  submitted: "work submitted · checking",
+  verified: "all checks passed",
+  failed: "failed",
+  paid: "paid",
+  delivered: "delivered",
+};
+
+/**
+ * v1.19 (D38): Marketing hires an outside agent. Every state below is one event: the job card
+ * (job.posted), the grey contractor cursor (job.claimed), the blurred card (job.submitted), the
+ * checks (job.verified / job.failed), the coin (payment.sent), the unblurred card (job.delivered).
+ */
+export function MarketPane({ screen }: { screen: ScreenState }) {
+  const jobs = screen.market.jobs;
+  const job = jobs.at(-1);
+  if (!job) return null;
+  const src = job.image && GATEWAY_ORIGIN ? `${GATEWAY_ORIGIN}${job.image}` : undefined;
+  const img = imageOk(src) ? src : undefined;
+  const claimed = job.status !== "open";
+  const submitted = ["submitted", "verified", "failed", "paid", "delivered"].includes(job.status) && !(job.status === "failed" && job.reason === "expired");
+  return (
+    <Pane k="market" screen={screen} label="Market" name="outside agents" tag="testnet tokens · no real value">
+      <div className="wallets">
+        <span className="chip wallet" data-target="market.wallet.firm">
+          U-Tax wallet
+        </span>
+        <span className={`coin${job.pay ? " flying" : ""}`} key={job.pay ? `${job.id}:paid` : job.id} aria-hidden="true" />
+        <span className="chip wallet" data-target="market.wallet.contractor">
+          {job.contractor ?? "contractor"} wallet
+        </span>
+      </div>
+      <div className={`job ${job.status}`} data-target="market.job">
+        <div className="chan">
+          {job.template.replace(/_/g, " ")} · {job.price} pathUSD
+        </div>
+        <div className="headline">{job.headline}</div>
+        {claimed && job.contractor && (
+          <span className="contractor" data-target="market.claim">
+            <span className="arrow" aria-hidden="true" />
+            {job.contractor} · contractor
+          </span>
+        )}
+        {submitted && (
+          <div className={`thumb${job.status === "delivered" ? " clear" : ""}`} data-target="market.thumb">
+            {job.status === "delivered" && img ? (
+              // eslint-disable-next-line @next/next/no-img-element -- the gateway's own asset, rendered as given
+              <img src={img} alt="Share card made by the contractor" referrerPolicy="no-referrer" onError={hideBroken} data-target="market.delivered" />
+            ) : (
+              <span>{job.status === "delivered" ? "card delivered" : "card (hidden until paid)"}</span>
+            )}
+          </div>
+        )}
+        {job.checks.length > 0 && (
+          <ul className="checks">
+            {job.checks.map((c, i) => (
+              <li key={i} className={c.ok ? "ok" : "bad"} data-target={`market.check.${i}`}>
+                {c.ok ? "✓" : "✕"} {c.name}
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="state" data-target="market.status">
+          {JOB_STATUS[job.status]}
+          {job.status === "failed" && job.reason ? ` · ${job.reason}` : ""}
+        </div>
+        {job.pay && (
+          <div className="paid" data-target="market.pay">
+            ✓ Paid {job.pay.amount}
+            {job.pay.ledger ? (
+              " · ledger token"
+            ) : job.pay.tx ? (
+              <>
+                {" · "}
+                {job.pay.url ? (
+                  <a className="mono" href={job.pay.url} target="_blank" rel="noopener noreferrer">
+                    {job.pay.tx}
+                  </a>
+                ) : (
+                  <span className="mono">{job.pay.tx}</span>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
+      </div>
+      {jobs.length > 1 && (
+        <div className="earlier">
+          {jobs.slice(0, -1).map((j) => (
+            <div key={j.id}>
+              {j.headline} · {JOB_STATUS[j.status]}
+            </div>
+          ))}
+        </div>
+      )}
+    </Pane>
+  );
+}
+
 export function PhonePane({ screen, typed }: { screen: ScreenState; typed: Typed }) {
   const p = screen.phone;
   return (
@@ -348,6 +449,16 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
         <div>
           Saved vs spent<b className="g">{saved} / {spent}</b>
         </div>
+        {numbers.money.contractor_paid_usd !== undefined && (
+          <div>
+            Contractors paid<b>{Number(numbers.money.contractor_paid_usd).toFixed(2)} pathUSD</b>
+          </div>
+        )}
+        {numbers.money.agent_sales_usd !== undefined && (
+          <div>
+            Earned from agents<b>{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</b>
+          </div>
+        )}
       </div>
       <section className="pane" data-target="rail.touches" aria-label="Human touches">
         <div className="ph">Human touches</div>
@@ -411,6 +522,18 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
             <span>Firm spent (est.)</span>
             <span className="mono">{spent}</span>
           </div>
+          {numbers.money.contractor_paid_usd !== undefined && (
+            <div className="k">
+              <span>Contractors paid (testnet)</span>
+              <span className="mono">{Number(numbers.money.contractor_paid_usd).toFixed(2)} pathUSD</span>
+            </div>
+          )}
+          {numbers.money.agent_sales_usd !== undefined && (
+            <div className="k">
+              <span>Earned from agents (testnet)</span>
+              <span className="mono">{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</span>
+            </div>
+          )}
         </div>
       </section>
       <section className="pane" data-target="rail.hiring" aria-label="Hiring">

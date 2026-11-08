@@ -78,6 +78,22 @@ export interface OrderCard {
   lines: OrderLine[];
 }
 
+/** v1.19: one contractor job, as its events moved it. */
+export interface MarketJob {
+  id: string;
+  headline: string;
+  price: string;
+  template: string;
+  status: "open" | "claimed" | "submitted" | "verified" | "failed" | "paid" | "delivered";
+  contractor?: string;
+  checks: { name: string; ok: boolean }[];
+  /** Why it failed ("checks failed", "expired", "contractor error"). */
+  reason?: string;
+  pay?: { amount: string; tx: string; url: string | null; ledger: boolean };
+  /** The gateway's own asset path, shown once delivered (paid work unblurs). */
+  image?: string;
+}
+
 export interface ScreenState {
   /** D31: CEO orders, oldest first (the newest few). */
   orders: OrderCard[];
@@ -106,6 +122,8 @@ export interface ScreenState {
   calendar: { blocks: { key: string; text: string; start?: string; minutes?: number }[] };
   social: { image?: string; caption?: string; channel?: string; posted?: string; dm?: { text: string; recipient?: string; sent: boolean } };
   phone: { dial?: string; transcript?: string; check?: { ok: boolean; text: string } };
+  /** v1.19 (D38): the agent market's jobs, newest last (the latest few). */
+  market: { jobs: MarketJob[] };
   rail: {
     log: LogLine[];
     trust: Record<string, string>;
@@ -136,11 +154,14 @@ export const emptyScreen = (): ScreenState => ({
   calendar: { blocks: [] },
   social: {},
   phone: {},
+  market: { jobs: [] },
   rail: { log: [], trust: {}, pending: [] },
   lastEventId: 0,
 });
 
 const MAX_LOG = 12;
+/** Market jobs kept on screen (the newest). */
+const MAX_JOBS = 3;
 /** Orders kept on screen, and lines kept per order (the card shows the newest). */
 const MAX_ORDERS = 6;
 const MAX_ORDER_LINES = 16;
@@ -387,6 +408,48 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
     return s;
   }
 
+  if (area === "market") {
+    const id = str(meta.job_id);
+    if (!id) return s;
+    const jobs = s.market.jobs;
+    const at = jobs.findIndex((j) => j.id === id);
+    const job: MarketJob = at >= 0 ? jobs[at] : { id, headline: "", price: "", template: "", status: "open", checks: [] };
+    let next: MarketJob = job;
+    switch (sub) {
+      case "job":
+        next = { ...job, headline: text, price: str(meta.price) ?? "", template: str(meta.template) ?? "" };
+        break;
+      case "claim":
+        next = { ...job, contractor: text, status: "claimed" };
+        break;
+      case "thumb":
+        next = { ...job, status: "submitted", checks: [], reason: undefined };
+        break;
+      case "check": {
+        const checks = [...job.checks, { name: text, ok: step.action === "tick" }];
+        next = { ...job, checks, status: checks.every((c) => c.ok) ? "verified" : "failed" };
+        break;
+      }
+      case "status":
+        next = { ...job, status: "failed", reason: text };
+        break;
+      case "pay":
+        next = {
+          ...job,
+          status: "paid",
+          contractor: str(meta.contractor) ?? job.contractor,
+          pay: { amount: text, tx: str(meta.tx) ?? "", url: str(meta.explorer_url) ?? null, ledger: meta.ledger === true },
+        };
+        break;
+      case "delivered":
+        next = { ...job, status: "delivered", image: str(meta.image_path) };
+        break;
+    }
+    const rest = jobs.filter((j) => j.id !== id);
+    s.market = { jobs: at >= 0 ? jobs.map((j) => (j.id === id ? next : j)) : [...rest, next].slice(-MAX_JOBS) };
+    return s;
+  }
+
   if (area === "phone") {
     if (sub === "dial") s.phone = { dial: text };
     else if (sub === "transcript") s.phone = { ...s.phone, transcript: text };
@@ -432,6 +495,9 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
       break;
     case "crm":
       s.rail = { ...s.rail, crm: text };
+      break;
+    case "sale":
+      log("sale");
       break;
     case "naive": {
       const allowed = meta.decision === "allow";

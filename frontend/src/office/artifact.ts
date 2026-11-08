@@ -71,7 +71,19 @@ export interface InviteArt {
   minutes: number;
   state: ArtifactState;
 }
-export type Artifact = (MailArt | PostArt | DocsArt | CalcArt | InviteArt) & {
+/** v1.19 (D38): Marketing hires an outside agent: the job and each step its events took. */
+export interface JobArt {
+  kind: "job";
+  jobId: string;
+  headline: string;
+  price: string;
+  contractor: string;
+  /** ok: true passed, false failed, null a plain step. */
+  steps: { text: string; ok: boolean | null; url?: string }[];
+  image: string | null;
+  state: ArtifactState;
+}
+export type Artifact = (MailArt | PostArt | DocsArt | CalcArt | InviteArt | JobArt) & {
   /** Changes when a new artifact starts (the window re-mounts and plays from the start). */
   key: string;
   ts: string;
@@ -181,6 +193,8 @@ export interface StudioCtx {
   name: (caseId: string | null) => string;
   /** An image URL the feed allows, else undefined. */
   image: (url: unknown) => string | undefined;
+  /** v1.19: the gateway's own asset path ("/assets/ad_3.png") as an image URL it allows, else undefined. */
+  asset?: (path: string) => string | undefined;
 }
 
 const HIDDEN = "Hidden: this client's mail was flagged by QA.";
@@ -232,7 +246,75 @@ export function empty(a: Artifact | null): boolean {
       return a.lines.length === 0;
     case "invite":
       return !a.with;
+    case "job":
+      return a.steps.length === 0;
   }
+}
+
+/** v1.19 §9.1: the market's events (most are actor system); they all play on the Marketing desk. */
+const MARKET_EVENTS: ReadonlySet<string> = new Set(["job.posted", "job.claimed", "job.submitted", "job.verified", "job.failed", "payment.sent", "job.delivered"]);
+const JOB_ID = /^[A-Za-z0-9_-]{1,40}$/;
+const tokenAmount = (v: unknown): string | null =>
+  typeof v === "number" && Number.isFinite(v) && v >= 0 ? v.toFixed(2) : typeof v === "string" && /^\d{1,9}(\.\d{1,18})?$/.test(v) ? Number(v).toFixed(2) : null;
+
+function applyMarket(st: Studio, ev: UTaxEvent, ctx: StudioCtx, key: string): Studio {
+  const p: P = isObj(ev.payload) ? ev.payload : {};
+  const job = str(p, "job_id");
+  if (!JOB_ID.test(job)) return st;
+  const prev = st.desks.mkt.art;
+  let art: Artifact & JobArt =
+    prev?.kind === "job" && prev.jobId === job
+      ? { ...prev, ts: ev.ts }
+      : { key, ts: ev.ts, caseId: null, kind: "job", jobId: job, headline: "", price: "", contractor: "", steps: [], image: null, state: "drafting" };
+  const add = (text: string, ok: boolean | null = null, url?: string) => {
+    art = { ...art, steps: [...art.steps, url ? { text, ok, url } : { text, ok }].slice(-12) };
+  };
+  const checks = (Array.isArray(p.checks) ? p.checks : []).filter(isObj).slice(0, 8);
+  switch (ev.type) {
+    case "job.posted": {
+      const price = tokenAmount(p.price_usd);
+      if (price === null) return st;
+      art = { ...art, headline: line(str(p, "headline"), 80), price };
+      add(`Posted a ${line(str(p, "template"), 30).replace(/_/g, " ")} job · ${price} pathUSD`);
+      break;
+    }
+    case "job.claimed":
+      art = { ...art, contractor: line(str(p, "contractor"), 40) };
+      add(`${art.contractor || "A contractor"} (an outside agent) took the job`);
+      break;
+    case "job.submitted":
+      add("The card arrived (hidden until paid)");
+      break;
+    case "job.verified":
+    case "job.failed":
+      for (const c of checks) add(line(str(c, "name"), 40), c.ok === true);
+      if (ev.type === "job.failed") {
+        add(`Not paid: ${str(p, "reason").replace(/_/g, " ") || "checks failed"}`, false);
+        art = { ...art, state: "failed" };
+      } else add("Our code checked it: all checks passed", true);
+      break;
+    case "payment.sent": {
+      const amount = tokenAmount(p.amount_usd);
+      if (amount === null) return st;
+      const token = line(str(p, "token"), 12);
+      const tx = str(p, "tx_hash");
+      const ledger = ev.provider !== "tempo";
+      const short = /^0x[0-9a-fA-F]{8,}$/.test(tx) ? `${tx.slice(0, 6)}…${tx.slice(-4)}` : "";
+      const link = str(p, "explorer_url");
+      const url = !ledger && /^https:\/\/[^\s]+$/.test(link) ? link : undefined;
+      if (ev.status !== "ok") add(`Payment didn't go through · ${amount} ${token}`, false);
+      else add(`Paid ${art.contractor || "the contractor"} ${amount} ${token}${ledger ? " (ledger token)" : short ? ` · ${short}` : ""}`, true, url);
+      break;
+    }
+    case "job.delivered": {
+      const path = str(p, "image_url");
+      const image = /^\/assets\/[A-Za-z0-9_.-]{1,80}$/.test(path) ? (ctx.asset?.(path) ?? null) : null;
+      art = { ...art, image, state: "done" };
+      add("Delivered: Marketing can post it", true);
+      break;
+    }
+  }
+  return put(st, "mkt", { art, act: settled(st.desks.mkt.act) }, key);
 }
 
 /** Each case's documents: what the Accounting window attaches and the CEO's case list offers (F1). */
@@ -315,6 +397,8 @@ export function applyStudio(st0: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio 
     }
     return next;
   }
+
+  if (MARKET_EVENTS.has(ev.type)) return applyMarket(st, ev, ctx, key);
 
   const seat = (SEATS as readonly string[]).includes(ev.actor) ? (ev.actor as Seat) : null;
   if (!seat) return st;

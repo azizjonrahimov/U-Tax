@@ -508,6 +508,7 @@ const ART_SITE: Readonly<Record<NonNullable<Desk["art"]>["kind"], string>> = {
   docs: "Excel · Word · case documents",
   calc: "utax · compute_tax",
   invite: "Calendar · invite",
+  job: "Agent market · hire a contractor",
 };
 
 const STATUS_WORD: Readonly<Record<WsStep["status"], string>> = {

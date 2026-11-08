@@ -256,3 +256,12 @@
 .office .of-dept button.file:disabled { opacity: .7; cursor: progress; }
 .office .of-dept .dl-err { color: var(--red); font-size: 13px; }
 .office .of-dept button.file { overflow-wrap: anywhere; text-align: left; max-width: 100%; }
+
+/* v1.19 (D38): Marketing's contractor job, step by step */
+.office .art.job { display: grid; gap: 8px; }
+.office .art.job .job-price { margin: 0; color: var(--dim); font-size: 13px; }
+.office .art.job .job-card { max-width: 100%; max-height: 140px; border-radius: 6px; }
+.office .art.job .job-steps { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.office .art.job .job-steps .ok { color: var(--green, #4ade80); }
+.office .art.job .job-steps .bad { color: #ff8a7d; }
+.office .art.job .job-steps a { color: inherit; }

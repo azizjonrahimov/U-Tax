@@ -16,7 +16,7 @@
 import { ACTORS, EVENT_STATUSES, type Agent, type FactName, type UTaxEvent } from "./events";
 import { formatCents, formatInt, formatUsd, normalizeDecimal, splitDecimal } from "./format";
 
-export type Pane = "mail" | "sheet" | "search" | "calendar" | "social" | "phone" | "rail";
+export type Pane = "mail" | "sheet" | "search" | "calendar" | "social" | "phone" | "market" | "rail";
 
 export type Action =
   | "focus" // camera moves to the pane (no cursor)
@@ -196,6 +196,16 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   // v1.12 §5a: every MCP tool call (no args, no data). The office workspaces animate it; the
   // theater only lights the seat's desk (no cursor, so a busy agent never slows the projector).
   ["tool.called", "rail"],
+  // v1.19 §9.1 (D38, the agent market): Marketing hires an outside contractor agent, our code checks
+  // its work, the gateway pays it (testnet tokens). Every step comes from one of these events.
+  ["job.posted", "market"],
+  ["job.claimed", "market"],
+  ["job.submitted", "market"],
+  ["job.verified", "market"],
+  ["job.failed", "market"],
+  ["payment.sent", "market"],
+  ["job.delivered", "market"],
+  ["agent.sale", "rail"],
 ]);
 
 /** Seat → the name the projector uses (Theater's cursor labels). */
@@ -220,7 +230,7 @@ const CHANNEL_NAME: Readonly<Record<string, string>> = Object.freeze({ x: "X", t
 const channelName = (c: string) => (Object.hasOwn(CHANNEL_NAME, c.toLowerCase()) ? CHANNEL_NAME[c.toLowerCase()] : clip(c, 24));
 
 /** An approval's badge, by action type (email is shared by several departments: the Chief of Staff's badge). */
-const APPROVAL_SEAT: Readonly<Record<string, string>> = Object.freeze({ social_post: "mkt", voice_screen: "hr", calendar_invite: "intake" });
+const APPROVAL_SEAT: Readonly<Record<string, string>> = Object.freeze({ social_post: "mkt", voice_screen: "hr", calendar_invite: "intake", contractor_pay: "mkt" });
 const approvalSeat = (t: string) => (Object.hasOwn(APPROVAL_SEAT, t) ? APPROVAL_SEAT[t] : "cos");
 
 const FOLLOW_UP_WORDS: Readonly<Record<string, string>> = Object.freeze({
@@ -327,6 +337,33 @@ function decimal(o: Obj, k: string): string {
   }
   return v;
 }
+
+/** v1.19: an amount in testnet tokens (number or decimal string on the wire) → "0.50". */
+function tokens(o: Obj, k: string): string {
+  const v = has(o, k) ? o[k] : undefined;
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0 && v < 1e9) return v.toFixed(2);
+  if (typeof v === "string" && /^\d{1,9}(\.\d{1,18})?$/.test(v)) return Number(v).toFixed(2);
+  throw new PayloadError(`${k}: expected a token amount`);
+}
+/** v1.19: a job id is the gateway's own short id: never free text on the projector. */
+function jobId(o: Obj): string {
+  const v = str(o, "job_id");
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(v)) throw new PayloadError("job_id: unexpected");
+  return v;
+}
+/** v1.19: the code checks on a contractor's work, `[{name, ok}]` (at most 8 shown). */
+function checkList(o: Obj): { name: string; ok: boolean }[] {
+  return arr(o, "checks")
+    .slice(0, 8)
+    .map((c) => {
+      const x = obj(c, "check");
+      return { name: clip(str(x, "name"), 40), ok: bool(x, "ok") };
+    });
+}
+/** A transaction hash shortened for the screen ("0x3b60…2277"); anything else shows nothing. */
+const shortTx = (tx: string) => (/^0x[0-9a-fA-F]{8,}$/.test(tx) ? `${tx.slice(0, 6)}…${tx.slice(-4)}` : "");
+/** v1.19: a delivered image is the gateway's own asset path ("/assets/ad_3.png"); other values never render. */
+const ASSET_PATH = /^\/assets\/[A-Za-z0-9_.-]{1,80}$/;
 
 const LOCAL_URL = /^local:\/\/[A-Za-z0-9_\-/.]+$/;
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -814,6 +851,74 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
         text: formatUsd(cost),
         meta: { provider: str(p, "provider"), model: str(p, "model"), estimated: bool(p, "estimated"), cost_usd: cost },
       });
+      break;
+    }
+    case "job.posted": {
+      const job = jobId(p);
+      const template = clip(str(p, "template"), 40);
+      const price = tokens(p, "price_usd");
+      const headline = clip(str(p, "headline"), 80);
+      push({ target: "market.job", agent, action: "appear", text: headline, meta: { job_id: job, template, price } });
+      orderLine(`Marketing posted a ${words(template)} job · ${price} pathUSD`, ev.actor, "dept");
+      break;
+    }
+    case "job.claimed": {
+      const job = jobId(p);
+      const contractor = clip(str(p, "contractor"), 40);
+      // An outside agent: no seat cursor of ours; the pane draws a grey contractor cursor.
+      push({ target: "market.claim", agent: null, action: "click", text: contractor, meta: { job_id: job, cursor: "contractor" } });
+      orderLine(`${contractor} (an outside agent) took the job`, "mkt", "dept");
+      break;
+    }
+    case "job.submitted": {
+      const job = jobId(p);
+      str(p, "contractor");
+      str(p, "sha256"); // the artifact stays private until paid: only "a card arrived" shows
+      push({ target: "market.thumb", agent: null, action: "appear", meta: { job_id: job } });
+      break;
+    }
+    case "job.verified":
+    case "job.failed": {
+      const job = jobId(p);
+      const checks = checkList(p);
+      checks.forEach((c, i) => push({ target: `market.check.${i}`, agent: null, action: c.ok ? "tick" : "circle", text: c.name, meta: { job_id: job } }));
+      if (ev.type === "job.failed") {
+        const reason = str(p, "reason");
+        push({ target: "market.status", agent: null, action: "status", text: reason === "expired" ? "expired" : reason === "contractor_error" ? "contractor error" : "checks failed", meta: { job_id: job } });
+        orderLine("The contractor's work failed our checks: not paid", "mkt", "dept");
+      } else orderLine("Our code checked the contractor's work: all checks passed", "mkt", "dept");
+      break;
+    }
+    case "payment.sent": {
+      const job = jobId(p);
+      const contractor = clip(str(p, "contractor"), 40);
+      const amount = tokens(p, "amount_usd");
+      const token = clip(str(p, "token"), 12);
+      const tx = str(p, "tx_hash");
+      const link = safeUrl(strOrNull(p, "explorer_url"));
+      const ledger = ev.provider !== "tempo"; // provider local: a ledger token, no chain transaction
+      push({
+        target: "market.pay",
+        from: "market.wallet.firm",
+        agent: null,
+        action: "drag",
+        text: `${amount} ${token}`,
+        meta: { job_id: job, contractor, tx: ledger ? "" : shortTx(tx), explorer_url: ledger ? null : link.url, ledger },
+      });
+      orderLine(`U-Tax paid ${contractor} ${amount} ${token}${ledger ? " (ledger token)" : ""}`, "mkt", "dept");
+      break;
+    }
+    case "job.delivered": {
+      const job = jobId(p);
+      const path = str(p, "image_url");
+      push({ target: "market.delivered", agent: null, action: "appear", meta: { job_id: job, image_path: ASSET_PATH.test(path) && !path.includes("..") ? path : null } });
+      break;
+    }
+    case "agent.sale": {
+      const amount = tokens(p, "amount_usd");
+      const token = clip(str(p, "token"), 12);
+      str(p, "payer_masked"); // an agent's wallet, masked: the projector names no payer
+      push({ target: "rail.sale", agent: null, action: "count", text: `An agent bought a franchise-tax check · ${amount} ${token}` });
       break;
     }
     case "tool.bought": {
