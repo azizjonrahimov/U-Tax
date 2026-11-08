@@ -115,6 +115,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "sheet.cell": ("book", "n", "of", "sheet", "cell", "label", "value", "formula"),
 }
 ORDER_LINK_KEYS = frozenset({"order_id", "task_no"})  # any event may carry them (v1.11.1, v1.20)
+VIA_KEY = "via"  # v1.21 (D42 M3): any step the autopilot ran says via: "autopilot"
 
 FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",
              "gross_assets_cents", "foreign_owner_25")
@@ -152,7 +153,7 @@ def validate(type_: str, actor: str, provider: str | None, status: str, payload:
     # v1.11.1: any event of an agent's tool call may carry the CEO order it serves; v1.20:
     # and its task (a type that lists either key requires it)
     optional = OPTIONAL_PAYLOAD_KEYS.get(type_, frozenset()) | (
-        ORDER_LINK_KEYS - set(PAYLOAD_KEYS[type_]))
+        (ORDER_LINK_KEYS | {VIA_KEY}) - set(PAYLOAD_KEYS[type_]))
     expected = set(expected) | optional  # an optional key is allowed, never required
     if not (expected - optional <= set(payload) <= expected):
         raise ValueError(

@@ -270,11 +270,13 @@ class State:
     # ---------------------------------------------------------------- apply
 
     def apply(self, e: Event) -> None:
-        if "order_id" in e.payload or "task_no" in e.payload:  # v1.11.1: a copied payload
-            # (a tax result QA re-checks, a call, a proposal) must stay exactly the action's
-            # own data; v1.20 (D41): the task number too
+        autopilot = e.payload.get("via") == "autopilot"  # v1.21 (D42 M3)
+        if "order_id" in e.payload or "task_no" in e.payload or autopilot:  # v1.11.1: a
+            # copied payload (a tax result QA re-checks, a call, a proposal) must stay
+            # exactly the action's own data; v1.20 (D41): the task number too; v1.21: via
             e = replace(e, payload={k: v for k, v in e.payload.items()
-                                    if k not in ("order_id", "task_no")})
+                                    if k not in ("order_id", "task_no")
+                                    and not (autopilot and k == "via")})
         self.last_event_id = max(self.last_event_id, e.id)
         if e.cost_usd is not None and e.type == "cost.booked":
             if e.idempotency_key:  # 17b: a booking whose commit ack was lost is caught up once

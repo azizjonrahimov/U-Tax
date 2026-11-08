@@ -39,6 +39,7 @@ def tick(gw: Gateway) -> None:
                 gw.advance_market_jobs,  # D38: pays verified jobs (off: does nothing)
                 gw.advance_orders,  # D41: the next CEO order task starts (or one times out)
                 gw.mirror_payments,  # D41 B53: a test-mode Stripe record per contractor payment
+                gw.drive_cases,  # D42 M3: a case stuck 45 s gets its next deterministic step
                 lambda: gw.perform("stall_sweep", {}),
                 lambda: gw.perform("ceo_digest", {})):
         try:
