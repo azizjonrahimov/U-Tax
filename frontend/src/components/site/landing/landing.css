@@ -11,7 +11,7 @@
   --line-2: rgba(255, 255, 255, 0.14);
   --text: #f2f3ee;
   --dim: #a1a39b;
-  --faint: #6f7169;
+  --faint: #83857d; /* AA: 5.4:1 on --bg, 4.8:1 on the card's nodes (the brief's #6f7169 measured 4.1:1) */
   --lime: #bef243;
   --lime-2: #d4ff6a;
   --on-lime: #0b0d06;
@@ -140,7 +140,7 @@
   color: var(--on-lime);
   display: grid;
   place-items: center;
-  font: 700 14px var(--sans);
+  font: 600 14px var(--sans);
 }
 .nl .links {
   display: flex;
@@ -379,7 +379,7 @@
   padding-top: 12px;
   font: 400 12px var(--mono);
   color: var(--faint);
-  min-height: 104px; /* CLS: three rows are reserved before the stream answers */
+  min-height: 118px; /* CLS: the label and three rows are reserved before the stream answers */
 }
 .nl .row {
   display: flex;
@@ -397,6 +397,10 @@
 }
 .nl .row:first-of-type i {
   background: var(--lime);
+}
+.nl .row > span:not(.t):not(.ms) {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .nl .row .t {
   color: var(--faint);

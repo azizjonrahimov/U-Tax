@@ -28,6 +28,7 @@ export function Ribbons({ className, dim = false }: { className?: string; dim?: 
     let raf = 0;
     let visible = true;
     let slow = 0;
+    let last = 0;
 
     const size = () => {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -92,14 +93,22 @@ export function Ribbons({ className, dim = false }: { className?: string; dim?: 
     const loop = (now: number) => {
       raf = 0;
       if (!visible || document.hidden) return;
-      const start = performance.now();
+      // Frame-to-frame time (GPU and compositing included) and the draw itself: a frame over 20 ms
+      // counts as slow (30 in a row: half the strands); one over 120 ms halves them at once. Still
+      // slow at the fewest strands (a weak phone): draw once and stop, a still image beats a stall.
+      const gap = last ? now - last : 0;
+      last = now;
       t = now;
+      const t0 = performance.now();
       frame();
-      // A frame over 20 ms, 30 in a row: half the strands (a slow phone keeps a smooth page).
-      slow = performance.now() - start > 20 ? slow + 1 : 0;
-      if (slow >= 30 && seeds.length > 30) {
+      const draw = performance.now() - t0;
+      slow = gap > 20 || draw > 20 ? slow + 1 : 0;
+      if ((slow >= 30 || gap > 120 || draw > 120) && seeds.length > 30) {
         seeds = seeds.filter((_, i) => i % 2 === 0);
         slow = 0;
+      } else if (slow >= 30) {
+        raf = 0;
+        return;
       }
       raf = requestAnimationFrame(loop);
     };
@@ -114,9 +123,13 @@ export function Ribbons({ className, dim = false }: { className?: string; dim?: 
       size();
       if (reduce) frame();
     };
-    const onVisibility = () => start();
+    const onVisibility = () => {
+      last = 0;
+      start();
+    };
     const io = new IntersectionObserver(([e]) => {
       visible = e.isIntersecting;
+      last = 0; // a pause while off-screen is not a slow frame
       start();
     });
     io.observe(c);

@@ -7,8 +7,11 @@
 
 import Link from "next/link";
 import { Ribbons } from "./Ribbons";
+import { FinalCta, Footer, LimeBand, Pricing } from "./Closing";
 import { useFirm, type Firm } from "./firm";
+import { Bento, HowItWorks, TwoCards, Wrote } from "./Middle";
 import "./landing.css";
+import "./sections.css";
 
 function Nav({ firm }: { firm: Firm }) {
   const open = firm.open === true;
@@ -28,7 +31,7 @@ function Nav({ firm }: { firm: Firm }) {
       </div>
       <span className={`status${open ? "" : " resting"}`} role="status">
         <span className="dot" aria-hidden="true" />
-        <span>{open ? `firm open · ${firm.agents ?? 7} agents` : "firm resting"}</span>
+        <span>{open ? `firm open · ${firm.agents ?? 7} agents` : firm.open === false ? "firm resting" : "—"}</span>
       </span>
       <Link href="/signup" className="btn btn-lime">
         Start free check
@@ -46,7 +49,7 @@ function HeroCard({ firm }: { firm: Firm }) {
       <div className="flow-head">
         <span>Delaware franchise tax</span>
         <span className="m">5 steps / 1 branch</span>
-        <span className={`run${firm.open === true ? "" : " off"}`}>{firm.open !== true ? "resting" : c === null ? "—" : running ? "running" : "done"}</span>
+        <span className={`run${firm.open === true ? "" : " off"}`}>{firm.open === false ? "resting" : firm.open === null || c === null ? "—" : running ? "running" : "done"}</span>
       </div>
       <div className="canvas" aria-hidden="true">
         <svg className="edges" viewBox="0 0 100 250" preserveAspectRatio="none">
@@ -106,7 +109,7 @@ function HeroCard({ firm }: { firm: Firm }) {
 }
 
 function Hero({ firm }: { firm: Firm }) {
-  const badge = firm.open === true && firm.clients !== null ? `live tonight / ${firm.clients} ${firm.clients === 1 ? "startup" : "startups"} checked` : "open beta / delaware franchise tax";
+  const badge = firm.open === true && firm.checked !== null && firm.checked > 0 ? `live tonight / ${firm.checked} ${firm.checked === 1 ? "startup" : "startups"} checked` : "open beta / delaware franchise tax";
   return (
     <section className="hero" aria-labelledby="hero-h">
       <div>
@@ -157,7 +160,15 @@ export function Landing() {
             <Hero firm={firm} />
           </div>
         </div>
+        <HowItWorks firm={firm} />
+        <LimeBand />
+        <TwoCards firm={firm} />
+        <Bento firm={firm} />
+        <Wrote firm={firm} />
+        <Pricing />
+        <FinalCta />
       </main>
+      <Footer firm={firm} memos={firm.log ? firm.log.memos : null} />
     </div>
   );
 }

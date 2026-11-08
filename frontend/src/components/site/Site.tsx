@@ -239,6 +239,13 @@ export function Signup() {
   const [done, setDone] = useState(false);
   /** One id per form, made on the first submit, so a retry after a network error never opens a second case. */
   const requestId = useRef<string | null>(null);
+  // D39: the landing's final CTA hands over the email it typed (?email=), prefilled once; the form's
+  // own validation still decides.
+  useEffect(() => {
+    const e = new URLSearchParams(window.location.search).get("email");
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the URL is only readable after mount (no SSR mismatch)
+    if (e) setForm((f) => (f.email ? f : { ...f, email: e.slice(0, 200) }));
+  }, []);
 
   const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim());
   const missing = { name: !form.name.trim(), company: !form.company.trim(), email: !emailOk };
