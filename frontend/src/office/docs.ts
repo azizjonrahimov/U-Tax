@@ -5,7 +5,7 @@
 // the Authorization header and the file is saved from a blob: never a ?token= link that lands
 // in a log. The firm's books stay in the firm (no route serves them).
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { API_URL } from "@/lib/api";
 import { readSession, writeSession } from "@/ceo/session";
 
@@ -29,9 +29,11 @@ export async function downloadDoc(session: string, caseId: string, file: string,
     return { ok: false, message: "Can't reach the firm right now. Try again in a moment." };
   }
   if (r.status === 401 || r.status === 403) {
-    // The session is dead at the gateway: sign this tab out (unless it already signed in again).
-    if (readSession()?.session === session) writeSession(null);
-    return { ok: false, message: "Your sign-in expired. Sign in again to download.", expired: true };
+    // The session is dead at the gateway: sign this tab out (unless it already signed in again,
+    // when a late answer for the old session must not end the new one).
+    const mine = readSession()?.session === session;
+    if (mine) writeSession(null);
+    return { ok: false, message: "Your sign-in expired. Sign in again to download.", ...(mine ? { expired: true as const } : {}) };
   }
   if (r.status === 404) return { ok: false, message: "That file isn't there (a newer version may have replaced it)." };
   if (!r.ok) return { ok: false, message: `The firm couldn't send the file (HTTP ${r.status}).` };
@@ -63,15 +65,20 @@ export async function downloadDoc(session: string, caseId: string, file: string,
  */
 export function useDownload(session: string | null, caseId: string | null, file: string, onExpired?: (why: string) => void) {
   const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  const busy = useRef(false); // a double click starts one download
   const start = async () => {
-    if (!session || !caseId) return;
+    if (!session || !caseId || busy.current) return;
+    busy.current = true;
     setState({ busy: true, error: null });
     let error: string | null = "The download didn't finish. Try again.";
     try {
       const r = await downloadDoc(session, caseId, file);
       error = r.ok ? null : r.message;
       if (!r.ok && r.expired) onExpired?.(r.message);
+    } catch {
+      /* the save itself failed: the default error says so */
     } finally {
+      busy.current = false;
       setState({ busy: false, error });
     }
   };

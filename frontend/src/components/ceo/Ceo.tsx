@@ -327,7 +327,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
             image: () => undefined,
           });
           setOrders(ordersRef.current);
-          caseDocsRef.current = (events as UTaxEvent[]).reduce((d, ev) => stepCaseDocs(d, ev, ev.case_id !== null && fl.has(ev.case_id)), reset ? emptyCaseDocs() : caseDocsRef.current);
+          caseDocsRef.current = (events as unknown[]).filter((e): e is UTaxEvent => typeof e === "object" && e !== null).reduce((d, ev) => stepCaseDocs(d, ev, ev.case_id !== null && fl.has(ev.case_id)), reset ? emptyCaseDocs() : caseDocsRef.current);
           setServed(caseDocsRef.current.served);
         }
         setLog(logRef.current);

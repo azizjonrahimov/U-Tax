@@ -179,9 +179,10 @@ const RESUME_MS = 1500;
 type Clip = { rec: MediaRecorder; chunks: Blob[]; at: number };
 
 /**
- * v1.18.4: the gateway books an upload at max(declared seconds, its size at 6 kbps), so speech is
- * recorded at 8 kbps Opus (an honest clip books ~1.3x its length, not ~5x). A browser that won't
- * take the bitrate records at its default.
+ * v1.18.4: the gateway books an upload at max(declared seconds, its size at a floor bitrate: 6 kbps
+ * for webm/opus, 8 kbps for mp4), so speech is recorded at 8 kbps (an honest Opus clip books ~1.3x
+ * its length, not ~5x). A browser that won't take the bitrate records at its default (it may clamp
+ * it silently: Safari's AAC is not measured yet).
  */
 const SPEECH_BPS = 8000;
 function recorder(stream: MediaStream, type: string): MediaRecorder {
