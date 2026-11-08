@@ -103,6 +103,28 @@ def _dollars_text(value: Fraction) -> str:
 # ---------------------------------------------------------------- the workpaper (.xlsx)
 
 
+FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def save_literal(wb, path: Path) -> None:
+    """Task 44 (SECURITY): the gateway writes no formulas, ever. Before every save, any
+    cell openpyxl typed as a formula (a string starting with "=") and any text starting
+    with = + - @ tab or CR is stored as literal text with Excel's quote prefix: a client's
+    quote like =WEBSERVICE("http://x") or =HYPERLINK(...) can never run when the CEO opens
+    the file. A books file written before this fix heals on its next save. Numbers stay
+    numbers."""
+    for ws in wb.worksheets:
+        for row in ws.iter_rows():
+            for cell in row:
+                value = cell.value
+                if cell.data_type == "f" or (isinstance(value, str)
+                                             and value.startswith(FORMULA_STARTS)):
+                    cell.value = str(value)
+                    cell.data_type = "s"
+                    cell.quotePrefix = True
+    wb.save(path)
+
+
 def build_workpaper(path: Path, label: str, facts: dict, quotes: dict, f: Figures,
                     step: Callable[[str], None]) -> dict[str, tuple[str, str, int]]:
     """Write the workpaper; return {check name: (sheet, cell, expected cents)}."""
@@ -200,7 +222,7 @@ def build_workpaper(path: Path, label: str, facts: dict, quotes: dict, f: Figure
         sheet.column_dimensions["C"].width = 48
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp.xlsx")
-    wb.save(tmp)
+    save_literal(wb, tmp)
     tmp.replace(path)
     return checks
 
@@ -297,7 +319,7 @@ def append_books(path: Path, entry: str, date: str, label: str, f: Figures) -> i
     for col in (5, 6, 7, 8, 9):
         ws.cell(row, col).number_format = MONEY
     tmp = path.with_suffix(".tmp.xlsx")
-    wb.save(tmp)
+    save_literal(wb, tmp)
     tmp.replace(path)
     return row
 
@@ -387,7 +409,7 @@ def append_revenue(path: Path, entry: str, date: str, label: str, amount_cents: 
             ws.cell(row, col).value = value
     ws.cell(row, 5).number_format = MONEY
     tmp = path.with_suffix(".tmp.xlsx")
-    wb.save(tmp)
+    save_literal(wb, tmp)
     tmp.replace(path)
     return row
 
