@@ -63,13 +63,18 @@ order): `board_read`, then `utax.list_open_cases`, then route each open case by 
 `status` with the table below, creating the card that is missing. The status decides the card. A
 member's "next step" note is never a reason to create no card: a note that says "the next step is
 compute_tax" means you create the `tax` card now.
-1. **One open card per case.** Never create a card for a case that already has a `todo`, `doing` or
-   `blocked` card, whatever its step (a "read client reply" card is that case's intake card). The
-   one exception is SENT's two cards, below.
-2. Skip cases waiting on the client (re-ask sent) or on an approval (a blocked card names it), and
-   every case marked `priority` (a `/talk` customer's fast-path case): the fast-path session
-   delegates those, and an `Approval … allowed` wake for one continues its fast path. Never card one
-   in this pass (the fast path itself creates its two SENT cards when the memo is sent).
+1. **One open card per case.** Never create a card for a case that already has a `todo` or `doing`
+   card, whatever its step (a "read client reply" card is that case's intake card). A `blocked` card
+   counts too, but only while the case is still at the status its step is for ("send memo" at
+   QA_PASSED, "compute tax" at READY). If the status has moved on (the gateway superseded its
+   approval, or the CEO unblocked or retried the case), set that card to `done` with
+   "superseded: <status>" and card the new status. The one exception is SENT's two cards, below.
+2. Skip cases whose waiting reason says they wait on the client's reply (a re-ask was sent) or
+   that have a blocked card naming a pending approval. Skip cases marked `priority` (a `/talk`
+   customer's fast-path case) too: the fast-path session delegates them, and creates its own two
+   SENT cards when the memo is sent. Card a priority case only when this session's own trigger
+   names it (`Client replied case_N`, or a CEO order to retry it).
+   Ignore the `next` field `list_open_cases` returns: the status and this table decide.
 3. One card for the next step, assigned to its agent, titled "case_N: <step>":
    | Case status | Card |
    |---|---|
