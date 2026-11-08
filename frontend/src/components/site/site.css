@@ -1,9 +1,11 @@
-/* D32 client pages (landing, sign-up, sign-in): light paper. Tokens from DESIGN.md. */
+/* D39 Phase 2 (LANDING-BRIEF §9): sign-up and sign-in in "Night Lime": dark, glass form cards, a lime
+   primary, Geist with one serif accent word. Only the tokens and the skin changed; the forms behave
+   exactly as before. (The D32 landing styles below are no longer routed: "/" is the D39 landing.) */
 
 .site {
-  --paper: #f6f7f9; --surface: #fff; --ink: #0e1420; --muted: #4a5568; --faint: #6b7280; --line: #dde2ea;
-  --primary: #0b6e4f; --primary-hover: #095c42; --on-primary: #fff; --brand: #e5372a; --error: #b42318;
-  color-scheme: light;
+  --paper: #050505; --surface: rgba(18, 20, 16, .72); --ink: #f2f3ee; --muted: #a1a39b; --faint: #83857d; --line: rgba(255, 255, 255, .14);
+  --primary: #bef243; --primary-hover: #d4ff6a; --on-primary: #0b0d06; --brand: #bef243; --error: #ff8a7d;
+  color-scheme: dark;
   min-height: 100vh; background: var(--paper); color: var(--ink);
   font-family: var(--font-inter), Inter, system-ui, sans-serif; font-size: 16px; line-height: 1.55;
   display: flex; flex-direction: column;
@@ -117,4 +119,66 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .site .btn { transition: none; }
+}
+
+/* ---- D39 skin for the form pages ---- */
+.site {
+  font-family: var(--font-geist), var(--font-inter), system-ui, sans-serif;
+  background:
+    radial-gradient(ellipse 60% 45% at 70% 35%, rgba(190, 242, 67, .10), transparent 70%),
+    radial-gradient(rgba(255, 255, 255, .06) 1px, transparent 1px) 0 0 / 28px 28px,
+    var(--paper);
+  -webkit-font-smoothing: antialiased;
+}
+.site .mono { font-family: var(--font-geist-mono), var(--font-jetbrains-mono), monospace; }
+.site :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.site .skip { background: var(--primary); color: var(--on-primary); }
+.site .top { background: linear-gradient(rgba(5, 5, 5, .8), rgba(5, 5, 5, .5)); border-bottom-color: rgba(255, 255, 255, .08); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); position: sticky; top: 0; z-index: 5; }
+.site .brand { font: 600 17px var(--font-geist), var(--font-inter), sans-serif; letter-spacing: -.01em; }
+.site .mark { background: var(--primary); color: var(--on-primary); border-radius: 7px; width: 26px; height: 26px; padding: 0; display: inline-grid; place-items: center; font: 600 14px var(--font-geist), sans-serif; }
+.site .btn { border-radius: 999px; font: 500 15px var(--font-geist), var(--font-inter), sans-serif; transition: transform .2s, box-shadow .2s, background-color .2s; }
+.site .btn.primary { box-shadow: 0 0 0 1px rgba(190, 242, 67, .4), 0 8px 30px -8px rgba(190, 242, 67, .55); }
+.site .btn.primary:hover:not(:disabled) { transform: translateY(-1px); }
+.site .btn.secondary { background: rgba(255, 255, 255, .06); color: var(--ink); border-color: var(--line); }
+.site .btn:disabled { opacity: .4; box-shadow: none; }
+.site p a, .site .alt a { color: var(--primary); }
+.site p a:visited, .site .alt a:visited { color: #d4ff6a; }
+.site .form-page { padding: 72px 16px; }
+.site .card {
+  max-width: 460px;
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 20px;
+  padding: 36px;
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 40px 120px -40px rgba(0, 0, 0, .9), inset 0 1px 0 rgba(255, 255, 255, .05);
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .site .card { background: #0f110d; }
+}
+.site .card h1 { font: 500 clamp(32px, 3.4vw, 40px)/1.04 var(--font-geist), var(--font-inter), sans-serif; letter-spacing: -.035em; }
+.site h1 em { font-family: var(--font-instrument-serif), Georgia, serif; font-style: italic; font-weight: 400; letter-spacing: -.01em; color: #e9eadf; }
+.site .card .lead { color: var(--muted); }
+.site .field label { font-weight: 500; color: var(--ink); }
+.site .field input {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, .35);
+  color: var(--ink);
+  font: 400 16px var(--font-geist), var(--font-inter), sans-serif;
+  padding: 0 14px;
+}
+.site .field input::placeholder { color: var(--faint); }
+.site .field input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-color: transparent; }
+.site .field .hint { color: var(--faint); font: 400 12.5px var(--font-geist-mono), monospace; }
+.site .card .alt { color: var(--muted); }
+.site .foot { background: transparent; border-top-color: rgba(255, 255, 255, .08); color: var(--faint); }
+.site .foot strong { color: var(--muted); font-weight: 500; }
+.site .top nav a { color: var(--muted); }
+.site .top nav a:hover { color: var(--ink); }
+.site .top nav a.btn.primary { color: var(--on-primary); }
+.site .top nav a.btn.primary:hover { text-decoration: none; }
+@media (prefers-reduced-motion: reduce) {
+  .site .btn.primary:hover:not(:disabled) { transform: none; }
 }
