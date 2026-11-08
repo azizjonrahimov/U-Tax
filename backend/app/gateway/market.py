@@ -78,6 +78,18 @@ def contractor_for_token(gw: Any, token: str | None):
     return found
 
 
+def _order_of(key: str) -> str | None:
+    """§9.6: the CEO order a job serves, from Marketing's hire key "card:order_<id>"."""
+    import re
+
+    found = re.match(r"card:(order_[0-9]{1,12})\b", key or "")
+    return found.group(1) if found else None
+
+
+def _suffix(job: dict) -> str:
+    return f" ({job['order_id']})" if job.get("order_id") else ""
+
+
 def _expired(gw: Any, job: dict) -> bool:
     return bool(job.get("expires_at")) and gw._now() >= parse_ts(job["expires_at"])
 
@@ -99,6 +111,9 @@ def hire(gw: Any, args: dict) -> dict:
     if problem:
         raise Refused("content_guard", f"headline refused: {problem}")
     key = _str(args, "key", max_len=120)
+    if not gw.settings.public_url.startswith("https://"):
+        raise Refused("no_public_url", "hire_contractor needs UTAX_PUBLIC_URL (the gateway's "
+                                       "https address) to serve the delivered image")
     done = gw._done_from(f"job:{key}")
     if done is not None:
         job = gw.state.jobs.get(done.payload["job_id"], {})
@@ -110,7 +125,8 @@ def hire(gw: Any, args: dict) -> dict:
     gw._emit([NewEvent(type="job.posted", actor="mkt",
                        payload={"job_id": job_id, "template": template, "price_usd": price,
                                 "headline": headline},
-                       idempotency_key=f"job:{key}", private={"expires_at": expires})])
+                       idempotency_key=f"job:{key}",
+                       private={"expires_at": expires, "order_id": _order_of(key)})])
     return {"job_id": job_id, "status": "open", "price_usd": price}
 
 
@@ -235,6 +251,8 @@ def submit(gw: Any, args: dict) -> dict:
     out = {"verified": ok, "checks": checks}
     if not ok:
         out["resubmit"] = gw.state.jobs[job_id]["status"] == "claimed"
+        if not out["resubmit"]:  # final: the chief of staff hears (§9.6)
+            gw._wake(f"Job {job_id} failed: checks_failed{_suffix(gw.state.jobs[job_id])}")
     return out
 
 
@@ -281,20 +299,28 @@ def _payment_event(gw: Any, job: dict, c, paid: PaidInvoice | None, *, ok: bool,
 
 
 def _fail(gw: Any, job: dict, reason: str) -> None:
+    """Under the tick: job.failed, and the chief of staff's wake (sent off the lock)."""
     with gw._lock:
         gw._emit([NewEvent(type="job.failed", actor="system",
                            payload={"job_id": job["job_id"], "checks": job.get("checks") or [],
                                     "reason": reason})])
+        gw._market_wakes.append(f"Job {job['job_id']} failed: {reason}{_suffix(job)}")
 
 
 def expire(gw: Any) -> list[str]:
+    """§9.6: a job past its TTL can't be claimed, delivered or paid. A verified job with a
+    payment intent (money may have moved) is never expired: it is resolved first."""
+    intents = gw._pay_intents.load()
     with gw._lock:
         stale = [j for j in gw.state.jobs.values()
-                 if j["status"] in ("open", "claimed") and _expired(gw, j)]
+                 if j["status"] in ("open", "claimed", "submitted", "verified")
+                 and _expired(gw, j) and f"pay:{j['job_id']}" not in intents]
         if stale:
             gw._emit([NewEvent(type="job.failed", actor="system",
                                payload={"job_id": j["job_id"], "checks": j.get("checks") or [],
                                         "reason": "expired"}) for j in stale])
+            gw._market_wakes.extend(f"Job {j['job_id']} failed: expired{_suffix(j)}"
+                                    for j in stale)
     return [j["job_id"] for j in stale]
 
 
@@ -393,10 +419,7 @@ def pay_one(gw: Any, job: dict) -> bool:
                 tries = int(intent.get("tries", 0)) + 1
                 if tries >= PAY_TRIES:
                     gw._pay_intents.put(key, None)
-                    gw._emit([NewEvent(type="job.failed", actor="system",
-                                       payload={"job_id": job_id,
-                                                "checks": job.get("checks") or [],
-                                                "reason": "contractor_error"})])
+                    _fail(gw, job, "contractor_error")
                 else:
                     gw._pay_intents.put(key, {**intent, "tries": tries})
             return False
@@ -429,6 +452,6 @@ def _deliver(gw: Any, job_id: str) -> bool:
     gw._emit([NewEvent(type="job.delivered", actor="system",
                        payload={"job_id": job_id, "image_url": image_url},
                        idempotency_key=f"delivered:{job_id}")])
-    gw._market_wakes.append(f"Job {job_id} delivered: Marketing posts it with "
-                            f"post_social, image_url {image_url}")  # sent off the lock
+    gw._market_wakes.append(f"Job {job_id} delivered"
+                            f"{_suffix(gw.state.jobs[job_id])}")  # §9.6; sent off the lock
     return True

@@ -300,19 +300,74 @@ def test_delivered_asset_passes_asset_url_ok_and_post_social(m, c):
     approve_first_payment(m, job_id)
     m.gw.advance_market_jobs()
     image_url = m.ok("get_job", job_id=job_id)["image_url"]
-    assert image_url == "https://gw.test/assets/ad_1.png"
+    assert image_url == "https://gw.test/assets/ad_1.png"  # absolute, like make_ad
     assert (m.settings.data_dir / "assets" / "ad_1.png").read_bytes() == card()
     assert m.gw._asset_url_ok(image_url)
-    m.gw.state.trust["social_post"] = "AUTO"
-    out = m.gw.perform("post_social", {"channel": "linkedin", "text": HEADLINE,
-                                       "image_url": image_url, "kind": "client"}, actor="mkt")
-    assert out.status == "done", out.as_dict()
-    wakes = []
-    m.gw.on_wake(wakes.append)
     second = to_verified(m, c, key="k2")
     m.gw.advance_market_jobs()
     assert m.ok("get_job", job_id=second)["image_url"].endswith("/ad_2.png")  # next free
-    assert wakes and wakes[-1].startswith(f"Job {second} delivered")
+
+
+def test_a_contractors_image_never_posts_unseen(m, c):
+    job_id = to_verified(m, c)
+    approve_first_payment(m, job_id)
+    m.gw.advance_market_jobs()
+    image_url = m.ok("get_job", job_id=job_id)["image_url"]
+    m.gw.state.trust["social_post"] = "AUTO"  # the firm's own posts go out on their own...
+
+    def post(text):
+        return m.gw.perform("post_social", {"channel": "linkedin", "text": text,
+                                            "image_url": image_url}, actor="mkt")
+
+    first = post(HEADLINE)
+    assert first.status == "needs_approval"  # ...but never a contractor's image unseen
+    m.ok("approve", approval_id=first.approval_id, decision="allow", note="ok")
+    assert post(HEADLINE).status == "done"
+    assert "pixelagent" in m.gw.state.contractor_images_ok
+    assert m.restart().state.contractor_images_ok == {"pixelagent"}  # from the log
+    m.gw.state.trust["social_post"] = "AUTO"
+    assert post("U-Tax: Delaware franchise tax: $85,165 → $450").status == "done"  # trust now
+
+
+def test_wakes_name_the_job_its_order_and_the_failure(m, c):
+    wakes = []
+    m.gw.on_wake(wakes.append)
+    job_id = to_verified(m, c, key="card:order_12")
+    m.gw.advance_market_jobs()
+    [asked] = [w for w in wakes if w.startswith("Approval")] or [None]
+    approval_id = m.ok("get_job", job_id=job_id)["approval_id"]
+    m.ok("approve", approval_id=approval_id, decision="allow", note="ok")
+    assert wakes[-1] == f"Approval {approval_id} allowed for firm (contractor_pay {job_id})"
+    m.gw.advance_market_jobs()
+    assert wakes[-1] == f"Job {job_id} delivered (order_12)"
+    bad = hire(m, key="card:order_13").data["job_id"]
+    claim(c, bad)
+    submit(c, bad, data=card(size=(10, 10)))
+    submit(c, bad, data=card(size=(10, 10)))
+    assert wakes[-1] == f"Job {bad} failed: checks_failed (order_13)"
+    late = hire(m, key="plain").data["job_id"]
+    m.clock.advance(minutes=4)  # past the 3-minute TTL
+    m.gw.advance_market_jobs()
+    assert wakes[-1] == f"Job {late} failed: expired"
+
+
+def test_the_ttl_is_3_minutes_and_an_expired_verified_job_is_never_paid(m, c):
+    assert m.settings.market_job_ttl_minutes == 3
+    job_id = to_verified(m, c)
+    m.clock.advance(minutes=4)
+    m.gw.advance_market_jobs()
+    assert m.ok("get_job", job_id=job_id)["status"] == "expired" and m.wallet.paid == []
+
+
+def test_a_job_with_a_payment_in_flight_never_expires(m, c):
+    m.wallet.fail = [Unsure("timeout after signing")]
+    job_id = to_verified(m, c)
+    approve_first_payment(m, job_id)
+    m.gw.advance_market_jobs()  # unsure: the intent stays
+    m.clock.advance(minutes=10)
+    m.contractor.paid[job_id] = "local:mined"
+    m.gw.advance_market_jobs()
+    assert m.ok("get_job", job_id=job_id)["status"] == "delivered"
 
 
 def test_money_panel_counts_contractor_paid(m, c):

@@ -1715,7 +1715,7 @@ class Gateway:
         current = self.state.trust[action_type]
         key = f"approve:{approval_id}"
         private = {"decision": decision, "ceo_note": note}
-        target = approval.case_id or "firm"
+        target = self._wake_target(approval)
         if decision == "deny":
             self._emit([NewEvent(type="touch.operating", actor="ceo", case_id=approval.case_id,
                                  payload={"note": clip(f"denied: {approval.summary}", self.NOTE_MAX),
@@ -1790,7 +1790,15 @@ class Gateway:
             except Exception:  # noqa: BLE001 - one bad send never strands the rest
                 log.exception("carrying out %s failed; the tick retries it", a.approval_id)
                 continue
-            self._wake(f"Approval {a.approval_id} allowed for {a.case_id or 'firm'}")
+            self._wake(f"Approval {a.approval_id} allowed for {self._wake_target(a)}")
+
+    @staticmethod
+    def _wake_target(approval) -> str:
+        """The case (or "firm"); a contractor_pay approval names its type and job (§9.6)."""
+        target = approval.case_id or "firm"
+        if approval.action_type == "contractor_pay":
+            target += f" (contractor_pay {approval.action_key.split(':', 1)[-1]})"
+        return target
 
     def _released(self, action_type: str, current: str) -> list:
         """Task 14: the OKs given while `action_type` was PAUSED, carried out on resume."""
@@ -3418,6 +3426,11 @@ class Gateway:
         done = self._done_from(key)
         if done is not None:
             return {"url": done.payload["url"], "duplicate": True}
+        # §9.6 (D38): an image from a market job is ASK until the CEO approved one post
+        # with an image from that contractor
+        contractor = next((j.get("contractor") for j in self.state.jobs.values()
+                           if image_url and j.get("image_url") == image_url), None)
+        unseen = contractor is not None and contractor not in self.state.contractor_images_ok
         if channel not in POST_CHANNELS:
             raise Refused("bad_input", f"channel must be one of {', '.join(POST_CHANNELS)}")
         if image_url and (not image_url.startswith(("https://", "local://"))
@@ -3433,7 +3446,10 @@ class Gateway:
                                       f"X allows {X_MAX_CHARS}")
         self._gate("social_post", key,
                    _cap(f"{self._first('social_post')}post on {channel}: {clip(text, 80)}"),
-                   None, detail=f'the {channel} post, word for word: "{text}"')
+                   None, detail=f'the {channel} post, word for word: "{text}"'
+                   + (f" (image by the outside contractor {contractor}, never approved "
+                      "before)" if unseen else ""),
+                   always_ask=unseen)
         try:
             posted = self._with_retry("social post", lambda: self.ports.social.post(
                 Post(channel=channel, text=text, image_url=image_url), key))
@@ -3443,10 +3459,16 @@ class Gateway:
                                  payload={"channel": channel, "text": text, "url": None,
                                           "image_url": image_url})])
             raise
+        seen = None
+        if unseen:  # the CEO approved this one: later posts from it take the normal trust
+            approval_id = self.state.approval_by_key.get(key)
+            if approval_id and self.state.approvals[approval_id].decision == "allow":
+                seen = contractor
         self._emit([NewEvent(type="post.published", actor="mkt",
                              provider=self.ports.social.provider,
                              payload={"channel": channel, "text": text, "url": posted.url,
-                                      "image_url": image_url}, idempotency_key=key)])
+                                      "image_url": image_url}, idempotency_key=key,
+                             private={"contractor_seen": seen} if seen else None)])
         return {"url": posted.url}
 
     def _asset_url_ok(self, url: str) -> bool:

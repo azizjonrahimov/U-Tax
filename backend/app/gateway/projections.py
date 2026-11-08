@@ -192,6 +192,7 @@ class State:
     contractor_paid_usd: Decimal = Decimal(0)
     contractor_paid_by_day: dict[str, Decimal] = field(default_factory=dict)
     agent_sales_usd: Decimal = Decimal(0)
+    contractor_images_ok: set[str] = field(default_factory=set)  # §9.6: seen by the CEO
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
     last_login_brief: dict | None = None
     memo_log: dict[str, list[str]] = field(default_factory=dict)  # reply address -> ts
@@ -540,7 +541,8 @@ class State:
         self.jobs[p["job_id"]] = {
             "job_id": p["job_id"], "template": p["template"], "headline": p["headline"],
             "price_usd": p["price_usd"], "status": "open", "posted_at": e.ts,
-            "expires_at": (e.private or {}).get("expires_at"), "submits": 0}
+            "expires_at": (e.private or {}).get("expires_at"), "submits": 0,
+            "order_id": (e.private or {}).get("order_id")}
 
     def _on_job_claimed(self, e: Event) -> None:
         job = self.jobs.get(e.payload["job_id"])
@@ -770,6 +772,9 @@ class State:
     def _on_post_published(self, e: Event) -> None:
         if e.status == "ok":
             self.posts += 1
+            seen = (e.private or {}).get("contractor_seen")
+            if seen:  # §9.6: the CEO approved a post with this contractor's image
+                self.contractor_images_ok.add(seen)
 
     def _on_brief_generated(self, e: Event) -> None:
         self.briefs.append(e.id)

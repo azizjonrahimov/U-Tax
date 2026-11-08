@@ -130,7 +130,7 @@ class Settings:
     market_price_usd: Decimal = Decimal("0.50")
     market_max_job_usd: Decimal = Decimal("1.00")
     market_max_day_usd: Decimal = Decimal("10.00")
-    market_job_ttl_minutes: int = 10
+    market_job_ttl_minutes: int = 3  # §9.6: Marketing checks about 9 x 20 s
     market_contractors_raw: str = ""  # name|token|wallet|invoice_base, comma-separated
     mpp_secret_key: str = ""
     sell_enabled: bool = False
@@ -238,7 +238,7 @@ class Settings:
             market_price_usd=Decimal(_env("MARKET_PRICE_USD") or "0.50"),
             market_max_job_usd=Decimal(_env("MARKET_MAX_JOB_USD") or "1.00"),
             market_max_day_usd=Decimal(_env("MARKET_MAX_DAY_USD") or "10.00"),
-            market_job_ttl_minutes=int(_env("MARKET_JOB_TTL_MINUTES") or 10),
+            market_job_ttl_minutes=int(_env("MARKET_JOB_TTL_MINUTES") or 3),
             market_contractors_raw=_env("MARKET_CONTRACTORS"),
             mpp_secret_key=_env("MPP_SECRET_KEY"),
             sell_enabled=_env("SELL_ENABLED") == "1",
