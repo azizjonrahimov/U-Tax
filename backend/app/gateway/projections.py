@@ -78,6 +78,10 @@ class Case:
     def revisions(self) -> int:
         return max(0, self.memos_sent - 1)
     message_ids: list[str] = field(default_factory=list)
+    # D42 M1: the thread every client mail replies in (the newest inbound Message-ID) and the
+    # client's original subject (every reply is "Re: <first_subject>")
+    last_inbound_message_id: str | None = None
+    first_subject: str = ""
     last_inbound_id: int = 0  # 22b: the latest email.received / customer voice event
     facts: dict[str, Any] | None = None
     quotes: dict[str, str] = field(default_factory=dict)
@@ -351,6 +355,10 @@ class State:
             case.greeting_name = None
         if private.get("message_id"):
             case.message_ids.append(private["message_id"])
+            if e.type == "email.received":
+                case.last_inbound_message_id = private["message_id"]
+        if e.type == "email.received" and not case.first_subject:
+            case.first_subject = subject
 
     def _on_facts_extracted(self, e: Event) -> None:
         case = self._case(e)

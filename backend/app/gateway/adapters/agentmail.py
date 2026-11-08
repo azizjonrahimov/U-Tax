@@ -99,6 +99,14 @@ def verify_svix(secret: str, headers: dict[str, str], body: bytes, *,
     return False
 
 
+def _message_id(raw: str | None) -> str | None:
+    """D42 M1: an RFC 5322 Message-ID for In-Reply-To/References ("<id@host>"), else None."""
+    text = (raw or "").strip()
+    if not text or any(c in text for c in "\r\n\0 ") or len(text) > 500:
+        return None
+    return text if text.startswith("<") and text.endswith(">") else f"<{text.strip('<>')}>"
+
+
 def _one_line(text: str, limit: int) -> str:
     """A subject is one line: no CR/LF or control characters, at most `limit` chars."""
     return re.sub(r"[\x00-\x1f\x7f]+", " ", text).strip()[:limit]
@@ -146,12 +154,27 @@ class AgentMailMail:
         known = self._index.get(send_key)
         if known:
             return SentMail(message_id=known)
-        response = _http.call(self.provider, lambda: self._client.post(
-            f"/v0/inboxes/{quote(inbox, safe='@')}/messages/send",
-            json={"to": [mail.to], "subject": subject, "text": mail.body,
-                  **({"bcc": [mail.bcc]} if mail.bcc else {}),
-                  **({"attachments": files} if files else {})},
-            headers={"Idempotency-Key": _http.safe_key(send_key)}))
+        body = {"to": [mail.to], "subject": subject, "text": mail.body,
+                **({"bcc": [mail.bcc]} if mail.bcc else {}),
+                **({"attachments": files} if files else {})}
+        thread = _message_id(mail.in_reply_to)
+        if thread:  # D42 M1: in the client's thread (AgentMail's send takes custom headers)
+            body["headers"] = {"In-Reply-To": thread, "References": thread}
+
+        def post(json_body: dict, idem: str) -> httpx.Response:
+            return _http.call(self.provider, lambda: self._client.post(
+                f"/v0/inboxes/{quote(inbox, safe='@')}/messages/send", json=json_body,
+                headers={"Idempotency-Key": _http.safe_key(idem)}))
+
+        try:
+            response = post(body, send_key)
+        except Rejected:
+            if "headers" not in body:
+                raise
+            # never lose a client mail over threading: once more, unthreaded (its own key)
+            log.warning("agentmail refused the thread headers; sending unthreaded")
+            body.pop("headers")
+            response = post(body, send_key + "|unthreaded")
         message_id = (response.json() or {}).get("message_id")
         if not message_id:
             raise Rejected("agentmail answered without a message_id")
