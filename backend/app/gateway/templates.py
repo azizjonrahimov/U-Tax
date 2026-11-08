@@ -59,7 +59,18 @@ FACT_LABELS = {
     "foreign_owner_25": "whether a foreign owner holds 25%+",
     "gross_receipts": "this year's gross receipts (optional)",
     "years_with_receipts": "how many years you've had receipts (optional)",
+    # D42 (v1.21): the income-tax facts (the engine's own labels)
+    "entity_type": "what kind of company it is (C-corp, S-corp, LLC)",
+    "state": "the state where the company is based and does business",
+    "cost_of_goods": "the cost of goods sold (0 if you sell software or services)",
+    "total_deductions": "the year's total business expenses (salaries, rent, software, etc.)",
+    "compensation": "the year's total compensation paid (optional)",
+    "first_year_in_state": "whether this is the company's first taxable year in the state",
+    "retail_wholesale": "whether the company mainly sells at retail or wholesale",
 }
+# the income tax needs the year's sales: not optional when it is asked for that
+INCOME_GROSS_RECEIPTS = "the year's total sales (gross receipts)"
+INCOME_FACT_NAMES = ("entity_type", "state", "cost_of_goods", "total_deductions")
 
 NOT_ELIGIBLE_REASONS = ("not_incorporated", "outside_delaware", "not_a_corporation")
 
@@ -314,9 +325,67 @@ def memo_values(*, masked_name: str, result: dict, form5472: bool, rnd: bool,
     }
 
 
+DRAFT_LINE = "DRAFT, estimate for review, not filed. U-Tax never files a return or e-signs."
+RETURNS_SUBJECT = "Your tax estimate (draft)"
+
+
+def _usd(n: int) -> str:
+    return f"-${-n:,}" if n < 0 else f"${n:,}"
+
+
+def returns_table(rows: list[dict], *, franchise: dict | None, total_usd: int,
+                  assumptions: list[str]) -> str:
+    """D42 §T2: the memo's "What you owe" table, one row per tax the engines computed
+    (every number from tax.return_computed / tax.computed), the assumptions and the draft
+    line. Plain text: the memo is a plain-text mail."""
+    lines = ["What you owe (estimate):"]
+    for r in rows:
+        due = f", due {r['due']}" if r.get("due") else ""
+        form = f" ({r['form']})" if r.get("form") else ""
+        amount = "a person prepares this" if r["status"] == "human_review" else _usd(
+            r["amount_usd"])
+        lines.append(f"- {r['jurisdiction']} {r['tax']}{form}{due}: {amount}")
+    if franchise:
+        lines.append(f"- Delaware franchise tax (annual report){', due ' + DUE_DATE_TEXT}: "
+                     f"{format_usd(franchise['total_cents'])}")
+    lines.append(f"Total estimated: {_usd(total_usd)}")
+    lines.append("")
+    lines.append("What we assumed:")
+    lines += [f"- {a}" for a in assumptions]
+    lines.append("")
+    lines.append(DRAFT_LINE)
+    return "\n".join(lines)
+
+
+def returns_memo(*, greeting_name: str, table: str) -> str:
+    """The memo for an income-tax-only case (no franchise tax): fixed words + the table."""
+    return (f"Hi {greeting_name},\n\nThanks for asking U-Tax. Here is our estimate of the "
+            "income taxes your corporation owes for the year, worked out by tested code from "
+            "the numbers you gave us, and re-checked by a second agent before it went out. A "
+            "draft Form 1120 and a workbook with every formula are attached.\n\n"
+            f"{table}\n\nIf any number is wrong, reply with the right one and we'll send an "
+            "updated estimate. A licensed CPA or EA should review it before anything is "
+            f"filed.\n\n{SIGN_OFF}\n\n{DISCLAIMER}\nU-Tax does not file returns or act as "
+            "your tax preparer. Never send us an SSN or EIN.")
+
+
+def with_returns(memo: str, table: str) -> str:
+    """The franchise memo with the table before its sign-off (the memo template is the
+    agents' file; the table is the gateway's, so it never depends on a placeholder)."""
+    if not table:
+        return memo
+    at = memo.find(SIGN_OFF)  # before the sign-off, else before the disclaimer
+    at = at if at >= 0 else memo.find(DISCLAIMER)
+    if at < 0:
+        return memo.rstrip() + "\n\n" + table
+    return memo[:at].rstrip() + "\n\n" + table + "\n\n" + memo[at:]
+
+
 def ask_values(masked_name: str, missing: list[str], problems: list[str],
                greeting_name: str | None = None) -> dict[str, str]:
-    labels = [FACT_LABELS.get(f, f.replace("_", " ")) for f in missing
+    income = any(f in INCOME_FACT_NAMES for f in missing)
+    labels = [INCOME_GROSS_RECEIPTS if f == "gross_receipts" and income
+              else FACT_LABELS.get(f, f.replace("_", " ")) for f in missing
               if f != "stated_par" or missing == ["stated_par"]]
     return {"greeting_name": greeting_name or masked_name, "masked_name": masked_name,
             "missing_list": _join(labels) or "a few numbers",

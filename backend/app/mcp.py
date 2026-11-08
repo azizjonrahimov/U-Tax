@@ -42,7 +42,10 @@ def _no_constants(name: str) -> Any:
     raise ValueError(f"{name} is not JSON")
 SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
 FACTS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",
-         "gross_assets", "foreign_owner_25", "gross_receipts", "years_with_receipts")
+         "gross_assets", "foreign_owner_25", "gross_receipts", "years_with_receipts",
+         # v1.21 (D42): the income-tax facts
+         "entity_type", "state", "cost_of_goods", "total_deductions", "compensation",
+         "first_year_in_state", "retail_wholesale")
 
 _CASE = {"case_id": {"type": "string", "description": "e.g. case_7"}}
 
@@ -74,6 +77,19 @@ TOOLS: dict[str, dict[str, Any]] = {
             "incorporated_delaware": {"type": "boolean",
                                       "description": "omit when the email doesn't say"},
             "foreign_owner_25": {"type": "boolean",
+                                 "description": "omit when the email doesn't say"},
+            # v1.21 (D42): the income tax. Every fact still needs its verbatim span in quotes.
+            "services": {"type": "array", "items": {"type": "string",
+                                                    "enum": ["de_franchise", "income_tax"]},
+                         "description": "what the client asks for; default: the franchise "
+                                        "tax, plus the income tax when its facts are given"},
+            "entity_type": {"type": "string",
+                            "enum": ["c_corp", "s_corp", "llc", "individual", "other"],
+                            "description": "only c_corp is computed; others go to a person"},
+            "state": {"type": "string", "description": "2-letter state where it is based"},
+            "first_year_in_state": {"type": "boolean",
+                                    "description": "omit when the email doesn't say"},
+            "retail_wholesale": {"type": "boolean",
                                  "description": "omit when the email doesn't say"},
         }, ["case_id", "quotes"])},
     "ask_client": {"description": "Templated re-ask email for the missing facts (max 2).",
