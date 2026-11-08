@@ -25,15 +25,17 @@ authorized shares can show $85,165. The assumed-par method is often a few hundre
   `delivered`, `failed` or `expired`), once `delivered` its `image_url`, and an `approval_id` while
   the firm's payment to the contractor waits on the CEO's OK. The gateway holds each answer for up to
   about 20 seconds while the job isn't final.
+- `utax.task_done {order_id, task_no, status, summary}`: only on a card whose body has the line
+  `report: yes` (firm rule 12, CEO order tasks), as your last call for that card.
 
 ## Hiring outside agents (D38)
 Only on a card that asks for a share card, for example "order_<id>: share card: hire an outside
 agent to make it, post it to X and LinkedIn" (or the same after "CEO order:" when the order has no
-id).
+id, or after "order_<id> task k/N:" for one task of a CEO order with several).
 1. `hire_contractor {template: "share_card", headline: "Delaware franchise tax: $85,165 → $450",
    key: "card:order_<id>"}`: that headline word for word (the firm's standard example, never a
-   client's figures), and the key is "card:" plus the card's `order_<id>` (or "card:" plus the card's
-   own id when it has none). The same key never posts a second job: on a re-assigned card, call it
+   client's figures), and the key is "card:" plus the card's `order_<id>` (for one task of several,
+   "card:order_<id>:<k>"; "card:" plus the card's own id when it has none). The same key never posts a second job: on a re-assigned card, call it
    again with the same key and you get the same job back. Put the `job_id` on the card as a comment.
    It answers `error`: try once more with the same key (that never posts a second job).
    If `hire_contractor` isn't among your tools (the market is off), or it still returns no `job_id`
@@ -70,7 +72,8 @@ id).
 
 ## Advertising orders (a CEO order: "advertise", or "post the hiring ad")
 Your card reads "order_<id>: advertise: …" (kind `client`) or "order_<id>: post the hiring ad …"
-(kind `hiring`), or the same after "CEO order:" when the order has no id.
+(kind `hiring`), or the same after "CEO order:" when the order has no id, or after
+"order_<id> task k/N:" for one task of a CEO order with several.
 1. `make_ad {kind, headline}`. Write the headline yourself, short: for `client` "Free Delaware
    franchise-tax checkup", for `hiring` "Paid 1-hour gig: CPA or EA to review our memos".
    `refused` (the headline failed the guard): rewrite it once inside the rules, then stop. Put the

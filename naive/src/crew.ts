@@ -36,6 +36,8 @@ export const GATEWAY_TOOLS = [
   // v1.19 (design D38): the agent market. Marketing posts a job; the gateway checks the work and pays
   "hire_contractor",
   "get_job",
+  // v1.20 (design D41 §10.2): a card marked `report: yes` ends its CEO order task; any firm seat
+  "task_done",
 ] as const;
 
 export type GatewayTool = (typeof GATEWAY_TOOLS)[number];
@@ -87,7 +89,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_COS",
     prompt: "chief-of-staff.md",
     description: "Runs the firm for the human CEO: takes orders, assigns work on the board, writes the morning brief.",
-    tools: ["list_open_cases", "get_case", "firm_brief"],
+    tools: ["list_open_cases", "get_case", "firm_brief", "task_done"],
   },
   intake: {
     name: "intake",
@@ -95,7 +97,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_INTAKE",
     prompt: "intake.md",
     description: "Reads each client email, quotes the five facts verbatim, re-asks for what is missing, books the review call, sends templated follow-ups.",
-    tools: ["get_case", "extract_facts", "ask_client", "mark_not_eligible", "book_call", "follow_up"],
+    tools: ["get_case", "extract_facts", "ask_client", "mark_not_eligible", "book_call", "follow_up", "task_done"],
   },
   tax: {
     name: "tax",
@@ -103,7 +105,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_TAX",
     prompt: "tax.md",
     description: "Looks up Delaware franchise-tax law and runs the tested engine on the extracted facts.",
-    tools: ["get_case", "law_search", "compute_tax"],
+    tools: ["get_case", "law_search", "compute_tax", "task_done"],
   },
   qa: {
     name: "qa",
@@ -111,7 +113,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_QA",
     prompt: "qa.md",
     description: "Re-runs the engine, re-matches every quote against the email, and checks the memo renders on a phone.",
-    tools: ["get_case", "qa_check", "phone_check", "flag_case"],
+    tools: ["get_case", "qa_check", "phone_check", "flag_case", "task_done"],
   },
   acct: {
     name: "accounting",
@@ -119,7 +121,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_ACCT",
     prompt: "accounting.md",
     description: "Prepares the case's documents (workpaper, memo, books entry; built by the gateway from the engine) and sends the QA-passed memo with them. Only after QA.",
-    tools: ["get_case", "prepare_documents", "send_memo"],
+    tools: ["get_case", "prepare_documents", "send_memo", "task_done"],
   },
   mkt: {
     name: "marketing",
@@ -127,7 +129,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_MKT",
     prompt: "marketing.md",
     description: "Finds clients: branded ads and public posts on the firm's channels, LinkedIn DM drafts the human sends, allowlisted data calls on public startup lists, and share cards from outside contractor agents (the gateway pays them).",
-    tools: ["post_social", "draft_dm", "buy_tool", "make_ad", "hire_contractor", "get_job"],
+    tools: ["post_social", "draft_dm", "buy_tool", "make_ad", "hire_contractor", "get_job", "task_done"],
   },
   hr: {
     name: "hr",
@@ -135,7 +137,7 @@ export const CREW: Record<AgentKey, Seat> = {
     tokenEnv: "UTAX_TOOL_TOKEN_HR",
     prompt: "hr.md",
     description: "Runs the paid gig hire: finds public leads, writes to candidates who gave the firm their address, screens and shortlists. The CEO hires or declines.",
-    tools: ["get_candidate", "hr_record", "source_candidates", "hr_outreach", "list_candidates"],
+    tools: ["get_candidate", "hr_record", "source_candidates", "hr_outreach", "list_candidates", "task_done"],
   },
   // v1.14 (design D34): the CEO's own assistant, not on the team or the board. It acts only through
   // the CEO tools on /mcp/ceo, which the gateway runs directly (no proposal) and can mostly undo.

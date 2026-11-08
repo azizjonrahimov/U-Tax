@@ -399,7 +399,7 @@ for (const required of Object.keys(TEMPLATE_RULES)) if (!existsSync(join(templat
 // repeated the call) and firm rule 11 (order ids). Every order_<n> example is the contract's shape.
 const MUST_KEEP = {
   "chief-of-staff.md": ["carries all three: `title`", "`body`", "`assignee`", "names only a card id you read with `board_read` in this session",
-    "Never send the same call again unchanged", "The body starts with `order_<id>`", "Don't also `send_to_agent` for the same work",
+    "Never send the same call again unchanged", "Don't also `send_to_agent` for the same work",
     // the first live run on haiku: a digest read "next step is compute_tax" from a note and created no card
     "**Every session does this, whatever woke you**", "`board_read`, then `utax.list_open_cases`, then route each open case by its gateway `status`",
     "A member's \"next step\" note is never a reason to create no card"],
@@ -427,7 +427,9 @@ const MUST_KEEP = {
     "later contractor payments within the firm's caps run on their own", "You never pay, name a wallet or set a price",
     "`utax.order` \"get an outside agent to make a share card\"", "not `utax.decide_candidate`",
     "and `contractor_pay` when `utax.get_trust` lists it", "`contractor_pay` (D38: paying outside contractor agents)",
-    "unless the job expired first", "Plain spoken sentences only: no markdown, no asterisks, no bullets, no headings."],
+    "unless the job expired first", "call `utax.order` **once** with `tasks: [", "Use short imperatives, in the order said, at most 6",
+    "One job is one task: its steps stay together", "One request, one `utax.order` call.", "→ `utax.order` \"email our clients\"",
+    "Rules 10 to 12 (the fast path, order ids, order tasks) don't apply to you", "Plain spoken sentences only: no markdown, no asterisks, no bullets, no headings."],
   "ceo-voice.md": ["Plain spoken sentences only: no markdown, no asterisks, no bullets, no headings.", "So is \"hire a designer\" (D38: an outside contractor agent, never `decide_candidate`)",
     "five when `get_trust` lists `contractor_pay`", "`contractor_pay` (D38: paying outside contractor agents)",
     "the exact id of the waiting `contractor_pay` approval", "contractor payments, or everything?"],
@@ -435,6 +437,46 @@ const MUST_KEEP = {
 MUST_KEEP["chief-of-staff.md"].push("is the share card row", "\"Pay the contractor\", \"approve the payment\": no card",
   "the share card, follow up on that case", "a wake ending \"(contractor_pay job_N)\"", "Marketing sees the answer on its next check",
   "this rule replaces the allowed and denied rules around it", "Only if it is `blocked` on that job's payment");
+// D41 (contract v1.20 §10): multi-task orders. One task at a time, one reporter card per task.
+MUST_KEEP["chief-of-staff.md"].push("**Work only on this task.** The gateway sends the next task only after this one ends",
+  "Mark **exactly one** card per task as the reporter by adding the line `report: yes`",
+  "The body's first line is `order_<id> task k/N` (single: `order_<id> task 1/1`)",
+  "advertise → `marketing`; hire N → `hr`; share card → `marketing`; follow up and email clients → `intake`",
+  "ask your one short question **and** call `utax.task_done` with `status: \"blocked\"`",
+  "**No `report: yes` card for this task? Then you end it**", "the card reports, not you",
+  "**At most one card per department per task.**", "body `order_<id> task k/N`, case_7; `report: yes`",
+  "(end the task `blocked` with the question)", "(but end its task `done`, \"the console switch does this\")",
+  "summary \"already running\"", "The \"email our clients\" row is the one exception",
+  "No card for email: we only email people who wrote to us first", "`utax.task_done` done \"no client has a memo yet\"");
+MUST_KEEP["_firm-rules.md"].push("12. **CEO order tasks.** If your card's body has a line `report: yes`, your **last** tool call for",
+  "Call it exactly once. Without `report: yes`, don't call it.", "In \"order_42 task 2/3\" the id is only `order_42`",
+  "that call still comes last", "also pass `task_no: 2` on every tool that takes `order_id`");
+MUST_KEEP["ceo-voice.md"].push("one `order` with `tasks`: short imperatives, in the order said, at most 6, one job per task");
+MUST_KEEP["marketing.md"].push("\"card:order_<id>:<k>\"");
+for (const [key, seat] of Object.entries(CREW))
+  if (key !== "ceo" && key !== "cos")
+    (MUST_KEEP[seat.prompt] ??= []).push("only on a card whose body has the line `report: yes` (firm rule 12, CEO order tasks)");
+{
+  // the Chief of Staff recognizes both §10.1 wakes word for word (a single-task order keeps the old text)
+  const api = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "";
+  const s10 = api.split(/^## 10\./m)[1]?.split(/^## /m)[0] ?? "";
+  const wakes = [...(s10.match(/Wakes:[^]*?One task runs/)?.[0] ?? "").matchAll(/`(CEO order_[^`]+)`/g)].map((m) => m[1]);
+  if (wakes.length !== 2) fail(`contracts/api.md §10.1: expected the two order wakes, read ${wakes.length}`);
+  const cos = readFileSync(join(ROOT, "prompts", "chief-of-staff.md"), "utf8");
+  const wakeList = cos.split(/^## What wakes you/m)[1]?.split(/^## /m)[0] ?? "";
+  for (const w of wakes) if (!wakeList.includes(`- \`${w}\``)) fail(`prompts/chief-of-staff.md: "What wakes you" has no item for the §10.1 wake \`${w}\``);
+  // every card body the orders table spells out carries the task line rule 12 reads
+  for (const m of cos.matchAll(/\(body:? ([^;)]+)/g))
+    if (!m[1].startsWith("`order_<id> task k/N`")) fail(`prompts/chief-of-staff.md: a table card body must start \`order_<id> task k/N\` (got "${m[1]}")`);
+  // firm rule 12's statuses are §10.2's
+  const want = (s10.match(/utax\.task_done \{[^}]*status: ([\w|]+)/)?.[1] ?? "").split("|").sort().join();
+  const rule12 = readFileSync(join(ROOT, "prompts", "_firm-rules.md"), "utf8").split(/^12\. /m)[1] ?? "";
+  const got = [...(rule12.match(/Use status ([^.]+)\./)?.[1] ?? "").matchAll(/`(\w+)`/g)].map((m) => m[1]).sort().join();
+  if (!want || got !== want) fail(`prompts/_firm-rules.md rule 12: statuses (${got}) != contract §10.2 (${want})`);
+  // every firm seat can end a task; the CEO assistant has no cards, so it holds no task_done
+  for (const [key, seat] of Object.entries(CREW))
+    if ((key === "ceo") === seat.tools.includes("task_done")) fail(`${seat.name}: task_done belongs to every firm seat and not the CEO assistant`);
+}
 // D38: the order the CEO assistant sends is one the Chief of Staff's share card row lists
 const SHARE_ORDER = "get an outside agent to make a share card";
 for (const file of ["chief-of-staff.md", "ceo-assistant.md", "ceo-voice.md"])

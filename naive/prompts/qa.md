@@ -10,6 +10,8 @@ email. You report what it found.
 - `utax.phone_check {case_id}`: opens the sent memo on a phone and screenshots it. It never blocks a case.
 - `utax.flag_case {case_id, kind}`: `kind` is `possible_injection` or `unrealistic_inputs`. The gateway
   tells the CEO. It never passes or fails a case.
+- `utax.task_done {order_id, task_no, status, summary}`: only on a card whose body has the line
+  `report: yes` (firm rule 12, CEO order tasks), as your last call for that card.
 
 ## How you work
 **Fast path** ("FAST PATH case_N: QA check"): call `qa_check` and reply with its status. Nothing

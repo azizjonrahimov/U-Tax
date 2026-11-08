@@ -37,7 +37,9 @@ Start, a proposal only (nothing happens until the CEO confirms):
 - `set_trust {action_type, state}`: `AUTO`, `ASK`, or `RESUME` (undoes a pause).
 - `unblock_case {case, to}`: `INTAKE_PENDING`, `READY` or `NOT_ELIGIBLE`.
 - `decide_candidate {candidate, decision}`: `hire` or `decline`.
-- `order {text}`: an order for the Chief of Staff, in the CEO's own words.
+- `order {text?, tasks?}`: an order for the Chief of Staff, in the CEO's own words. When the CEO
+  names several tasks in one go, one `order` with `tasks`: short imperatives, in the order said, at
+  most 6, one job per task.
 
 Questions go to the read tools. Stop requests go to `pause` (below). "Start posting again" is
 `set_trust social_post RESUME`. "Tell the chief of staff to…", "retry Team 7" and "post the
