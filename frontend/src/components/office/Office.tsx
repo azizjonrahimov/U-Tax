@@ -18,6 +18,7 @@ import { Ceo } from "@/components/ceo/Ceo";
 import { followDelay, followTarget, followWhileTouring, initialTab, initialView, TOUR_DWELL_MS, type DeskTab, type View } from "@/office/follow";
 import type { Thread } from "@/office/mail";
 import { Mail } from "./Mail";
+import { Payments } from "./Payments";
 import { activeTask, taskLabel, tourTarget, type TourOrder, type TourTask } from "@/office/tour";
 import { TaskBanner } from "./TaskBanner";
 import { ARTIFACT_MS, current, DRAFT_MS, type Desk } from "@/office/artifact";
@@ -34,7 +35,7 @@ const seatColor = (seat: Seat) => `var(--seat-${seat})`;
 
 export function Office() {
   const session = useSessionToken();
-  const { office, numbers, status, live, studio, tour, mail } = useFirmFeed(session);
+  const { office, numbers, status, live, studio, tour, mail, payTick } = useFirmFeed(session);
   const theater = useMemo(() => <Theater />, []);
   /** D33: the CEO console as a panel on the right (signed in). Nothing mounts until the viewer's layout is read. */
   const [panelReady, setPanelReady] = useState(false);
@@ -160,6 +161,8 @@ export function Office() {
     if (ts > newestMail) newestMail = ts;
   }
   const tourInbox = follow && running?.task.seat === "intake" && !!running.task.startedAt && newestMail >= running.task.startedAt;
+  // The Accounting desk is on the tour for a payment (money events are shown there): open its Payments.
+  const tourPayments = follow && running?.task.seat === "acct";
 
   /** The task a desk's banner shows: the running one at its desk (and at the CoS), else the one that just ended there. */
   const bannerFor = (seat: Seat): { order: TourOrder; task: TourTask } | null => {
@@ -256,7 +259,7 @@ export function Office() {
             {theater}
           </div>
         ) : (
-          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} served={studio.served} banner={bannerFor(view)} tab={tourInbox ? "inbox" : intakeTab} onTab={setIntakeTab} mail={mail} />
+          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} served={studio.served} banner={bannerFor(view)} tab={tourInbox ? "inbox" : tourPayments ? "payments" : intakeTab} onTab={setIntakeTab} mail={mail} payTick={payTick} />
         )}
         {toast && (
           <div className="tour-toast" role="status">
@@ -406,9 +409,10 @@ function FeedDot({ status }: { status: FeedStatus }) {
 
 // ------------------------------------------------------------------ one department
 
-function Department({ desk, studio, numbers, working, following, now, session, served, banner, tab, onTab, mail }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null; served: Record<string, string[]>; banner: { order: TourOrder; task: TourTask } | null; tab: DeskTab; onTab: (t: DeskTab) => void; mail: Thread[] }) {
+function Department({ desk, studio, numbers, working, following, now, session, served, banner, tab, onTab, mail, payTick }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null; served: Record<string, string[]>; banner: { order: TourOrder; task: TourTask } | null; tab: DeskTab; onTab: (t: DeskTab) => void; mail: Thread[]; payTick: number }) {
   const seat = desk.seat;
   const inbox = seat === "intake" && tab === "inbox";
+  const payments = seat === "acct" && tab === "payments";
   const step = desk.steps[0];
   return (
     <main className={banner ? "of-dept touring" : "of-dept"} style={{ "--c": seatColor(seat) } as CSSProperties}>
@@ -424,7 +428,7 @@ function Department({ desk, studio, numbers, working, following, now, session, s
         {following && <span className="dept-follow">Auto-following the firm</span>}
         {seat === "intake" && (
           <div className="seg desk-tabs" role="group" aria-label="Intake view">
-            <button className={tab === "workspace" ? "on" : ""} aria-pressed={tab === "workspace"} onClick={() => onTab("workspace")}>
+            <button className={tab !== "inbox" ? "on" : ""} aria-pressed={tab !== "inbox"} onClick={() => onTab("workspace")}>
               Workspace
             </button>
             <button className={tab === "inbox" ? "on" : ""} aria-pressed={tab === "inbox"} onClick={() => onTab("inbox")}>
@@ -432,9 +436,21 @@ function Department({ desk, studio, numbers, working, following, now, session, s
             </button>
           </div>
         )}
+        {seat === "acct" && (
+          <div className="seg desk-tabs" role="group" aria-label="Accounting view">
+            <button className={tab !== "payments" ? "on" : ""} aria-pressed={tab !== "payments"} onClick={() => onTab("workspace")}>
+              Workspace
+            </button>
+            <button className={tab === "payments" ? "on" : ""} aria-pressed={tab === "payments"} onClick={() => onTab("payments")}>
+              Payments
+            </button>
+          </div>
+        )}
       </header>
       {inbox ? (
         <Mail threads={mail} />
+      ) : payments ? (
+        <Payments session={session} tick={payTick} />
       ) : (
       <div className="dept-grid">
         <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} studio={studio} now={now} session={session} served={served} />

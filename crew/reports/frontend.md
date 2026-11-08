@@ -412,3 +412,15 @@ The fix each time was to derive from the event log and to check, after each awai
 - The Intake desk header has a Workspace | Inbox switch. follow.ts initialTab reads ?tab=inbox. The tour opens the Inbox while the running Intake task's newest work is an email.
 - Verified on the mock: 4 injected mails before page load, then /office?d=intake&tab=inbox shows the full thread (history folded on open).
 - Cut: the Overview Mail pane's "Last email" line (the allowed cut).
+
+## D41 F50-office the Payments ledger (needs B52 on main to merge)
+- office/payments.ts parseLedger (B52 shape from runbook §E): rows capped at 100, https-only links, malformed rows dropped; money() never puts a $ on a token. payments.test.ts has 2 tests.
+- components/office/Payments.tsx, the Accounting desk Workspace | Payments tab:
+  - Totals strip in lime mono, with "testnet tokens have no real value".
+  - Table: time, what (avatar plus "Paid PixelAgent for job_2"), amount, rail chip ("Tempo testnet"), proof (tx ↗ to the explorer, and "Stripe test · mirror ↗"), status.
+  - New rows flash once; EmptyState when there are no rows; "Payments unavailable" when the endpoint fails.
+  - It fetches on open, every 15 s, and on each payment.* / agent.sale (feed payTick).
+- ?tab=payments opens it; the tour opens Payments when the running task is at Accounting.
+- The rail Money block has a "payments · ledger ↗" row: there is no count, because no number is read for it.
+- Mock: GET /api/payments in the B52 shape (theater token or admin), built from its own payment events.
+- Verified on the mock: a payment.sent before open plus an agent.sale while open (the refetch on the event) gives 2 rows with explorer and mirror links.

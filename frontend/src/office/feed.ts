@@ -44,6 +44,8 @@ export interface Feed {
   tour: TourOrder[];
   /** D41 F49: the firm's email as threads per case (history and the stream). */
   mail: Thread[];
+  /** D41 F50: bumps on every payment.* / agent.sale event, so the ledger refetches at once. */
+  payTick: number;
 }
 
 /** The gateway refused the CEO session: it was revoked, or the gateway's secret changed. */
@@ -96,6 +98,7 @@ export function useFirmFeed(session: string | null = null): Feed {
   const tourRef = useRef(tour);
   const [mail, setMail] = useState<Thread[]>([]);
   const mailRef = useRef(mail);
+  const [payTick, setPayTick] = useState(0);
 
   useEffect(() => {
     if (!HAS_GATEWAY) return;
@@ -145,6 +148,7 @@ export function useFirmFeed(session: string | null = null): Feed {
         tourRef.current = tourNext;
         setTour(tourNext);
       }
+      if (events.some((e) => wellFormed(e) && (e.type.startsWith("payment.") || e.type === "agent.sale"))) setPayTick((n) => n + 1);
       const mailNext = foldMail(mailRef.current, events.filter(wellFormed));
       if (JSON.stringify(mailNext) !== JSON.stringify(mailRef.current)) {
         mailRef.current = mailNext;
@@ -294,5 +298,5 @@ export function useFirmFeed(session: string | null = null): Feed {
     };
   }, [session]);
 
-  return { office, numbers, status, live, studio, tour, mail };
+  return { office, numbers, status, live, studio, tour, mail, payTick };
 }

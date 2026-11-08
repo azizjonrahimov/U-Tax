@@ -643,6 +643,22 @@ const server = createServer(async (req, res) => {
   const ceoRead = ticket !== null || isAdmin(req);
   if (req.method === "GET" && (ceoRead || (readToken === THEATER && req.headers.authorization === undefined))) {
     if (url.pathname === "/api/state" && !ceoRead) return out(200, { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
+    // D41 F50: GET /api/payments (contract v1.20 B52 shape), from this mock's own payment events.
+    if (url.pathname === "/api/payments") {
+      const rows = events
+        .filter((e) => e.type === "payment.sent" || e.type === "agent.sale" || e.type === "payment.received")
+        .slice(-100)
+        .reverse()
+        .map((e) => {
+          const q = e.payload || {};
+          const tx = q.tx_hash || null;
+          if (e.type === "payment.received") return { id: e.id, ts: e.ts, direction: "in", kind: "client", counterparty: q.masked_name || "a client", amount: ((q.amount_cents || 0) / 100).toFixed(2), token: "USD", rail: "stripe", status: e.status };
+          if (e.type === "agent.sale") return { id: e.id, ts: e.ts, direction: "in", kind: "agent_sale", counterparty: q.buyer || "an agent", amount: String(q.amount_usd || "0.50"), token: "pathUSD", rail: "tempo-testnet", status: e.status, tx_hash: tx, explorer_url: tx ? `https://explore.tempo.xyz/tx/${tx}` : null };
+          return { id: e.id, ts: e.ts, direction: "out", kind: "contractor", counterparty: q.contractor || "a contractor", job_id: q.job_id || null, amount: String(q.amount_usd || "0.50"), token: "pathUSD", rail: "tempo-testnet", status: e.status, tx_hash: tx, explorer_url: tx ? `https://explore.tempo.xyz/tx/${tx}` : null, ...(tx ? { stripe: { id: `pi_mock_${e.id}`, mode: "mirror", dashboard_url: `https://dashboard.stripe.com/test/payments/pi_mock_${e.id}` } } : {}) };
+        });
+      const sum = (k) => rows.filter((r) => r.kind === k && r.status === "ok").reduce((n, r) => n + Number(r.amount), 0).toFixed(2);
+      return out(200, { data: rows, totals: { contractors_paid: { amount: sum("contractor"), token: "pathUSD" }, agent_sales: { amount: sum("agent_sale"), token: "pathUSD" }, clients_paid_usd: sum("client") } });
+    }
     if (url.pathname === "/api/events/stream") {
       let after = Number(url.searchParams.get("after_id") || 0);
       const reader = ticket !== null ? "ticket" : bearerOf(req) ? "bearer" : validSession(readToken) ? "SESSION-IN-URL" : "theater";

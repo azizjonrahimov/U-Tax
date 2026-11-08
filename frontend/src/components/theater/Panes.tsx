@@ -564,6 +564,11 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
               <b>{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</b>
             </div>
           )}
+          {/* D41 F50: the ledger lives on the Accounting desk. */}
+          <a className="kv paylink" href="/office?d=acct&tab=payments">
+            <span>payments</span>
+            <b>ledger ↗</b>
+          </a>
         </div>
       </section>
       <section className="pane metric" data-target="rail.hiring" aria-label="Hiring">
