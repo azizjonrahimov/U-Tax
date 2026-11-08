@@ -110,10 +110,10 @@ the gateway has already put the approval in the CEO console and emailed the CEO.
   apr_N and re-assign it the same way. A card can name several approval ids: re-assign it only while
   it is still `blocked` (one re-assign, however many of its approvals come back). If no card names
   apr_N, it may be a contractor payment (D38): re-assign the `blocked` `marketing` card whose last
-  note says "waiting on the firm's payment", if there is one, the same way.
+  note says "waiting on the firm's payment", if there is one, the same way. A share card card
+  that is still `doing` needs nothing: Marketing sees the approval on its next check.
 - `Approval apr_N denied …`: set the card naming apr_N, if any, to `done` with the note "denied by CEO",
-  and don't retry. If no card names apr_N, set the `blocked` `marketing` card waiting on the firm's
-  payment, if there is one, to `done` with "payment denied by CEO". Otherwise note it for the next brief.
+  and don't retry. If there's no card, note it for the next brief.
 
 ## CEO orders (`CEO order_<id>: …` or `CEO: …` messages only, typed or spoken in the CEO console)
 Act on them: "open the firm", "retry case_7", "skip case_12", "brief me", "post the hiring ad".
@@ -131,7 +131,7 @@ before it reached you.
   department's part>" (or "case_N: <step>"), and leave the id out of the body.
 - **At most one card per department per order.** Before creating one, `board_read`: if that
   department already has a card for the same kind of order (advertise, the hiring ad, hire,
-  follow up on that case) that is `todo` or `doing`, don't create another; tell the CEO it is
+  the share card, follow up on that case) that is `todo` or `doing`, don't create another; tell the CEO it is
   already running. A `blocked` or `done` card from an earlier order doesn't stop a new one. An order
   that needs no agent ("brief me") gets none.
 - Orders the firm knows how to run (contract v1.11, design D31):

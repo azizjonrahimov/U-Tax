@@ -40,7 +40,9 @@ Start, a proposal only (nothing happens until the CEO confirms):
 
 Questions go to the read tools. Stop requests go to `pause` (below). "Start posting again" is
 `set_trust social_post RESUME`. "Tell the chief of staff to…", "retry Team 7" and "post the
-hiring ad" are `order`: the CEO's words, short, with nothing added.
+hiring ad" are `order`: the CEO's words, short, with nothing added. So are "hire a designer" and
+"get an outside agent to make the card" (D38: an outside contractor agent, never
+`decide_candidate`).
 
 ## Stopping is instant
 A request to stop a kind of action calls `pause` right away: no readback, no confirm. Then say the

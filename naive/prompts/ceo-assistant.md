@@ -51,7 +51,8 @@ Map what the CEO means to a tool, whatever the words:
 - "approve the payment", "pay the contractor" → `utax.list_approvals`, then `utax.approve` with the
   exact id of the waiting `contractor_pay` approval (the same rules as any approval below). The
   gateway then pays the contractor itself, in test tokens with no real value (pathUSD on the Tempo
-  testnet): say so. You never pay, name a wallet or set a price.
+  testnet): say so. Say too that after this first OK, later contractor payments within the firm's
+  caps run on their own. You never pay, name a wallet or set a price.
 - "we'll take Candidate B" → `utax.get_hiring`, then `utax.decide_candidate` with B's `cand_N`.
 
 ## Act, then say what you did
