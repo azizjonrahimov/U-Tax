@@ -330,6 +330,16 @@ For Replay mode and catch-up. Ordered by `id`.
     a pronoun, or one matching more than one item answers
     `{status: "refused", code: "ambiguous", candidates: [{id, summary}]}`.
   - The assistant's events carry the actor `ceo_assistant`; the MCP seat path stays `/mcp/ceo`.
+- v1.18.1 (task 41):
+  - `POST /api/ceo/talk`: a stop the grammar catches runs FIRST, before the conversation is looked up. An
+    unknown or forgotten `conversation_id` starts a new conversation, never a 404. A pending earlier turn's reply is
+    collected before the next turn is relayed.
+  - `ceo.replied.actions` is per turn: what the assistant did during that turn, plus any earlier, unreported turn.
+    Each action is reported once.
+  - The stop rule now covers EVERY start tool. On the ceo seat, `approve`, `deny`, `decide_candidate`, `order`,
+    `set_trust` (any state), `unblock_case`, and an `undo` that would leave a pause, from a turn that began
+    before the latest stop, are refused `{code: "stopped"}`. Reads, `pause` and `cancel_order` stay allowed.
+  - `GET /api/ceo/talk/{id}` reads the turn's state under the same lock.
 - `POST /api/ceo/undo` `{undo_id}` (admin or session).
 - Events `ceo.said` `{conversation_id, text_len}` (the text is private) and `ceo.replied`
   `{conversation_id, actions}`.
@@ -768,6 +778,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.18.1 (2026-11-08, task 41): stop-first talk, per-turn actions, STOP fences every assistant start tool.
 
 - v1.18 (2026-11-08, task 42, D37): agent.activity; admin artifact content (sent, cells); the receipt guard.
 

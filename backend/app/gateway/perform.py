@@ -453,8 +453,10 @@ class Gateway:
         self._undos: dict[str, dict] = {}  # undo_id -> what to put back (in memory)
         self._cancelled_orders: set[str] = set()  # cancel_order: tools for it are refused
         self._stops = 0  # pauses so far, from any path (a counter: clocks can tie)
-        self._ceo_turn_stops: int | None = None  # _stops when the latest talk turn began
-        self._ceo_turn_actions: dict[str, list[dict]] = {}  # conversation -> this turn's
+        # task 41: the open talk turns, oldest first: turn_id -> {conversation_id, stops
+        # (_stops when it began), actions}. A second turn never wipes the first's actions.
+        self._ceo_turns: dict[str, dict] = {}
+        self._ceo_turn_seq = 0
         from app.gateway.adapters.local import _KeyedJson
 
         self._buy_intents = _KeyedJson(settings.data_dir / "toolbuy-intents.json")
@@ -4181,9 +4183,19 @@ class Gateway:
         if out["kind"] == "done":
             action = {"tool": name, "summary": out["summary"],
                       **({"undo_id": out["undo_id"]} if out.get("undo_id") else {})}
-            for actions in self._ceo_turn_actions.values():  # the turn(s) under way
-                actions.append(action)
+            turn = self._oldest_turn()  # task 41: the turn under way (Naive runs a
+            if turn is not None:          # session's queued messages in order)
+                turn["actions"].append(action)
         return out
+
+    def _oldest_turn(self) -> dict | None:
+        return next(iter(self._ceo_turns.values()), None)
+
+    def ceo_turn_stops(self) -> int | None:
+        """Task 41: _stops when the oldest open talk turn began (None: no turn open). A
+        start tool from a turn that began before the latest stop is refused ("stopped")."""
+        turn = self._oldest_turn()
+        return turn["stops"] if turn is not None else None
 
     def _ceo_undo(self, args: dict) -> dict:
         """POST /api/ceo/undo (the CEO) or the seat's undo tool (the assistant)."""
@@ -4197,20 +4209,36 @@ class Gateway:
             raise Refused(err.code, err.message, err.data) from err
 
     def _ceo_turn(self, args: dict) -> dict:
-        """A CEO turn starts: ceo.said (the text private), the turn's clock and its actions."""
+        """A CEO turn starts: ceo.said (the text private), the turn's own clock (the stop
+        count) and its own action list (task 41: keyed by turn, never reset by the next)."""
         conversation_id = _str(args, "conversation_id", max_len=40)
         text = _str(args, "text", max_len=4000)
-        self._ceo_turn_stops = self._stops
-        self._ceo_turn_actions[conversation_id] = []
+        self._ceo_turn_seq += 1
+        turn_id = f"turn_{self._ceo_turn_seq}"
+        self._ceo_turns[turn_id] = {"conversation_id": conversation_id, "stops": self._stops,
+                                    "actions": []}
+        while len(self._ceo_turns) > 50:  # a turn nobody collected never piles up forever
+            self._ceo_turns.pop(next(iter(self._ceo_turns)))
         self._emit([NewEvent(type="ceo.said", actor="ceo",
                              payload={"conversation_id": conversation_id, "text_len": len(text)},
                              private={"text": text})])
-        return {"started": iso_ts(self._now())}
+        return {"started": iso_ts(self._now()), "turn_id": turn_id}
 
     def _ceo_reply(self, args: dict) -> dict:
         """The assistant answered: ceo.replied with what it did this turn."""
         conversation_id = _str(args, "conversation_id", max_len=40)
-        actions = self._ceo_turn_actions.pop(conversation_id, [])
+        turn_id = args.get("turn_id")
+        # task 41: this turn and any older open turn of the conversation (the reply came
+        # after them all); no turn_id: every open turn of the conversation
+        closing = []
+        for tid, turn in self._ceo_turns.items():
+            if turn["conversation_id"] == conversation_id:
+                closing.append(tid)
+                if tid == turn_id:
+                    break
+        if turn_id is not None and turn_id not in closing:
+            closing = []  # already collected (a check after the reply): nothing new
+        actions = [a for tid in closing for a in self._ceo_turns.pop(tid)["actions"]]
         self._emit([NewEvent(type="ceo.replied", actor="ceo_assistant",
                              payload={"conversation_id": conversation_id, "actions": actions})])
         return {"actions": actions}
