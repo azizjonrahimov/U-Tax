@@ -110,6 +110,11 @@ class Case:
     memo_ts: str | None = None
     docs: dict | None = None  # v1.15: {"key", "files"} of the verified documents
     docs_building: dict = field(default_factory=dict)  # v1.15: the version being built
+    # D42 (v1.21): the income-tax results of the latest compute_tax, and its summary
+    returns: list[dict] = field(default_factory=list)
+    returns_batch: str | None = None
+    returns_summary: dict | None = None
+    returns_version: int = 0
     payment_link_url: str | None = None  # task 40b: the $49 offer's Stripe link (private)
     paid_cents: int = 0  # task 40b: payments received for this case
     call: dict[str, Any] | None = None
@@ -454,6 +459,24 @@ class State:
             case.result = dict(e.payload)
             case.result_version = case.facts_version
 
+    def _on_tax_return_computed(self, e: Event) -> None:
+        case = self._case(e)
+        if case is None:
+            return
+        batch = (e.idempotency_key or "").rsplit(":", 1)[0]
+        if case.returns_batch != batch:
+            case.returns, case.returns_batch, case.returns_summary = [], batch, None
+        case.returns.append(dict(e.payload))
+
+    def _on_tax_summary(self, e: Event) -> None:
+        case = self._case(e)
+        if case is None:
+            return
+        case.returns_summary = dict(e.payload)
+        case.returns_version = case.facts_version
+        if "de_franchise" not in ((case.facts or {}).get("services") or ("de_franchise",)):
+            case.result_version = case.facts_version  # income tax only: no tax.computed
+
     def _on_qa_passed(self, e: Event) -> None:
         case = self._case(e)
         if case is not None:
@@ -484,9 +507,15 @@ class State:
             building["ok"] = set()
             return
         building["ok"].add(e.payload["doc"])
-        if {"workpaper", "memo", "books"} <= building["ok"]:
+        services = (case.facts or {}).get("services") or ("de_franchise",)
+        need = ({"workpaper", "memo", "books"} if "de_franchise" in services else set()) | (
+            {"returns"} if "income_tax" in services else set())
+        if need <= building["ok"]:
+            # D42: the draft 1120 goes with them when it was built (cut line: workbook only)
+            order = ("workpaper", "memo", "f1120", "returns")
             case.docs = {"key": building["key"],
-                         "files": [building["files"]["workpaper"], building["files"]["memo"]]}
+                         "files": [building["files"][d] for d in order
+                                   if d in building["files"] and (d in need or d in building["ok"])]}
 
     def _on_memo_sent(self, e: Event) -> None:
         case = self._case(e)

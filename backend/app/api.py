@@ -580,6 +580,17 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         return Response(content=path.read_bytes(), media_type="image/png",
                         headers={"Cache-Control": "public, max-age=3600"})
 
+    @router.get("/assets/forms/{case_id}/{name}")
+    def form_image(case_id: str, name: str, authorization: str | None = Header(None)):
+        """v1.21 (D42): a case's draft Form 1120 page image (f1120_p1.png, f1120_p3.png), for
+        admin and session readers only: the public theater never gets form images."""
+        require_admin(authorization)
+        path = gw().form_image(case_id, name)
+        if path is None:
+            raise APIError(404, "not_found", "no such asset")
+        return Response(content=path.read_bytes(), media_type="image/png",
+                        headers={"Cache-Control": "private, no-store"})
+
     @router.get("/api/docs/{case_id}/{file_name}")
     def case_document(case_id: str, file_name: str, authorization: str | None = Header(None)):
         """v1.15: a case's verified workpaper or memo, for the CEO (ADMIN_TOKEN or a session
@@ -587,7 +598,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         Only a file prepare_documents built and checked can be named."""
         require_admin(authorization)
         if not re.fullmatch(r"case_[0-9]{1,6}", case_id) or not re.fullmatch(
-                r"[A-Za-z0-9_]{1,80}\.(xlsx|docx)", file_name):
+                r"[A-Za-z0-9_][A-Za-z0-9_-]{0,79}\.(xlsx|docx|pdf)", file_name):
             raise APIError(404, "not_found", "no such document")
         path = gw().doc_file(case_id, file_name)
         if path is None:

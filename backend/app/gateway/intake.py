@@ -323,3 +323,119 @@ def check_facts(
     out.missing = [f for f in [*REQUIRED, *OPTIONAL] if f in out.missing and not
                    (f in seen or seen.add(f))]
     return out
+
+
+# ---------------------------------------------------------------- D42 §T1: income tax facts
+
+SERVICES = ("de_franchise", "income_tax")
+# money facts the income-tax engine needs, as cents (the gross_receipts convention)
+INCOME_MONEY = ("gross_receipts", "cost_of_goods", "total_deductions", "compensation")
+INCOME_OPTIONAL_MONEY = ("compensation",)
+INCOME_TEXT = ("entity_type", "state")
+INCOME_BOOLEAN = ("first_year_in_state", "retail_wholesale")
+INCOME_FACTS = ("entity_type", "state", "cost_of_goods", "total_deductions", "compensation",
+                *INCOME_BOOLEAN)
+# in what order the ask email lists them (the engine's REQUIRED order)
+INCOME_REQUIRED = ("entity_type", "state", "gross_receipts", "cost_of_goods",
+                   "total_deductions")
+_STATE_CODE = re.compile(r"[A-Z]{2}")
+
+
+ENTITY_TYPES = ("c_corp", "s_corp", "llc", "individual", "other")
+
+
+def entity_kind(value: str) -> str | None:
+    """The company type as one of ENTITY_TYPES (contract v1.21; a few spellings accepted).
+    Never the agent's free text: it reaches a workbook cell."""
+    v = re.sub(r"[\s._-]+", "", (value or "").lower())
+    if not v:
+        return None
+    if v in ("ccorp", "ccorporation", "corporation", "corp", "inc"):
+        return "c_corp"
+    if v in ("scorp", "scorporation"):
+        return "s_corp"
+    if v == "llc":
+        return "llc"
+    if v in ("individual", "soleproprietor", "soleproprietorship"):
+        return "individual"
+    return "other"
+
+
+@dataclass
+class IncomeCheck:
+    facts: dict[str, Any] = field(default_factory=dict)
+    quotes: dict[str, str] = field(default_factory=dict)
+    missing: list[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+
+def check_income_facts(*, quotes: dict[str, str], entity_type: str | None, state: str | None,
+                       booleans: dict[str, bool | None], texts: list[str]) -> IncomeCheck:
+    """The income-tax facts (D42): every one needs a verbatim quote from the client's
+    text, as the franchise facts do. Money comes back as cents; the engine gets dollars."""
+    out = IncomeCheck()
+    labels = {"gross_receipts": "gross receipts (total sales)",
+              "cost_of_goods": "cost of goods sold", "total_deductions": "total expenses",
+              "compensation": "compensation", "entity_type": "kind of company",
+              "state": "state"}
+    for fact in INCOME_MONEY:
+        quote = (quotes.get(fact) or "").strip()
+        if not quote:
+            if fact not in INCOME_OPTIONAL_MONEY:
+                out.missing.append(fact)
+            continue
+        if not quote_found(quote, texts):
+            if fact not in INCOME_OPTIONAL_MONEY:
+                out.missing.append(fact)
+                out.problems.append(f"we couldn't find your {labels[fact]} in your email")
+            continue
+        try:
+            value = parse_dollars_to_cents(quote)
+        except ParseError:
+            if _zero_amount(quote):
+                value = 0
+            else:
+                if fact not in INCOME_OPTIONAL_MONEY:
+                    out.missing.append(fact)
+                    out.problems.append(f"your {labels[fact]} isn't one clear number")
+                continue
+        if value < 0 or value > MAX_ASSETS_CENTS:
+            out.missing.append(fact)
+            out.problems.append(f"could you check your {labels[fact]}")
+            continue
+        out.facts[f"{fact}_cents"] = value
+        out.quotes[fact] = quote
+    for fact, given in (("entity_type", entity_type), ("state", state)):
+        quote = (quotes.get(fact) or "").strip()
+        value = None
+        if fact == "entity_type":
+            value = entity_kind(given or "")
+        elif isinstance(given, str) and _STATE_CODE.fullmatch(given.strip().upper()):
+            value = given.strip().upper()
+        if value is None or not quote or not quote_found(quote, texts):
+            out.missing.append(fact)
+            continue
+        out.facts[fact] = value
+        out.quotes[fact] = quote
+    for fact in INCOME_BOOLEAN:
+        given = booleans.get(fact)
+        if not isinstance(given, bool):
+            continue  # optional: the engine's default (False) applies
+        quote = (quotes.get(fact) or "").strip()
+        if not quote or not quote_found(quote, texts):
+            continue  # optional, and every fact needs the client's own words
+        out.facts[fact] = given
+        out.quotes[fact] = quote
+    out.missing = [f for f in INCOME_REQUIRED if f in out.missing]
+    return out
+
+
+def engine_facts(facts: dict) -> dict[str, Any]:
+    """Stored facts (cents) -> the income-tax engine's facts (dollars)."""
+    out: dict[str, Any] = {k: facts[k] for k in ("entity_type", "state", *INCOME_BOOLEAN)
+                           if k in facts}
+    for fact in INCOME_MONEY:
+        cents = facts.get(f"{fact}_cents")
+        if cents is not None:
+            out[fact] = Decimal(cents) / 100
+    return out

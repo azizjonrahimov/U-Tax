@@ -107,6 +107,10 @@ emails hidden) unless the client opted in (`show_on_screen: true` on the case).
 | `order.task_started` | system | `{order_id, task_no, of, text}`: the gateway then wakes the CoS (`CEO order_<id>: <words>` for a single task, `CEO order_<id> task <k>/<N>: <words>` otherwise) |
 | `order.task_done` | the caller's seat, or system | `{order_id, task_no, of, status, summary, by}`: status `done`/`waiting_on_you`/`blocked`/`failed`/`timeout`/`cancelled`; idem `task_done:{order_id}:{task_no}` |
 | `order.done` | system | `{order_id, of, done, waiting_on_you, other}`: after the last task ends |
+| `tax.return_computed` | tax | `{jurisdiction, tax, form, due, amount_usd, status: "ok"\|"no_tax_due"\|"human_review", steps[], source}` (v1.21 §11, D42): one per federal/state return; integer dollars; any `human_review` blocks the case "a person prepares this" |
+| `tax.summary` | tax | `{total_usd, assumptions[]}`: `total_usd` includes the Delaware franchise tax when computed |
+| `form.step` | tax | `{doc, n, of, key, label, value, page, rect[4], image}` for admin/session readers (the page image `/assets/forms/<case>/f1120_p<N>.png` needs the Bearer); theater readers get `{doc, n, of, label}`. DRAFT, not filed |
+| `sheet.cell` | acct | `{book, n, of, sheet, cell, label, value, formula}`: the returns workbook built live |
 | `agent.activity` | the agent's seat (`ceo_assistant` for the assistant) | `{agent, session_id, kind: "thinking"\|"tool_started"\|"tool_done"\|"writing"\|"idle"}` plus optional `tool` (a name, never arguments), `text` (writing only: masked, the latest ≤ 600 chars, ≤ 1 event/s per session) and `order_id` (v1.18, D37). Provider naive. **Admin and session readers only**: theater readers never receive it, and it doesn't change /api/state. |
 | `trust.changed` | system | `{action_type, from: "ASK"\|"AUTO"\|"PAUSED", to, reason}` |
 | `cost.booked` | system | `{provider, model, estimated}` (amount in envelope `cost_usd`) |
