@@ -103,6 +103,7 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "buy_tool": ("mkt",),  # v1.7.3: Monid data calls, allowlisted and capped
     # v1.11 (D31): the live CEO orders
     "make_ad": ("mkt",), "source_candidates": ("hr",), "hr_outreach": ("hr",),
+    "hire_contractor": ("mkt",), "get_job": ("mkt",),  # v1.19 §9.2 (D38)
     "follow_up": ("intake",), "list_candidates": ("hr",),  # v1.11.2
 }
 POST_MAX_CHARS = 255
@@ -367,6 +368,12 @@ class Gateway:
         # v1.7 §6f: slow sponsor I/O never runs under self._lock
         self._phone_jobs: dict[str, dict[str, Any]] = {}
         self._jobs_lock = threading.Lock()
+        # D38: the market's pay tick (one at a time), its intents (durable before any
+        # payment) and the wakes it owes
+        self._market_tick = threading.Lock()
+        self._market_wakes: list[str] = []
+        self.market_http = None  # httpx.Client for contractors' invoice status (tests set it)
+        self.market_kick = True  # a verified submit runs the pay tick at once (tests: off)
         self._fee_refresh_lock = threading.Lock()
         self._epoch: str | None = None
         self._booted_at = self._now()  # the first CEO digest waits a full period from here
@@ -377,6 +384,12 @@ class Gateway:
         self._outbox_limited: dict[str, int] = {}  # rate limits per job (then it backs off)
         self._fee_tried_at = 0.0
         self.state: State = rebuild(store.since(0))
+        if settings.market_enabled:  # D38: contractor_pay joins the trust types (ASK first)
+            from app.gateway.projections import MARKET_TRUST_TYPES
+
+            for t in MARKET_TRUST_TYPES:
+                self.state.trust.setdefault(t, "ASK")
+                self.state.cap_log.setdefault(t, [])
         self.templates = Templates(settings.templates_dir, settings.memo_template_path)
         self._handlers: dict[str, Callable[[dict], dict]] = {
             # MCP tools (contract §6)
@@ -399,6 +412,10 @@ class Gateway:
             "flag_case": self._flag_case,
             "buy_tool": self._buy_tool,
             "make_ad": self._make_ad,
+            "hire_contractor": self._hire_contractor,  # D38
+            "get_job": self._get_job,
+            "market_claim": self._market_claim,  # D38 control: /market/* only
+            "market_submit": self._market_submit,
             "source_candidates": self._source_candidates,
             "hr_outreach": self._hr_outreach,
             "follow_up": self._follow_up,
@@ -446,7 +463,8 @@ class Gateway:
         # reads that touch a slow port run before the lock is taken (contract §6f)
         self._slow_reads: dict[str, Callable[[dict], dict]] = {
             "law_search": self._law_fetch, "buy_tool": self._buy_fetch,
-            "source_candidates": self._source_fetch}  # v1.11: Monid search before the lock
+            "source_candidates": self._source_fetch,  # v1.11: Monid search before the lock
+            "get_job": self._job_wait}  # D38: waits ~20 s for a change, off the lock
         self._order_ctx = threading.local()  # v1.11.1: the CEO order a tool call serves
         # v1.14 (D34): the CEO assistant's direct actions (app/ceo_direct.py)
         self._actor_as: str | None = None  # its events carry ceo_assistant
@@ -829,8 +847,14 @@ class Gateway:
     def public_state(self, *, admin: bool = False) -> dict[str, Any]:
         """GET /api/state, read under the lock so a concurrent write can't tear it. The
         per-candidate list is admin-only (v1.6.1); the theater gets counts."""
+        from app.gateway import market
+        from app.gateway.projections import money_text
+
         with self._lock:
             state = self.state.public()
+            if market.on(self):  # v1.19 §9.1: the money panel's market lines
+                state["money"]["contractor_paid_usd"] = money_text(self.state.contractor_paid_usd)
+                state["money"]["agent_sales_usd"] = money_text(self.state.agent_sales_usd)
         if not admin:
             state["hiring"] = {k: v for k, v in state["hiring"].items() if k != "candidates"}
         return state
@@ -1064,7 +1088,8 @@ class Gateway:
     NOTE_MAX = 160  # touch notes ("approved: <summary>", the CEO's unblock note)
 
     def _gate(self, action_type: str, action_key: str, summary: str, case_id: str | None,
-              *, public: bool = False, detail: str | None = None) -> None:
+              *, public: bool = False, detail: str | None = None,
+              always_ask: bool = False) -> None:
         """Trust earned: ASK needs an approval, AUTO runs (until a cap), PAUSED needs a human.
 
         `public`: the action serves a case opened from the anonymous /talk page. Those sends
@@ -1079,7 +1104,7 @@ class Gateway:
                 raise Refused("public_cap", "public /talk sends are at their hourly cap; "
                                             "try again later", {"action_type": action_type})
             return
-        if self.state.trust[action_type] == "AUTO":
+        if self.state.trust[action_type] == "AUTO" and not always_ask:  # D38: over a cap
             reason = self._cap_hit(action_type)
             if reason is None:
                 return
@@ -3513,6 +3538,58 @@ class Gateway:
 
     AD_HEADLINE_MAX = 80
 
+    # ------------------------------------------------------------------ D38 market
+
+    @property
+    def _pay_intents(self):
+        from app.gateway.adapters.local import _KeyedJson
+
+        return _KeyedJson(self.settings.data_dir / "market-pay-intents.json")
+
+    def trust_types(self) -> tuple[str, ...]:
+        """The trust types in play: the firm's four, plus contractor_pay with the market on."""
+        from app.gateway import market
+        from app.gateway.projections import ALL_TRUST_TYPES
+
+        return ALL_TRUST_TYPES if market.on(self) else TRUST_TYPES
+
+    def _hire_contractor(self, args: dict) -> dict:
+        from app.gateway import market
+
+        return market.hire(self, args)
+
+    def _get_job(self, args: dict) -> dict:
+        from app.gateway import market
+
+        return market.get_job(self, args)
+
+    def _job_wait(self, args: dict) -> dict:
+        from app.gateway import market
+
+        return market.wait_job(self, args)
+
+    def _market_claim(self, args: dict) -> dict:
+        from app.gateway import market
+
+        try:
+            return market.claim(self, args)
+        except market.MarketRefused as err:
+            raise Refused(err.code, err.message, {"http": err.status}) from err
+
+    def _market_submit(self, args: dict) -> dict:
+        from app.gateway import market
+
+        try:
+            return market.submit(self, args)
+        except market.MarketRefused as err:
+            raise Refused(err.code, err.message, {"http": err.status}) from err
+
+    def advance_market_jobs(self) -> list[str]:
+        """D38: the pay tick (app/main.py's tick, and right after a verified submit)."""
+        from app.gateway import market
+
+        return market.advance(self)
+
     def _make_ad(self, args: dict) -> dict:
         """v1.11 (mkt): render the firm's ad PNG; nothing leaves the firm until post_social."""
         from app.gateway import ad_image
@@ -4371,8 +4448,8 @@ class Gateway:
                 raise Refused("bad_input", 'action_type "*" takes only state PAUSED')
             return {"action_type": "*",
                     "trust": {t: self._set_trust({"action_type": t, "state": "PAUSED"})["trust"]
-                              for t in TRUST_TYPES}}
-        action_type = _one_of(args, "action_type", TRUST_TYPES)
+                              for t in self.trust_types()}}
+        action_type = _one_of(args, "action_type", self.trust_types())
         requested = _one_of(args, "state", ("PAUSED", "AUTO", "ASK", "RESUME"))
         if requested == "PAUSED":  # v1.14.1: a RESUME from a turn begun before this fails
             self._stops += 1

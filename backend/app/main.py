@@ -36,6 +36,7 @@ def tick(gw: Gateway) -> None:
     for job in (gw.drain_outbox, gw.retry_wakes, gw.retry_questionnaires,
                 gw.retry_signup_welcomes, gw.retry_candidate_invites,
                 gw.retry_decision_mails, gw.advance_phone_jobs, gw.refresh_fee,
+                gw.advance_market_jobs,  # D38: pays verified jobs (off: does nothing)
                 lambda: gw.perform("stall_sweep", {}),
                 lambda: gw.perform("ceo_digest", {})):
         try:
@@ -201,6 +202,9 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
 
     app.include_router(build_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]
     app.include_router(build_mcp_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]
+    from app.market_api import build_market_router  # D38: /market/* (off: 404 market_off)
+
+    app.include_router(build_market_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]
     app.state.utax = state
     return app
 

@@ -73,7 +73,10 @@ def test_initialize_negotiates_the_protocol(mcp):
 def test_each_seat_lists_only_its_own_tools(mcp, actor):
     h, client = mcp
     names = {t["name"] for t in call(client, actor, "tools/list").json()["result"]["tools"]}
-    assert names == {n for n, actors in TOOL_ACTORS.items() if actor in actors}
+    from app.mcp import MARKET_TOOLS  # D38: listed only with MARKET_ENABLED=1
+
+    assert names == {n for n, actors in TOOL_ACTORS.items() if actor in actors
+                     and n not in MARKET_TOOLS}
     assert "get_case" in names  # every seat may read a case
 
 

@@ -15,7 +15,7 @@ from typing import Any
 ACTORS = {"cos", "intake", "tax", "qa", "acct", "mkt", "hr", "ceo", "system",
           "ceo_assistant"}  # v1.14.1: the CEO assistant's direct actions
 PROVIDERS = {"local", "naive", "agentmail", "openrouter", "openai", "elevenlabs", "hubspot", "mobilerun",
-             "apify", "monid", "google", "stripe", None}
+             "apify", "monid", "google", "stripe", "tempo", None}  # tempo: D38
 STATUSES = {"ok", "failed", "skipped"}
 
 _HR = ("candidate_id", "name_masked", "note")
@@ -70,6 +70,15 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "doc.created": ("doc", "file_name", "sha256", "pages_or_sheets"),
     "doc.verified": ("doc", "ok"),  # one per document (optional "failed": the checks)
     "client.followed_up": ("kind",),
+    # v1.19 §9.1 (D38): the agent market (all masked; no key ever)
+    "job.posted": ("job_id", "template", "price_usd", "headline"),
+    "job.claimed": ("job_id", "contractor"),
+    "job.submitted": ("job_id", "contractor", "sha256"),
+    "job.verified": ("job_id", "checks"),
+    "job.failed": ("job_id", "checks", "reason"),
+    "payment.sent": ("job_id", "contractor", "amount_usd", "token", "tx_hash", "explorer_url"),
+    "job.delivered": ("job_id", "image_url"),
+    "agent.sale": ("amount_usd", "token", "tx_hash", "explorer_url", "payer_masked"),
     # task 42 (D37): an agent's live Naive session, for admin/session readers only
     "agent.activity": ("agent", "session_id", "kind"),
     # task 40b (D36): the $49 filing offer (the link's URL is private) and its payment
