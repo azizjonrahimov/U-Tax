@@ -57,3 +57,25 @@ export function replyLine(r: TalkReply): string {
 export function undoLine(raw: unknown): string {
   return isObj(raw) && typeof raw.summary === "string" && raw.summary.trim() ? text(raw.summary, 300) : "Undone.";
 }
+
+/** How long the console uses the command path after /api/ceo/talk answered 503, before trying talk again. */
+export const TALK_RETRY_MS = 60_000;
+/** After TALK_GIVE_UP_MS a pending turn is still checked, slowly, for this long (its actions still get chips). */
+export const TALK_SLOW_POLL_MS = 10_000;
+export const TALK_LATE_MS = 5 * 60_000;
+
+/**
+ * What is read aloud: whole sentences up to about `max` characters (the ear is closed while the
+ * console speaks, so a long answer would block the CEO). The transcript keeps the full text.
+ */
+export function spokenPart(say: string, max = 300): string {
+  if (say.length <= max) return say;
+  const sentences = say.match(/[^.!?]+[.!?]+(?:\s+|$)/g) ?? [];
+  let out = "";
+  for (const s of sentences) {
+    if ((out + s).length > max) break;
+    out += s;
+  }
+  out = out.trim();
+  return out || `${say.slice(0, max - 1).trimEnd()}…`;
+}

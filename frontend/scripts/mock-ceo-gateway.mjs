@@ -255,7 +255,9 @@ function talk(body) {
   if (process.env.MOCK_TALK === "503" || talkDownDev) return [503, { error: { code: "assistant_unavailable", message: "The assistant can't be reached right now. Stops still work: say stop." } }];
   const text = typeof body.text === "string" ? body.text.trim() : "";
   if (!text) return [400, { error: { code: "bad_input", message: "text is required" } }];
-  let cid = typeof body.conversation_id === "string" && talks.has(body.conversation_id) ? body.conversation_id : null;
+  // As the gateway: an unknown thread (a restart, another sign-in) is 404, even for a stop.
+  if (typeof body.conversation_id === "string" && !talks.has(body.conversation_id)) return [404, { error: { code: "not_found", message: "no such conversation" } }];
+  let cid = typeof body.conversation_id === "string" ? body.conversation_id : null;
   if (!cid) {
     cid = `conv_${randomUUID().slice(0, 8)}`;
     talks.set(cid, { pending: null, last: null });
@@ -571,6 +573,12 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && p === "/api/dev/talk-down") {
     talkDownDev = body.down !== false;
     return out(200, { down: talkDownDev });
+  }
+  // Dev only: forget every thread and undo, as a gateway restart does.
+  if (req.method === "POST" && p === "/api/dev/restart-talk") {
+    talks.clear();
+    undos.clear();
+    return out(200, { ok: true });
   }
   if (req.method === "POST" && p === "/api/ceo/confirm") return out(...confirm(body));
   if (req.method === "POST" && p === "/api/trust") {

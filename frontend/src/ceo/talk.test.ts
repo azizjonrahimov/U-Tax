@@ -55,3 +55,15 @@ describe("D34 talk replies", () => {
     expect(undoLine({})).toBe("Undone.");
   });
 });
+
+describe("D34 review: long answers", () => {
+  it("reads whole sentences up to the cap; the rest stays on screen", async () => {
+    const { spokenPart } = await import("./talk");
+    expect(spokenPart("Short one.")).toBe("Short one.");
+    const long = `${"First sentence here. ".repeat(10)}${"x".repeat(400)}`;
+    const said = spokenPart(long, 120);
+    expect(said.length).toBeLessThanOrEqual(120);
+    expect(said.endsWith(".")).toBe(true);
+    expect(spokenPart("y".repeat(500), 100)).toHaveLength(100);
+  });
+});

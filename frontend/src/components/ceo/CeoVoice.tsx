@@ -52,7 +52,7 @@ import {
   type VoiceEffect,
   type VoiceState,
 } from "@/ceo/voice";
-import { parseTalkReply, replyLine, TALK_GIVE_UP_MS, TALK_POLL_MS, TALK_TEXT_MAX, undoLine, type TalkAction } from "@/ceo/talk";
+import { parseTalkReply, replyLine, spokenPart, TALK_GIVE_UP_MS, TALK_LATE_MS, TALK_POLL_MS, TALK_RETRY_MS, TALK_SLOW_POLL_MS, TALK_TEXT_MAX, undoLine, type TalkAction, type TalkReply } from "@/ceo/talk";
 import { MicIcon } from "@/components/MicIcon";
 import { Speaker } from "@/lib/tts";
 import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition } from "@/lib/recognition";
@@ -205,8 +205,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
    * (503: then the console falls back to /api/ceo/command and its confirm card for this session).
    */
   const convo = useRef<string | null>(null);
-  const talkDown = useRef(false);
-  const [undoState, setUndoState] = useState<Record<string, "undoing" | "undone" | "failed">>({});
+  /** When /api/ceo/talk last refused with 503 (the command path is used for TALK_RETRY_MS, then talk again). */
+  const talkDownAt = useRef(0);
+  const [undoState, setUndoState] = useState<Record<string, "undoing" | "undone" | "gone" | "failed">>({});
   /** Function calls still at the gateway: the model is asked to speak once, after the last. */
   const inflight = useRef(0);
   /** A model response is running (or was just asked for): a second response.create would be refused. */
@@ -333,6 +334,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       }
       speaker().say(text, (played) => {
         if (played && key) lastReply.current = { key, text, at: Date.now() };
+        if (played) rememberSaid(earMemory.current, text, Date.now()); // the echo window runs from the end of the line
         speaking.current = Math.max(0, speaking.current - 1);
         if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", false, Date.now());
         applyMic();
@@ -666,60 +668,168 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     [handle, post, respond, send, unauthorized],
   );
 
+  /** One talk turn at a time (the gateway keeps one thread per sign-in), and the words waiting for it. */
+  const turnBusy = useRef(false);
+  const turnQueue = useRef<{ t: string; via: "voice" | "click"; epoch: number }[]>([]);
+  const [working, setWorking] = useState(false);
+  /** The last reply shown, so a poll that returns it again (or a stale one) is never shown twice. */
+  const lastShown = useRef("");
+
+  /** Something the assistant did landed after STOP: pause everything again, as a late confirm does. */
+  const pauseAgain = useCallback(
+    async (what: string) => {
+      let paused = true;
+      try {
+        await post("/ceo/tool", { name: STOP_EVERYTHING.name, args: STOP_EVERYTHING.args, call_id: `stop-${Date.now()}`, channel: "click" });
+      } catch (e) {
+        if (unauthorized(e)) return;
+        paused = await authJson(token, `${API}/trust`, { method: "POST", body: JSON.stringify({ action_type: "*", state: "PAUSED" }) }).then(
+          () => true,
+          () => false,
+        );
+      }
+      if (!alive.current) return;
+      setStopNote(
+        paused
+          ? { ok: true, text: `The assistant finished something during STOP (${what}), so everything was paused again.` }
+          : { ok: false, text: `The assistant finished something during STOP (${what}) and pausing again failed. Press STOP EVERYTHING again.` },
+      );
+    },
+    [post, token, unauthorized],
+  );
+
+  /** A finished turn on screen: spoken (its first sentences) unless STOP came since; after STOP its actions still show, and pause again. */
+  const showReply = useCallback(
+    (r: TalkReply, t: string, epoch: number) => {
+      if (!alive.current) return;
+      const sig = JSON.stringify([r.say, r.actions]);
+      if (sig === lastShown.current) return;
+      lastShown.current = sig;
+      if (epoch !== stopEpoch.current) {
+        if (!r.actions.length) return;
+        addLine("firm", "After your STOP, the assistant still did this:", r.actions);
+        refresh();
+        void pauseAgain(r.actions.map((a) => a.summary).join("; "));
+        return;
+      }
+      const line = replyLine(r);
+      addLine("firm", line, r.actions);
+      if (r.actions.length) refresh();
+      speak(spokenPart(line), undefined, `reply:${t}`);
+    },
+    [addLine, pauseAgain, refresh, speak],
+  );
+
+  /**
+   * Follow a pending turn until it ends: every 1.5 s, then (after TALK_GIVE_UP_MS, said once) every
+   * 10 s for a few minutes, so late actions still get chips. Quiet after STOP, but still followed.
+   * Null when it can't be followed (the gateway forgot it, or keeps failing).
+   */
+  const followTurn = useCallback(
+    async (id: string, t: string, epoch: number): Promise<TalkReply | null> => {
+      const start = Date.now();
+      let toldLate = false;
+      let fails = 0;
+      for (;;) {
+        const late = Date.now() - start > TALK_GIVE_UP_MS;
+        if (Date.now() - start > TALK_GIVE_UP_MS + TALK_LATE_MS) return null;
+        if (late && !toldLate && epoch === stopEpoch.current && alive.current) {
+          toldLate = true;
+          const msg = "It's still working. I'll show what it did here when it finishes.";
+          addLine("firm", msg);
+          speak(msg, undefined, `late:${t}`);
+        }
+        await new Promise((res) => setTimeout(res, late ? TALK_SLOW_POLL_MS : TALK_POLL_MS));
+        if (!alive.current) return null;
+        try {
+          const next = parseTalkReply(await authJson<unknown>(token, `${API}/ceo/talk/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(TALK_REQUEST_MS) }));
+          fails = 0;
+          if (next && !next.pending) return next;
+        } catch (e) {
+          if (unauthorized(e)) return null;
+          if (e instanceof ApiError && e.status === 404) return null;
+          if (++fails >= 3) return null;
+        }
+      }
+    },
+    [addLine, speak, token, unauthorized],
+  );
+
   /**
    * D34: one turn of the conversation. The assistant acts directly (no confirm card) and says what
-   * it did; a pending turn is polled. False when /api/ceo/talk is down (503): the caller then uses
-   * the old command path. A STOP while the turn is on its way silences its answer.
+   * it did. "fallback" only when /api/ceo/talk refused the words before taking them (a 503, or for
+   * a stop any failure), so they may go to /api/ceo/command without running twice.
    */
-  const talk = useCallback(
-    async (t: string): Promise<boolean> => {
-      const epoch = stopEpoch.current;
-      const quiet = () => !alive.current || epoch !== stopEpoch.current;
+  const talkTurn = useCallback(
+    async (t: string, epoch: number, stopKind: boolean): Promise<"done" | "fallback"> => {
+      const stopped = () => epoch !== stopEpoch.current;
+      const send = (withId: boolean) =>
+        authJson<unknown>(token, `${API}/ceo/talk`, {
+          method: "POST",
+          body: JSON.stringify({ text: t.slice(0, TALK_TEXT_MAX), ...(withId && convo.current ? { conversation_id: convo.current } : {}) }),
+          signal: AbortSignal.timeout(TALK_REQUEST_MS),
+        });
+      let accepted = false; // the gateway has the words: they are never sent another way
       try {
-        const body = { text: t.slice(0, TALK_TEXT_MAX), ...(convo.current ? { conversation_id: convo.current } : {}) };
-        let r = parseTalkReply(await authJson<unknown>(token, `${API}/ceo/talk`, { method: "POST", body: JSON.stringify(body), signal: AbortSignal.timeout(TALK_REQUEST_MS) }));
+        let raw: unknown;
+        try {
+          raw = await send(true);
+        } catch (e) {
+          // The gateway forgot the thread (a restart, a new sign-in): start a new one, once.
+          if (!(e instanceof ApiError && e.status === 404 && convo.current)) throw e;
+          convo.current = null;
+          raw = await send(false);
+        }
+        accepted = true;
+        let r = parseTalkReply(raw);
         if (!r) throw new ApiError(0, "bad_answer", "The gateway's answer wasn't readable.");
         if (r.conversationId) convo.current = r.conversationId;
-        if (r.pending && r.conversationId) {
-          if (!quiet()) {
+        if (r.pending) {
+          if (!stopped() && alive.current) {
             addLine("firm", r.say);
             speak(r.say, undefined, `pending:${t}`);
           }
-          const until = Date.now() + TALK_GIVE_UP_MS;
-          const id = r.conversationId;
-          while (r.pending) {
-            if (Date.now() > until) {
-              if (!quiet()) addLine("firm", "It's taking too long. Ask me again in a moment.");
-              return true;
+          const id = r.conversationId ?? convo.current;
+          const done = id ? await followTurn(id, t, epoch) : null;
+          if (!done) {
+            if (alive.current && !stopped()) {
+              const msg = "I lost track of that request; it may have acted. Check the lists before asking again.";
+              addLine("firm", msg);
+              speak(msg, undefined, `lost:${t}`);
             }
-            await new Promise((res) => setTimeout(res, TALK_POLL_MS));
-            if (quiet()) return true;
-            const next = parseTalkReply(await authJson<unknown>(token, `${API}/ceo/talk/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(TALK_REQUEST_MS) }));
-            if (!next) throw new ApiError(0, "bad_answer", "The gateway's answer wasn't readable.");
-            r = next;
+            return "done";
+          }
+          r = done;
+        }
+        showReply(r, t, epoch);
+        return "done";
+      } catch (e) {
+        if (!alive.current || unauthorized(e)) return "done";
+        const status = e instanceof ApiError ? e.status : 0;
+        const code = e instanceof ApiError ? e.code : "";
+        if (!accepted && (stopKind || (status === 503 && !stopped()))) {
+          if (status === 503) {
+            talkDownAt.current = Date.now();
+            setNotice("The assistant can't be reached, so orders go through a confirm card for a minute.");
+          }
+          return "fallback";
+        }
+        if (!accepted && (code === "timeout" || code === "network_error") && convo.current) {
+          // The words may have arrived: follow the thread rather than guess (a stale reply is never shown twice).
+          const late = await followTurn(convo.current, t, epoch);
+          if (late) {
+            showReply(late, t, epoch);
+            return "done";
           }
         }
-        if (quiet()) return true;
-        const line = replyLine(r);
-        addLine("firm", line, r.actions);
-        if (r.actions.length) refresh();
-        speak(line, undefined, `reply:${t}`);
-        return true;
-      } catch (e) {
-        if (!alive.current || unauthorized(e)) return true;
-        if (e instanceof ApiError && e.status === 503) {
-          talkDown.current = true;
-          setNotice("The assistant can't be reached, so orders go through a confirm card for now.");
-          return false;
-        }
-        if (quiet()) return true;
-        const msg = voiceError(e);
+        if (stopped()) return "done";
+        const msg = accepted ? "The assistant dropped mid-turn; it may have acted. Check the lists before asking again." : voiceError(e);
         addLine("firm", msg);
         speak(msg, undefined, `error:${t}`);
-        return true;
+        return "done";
       }
     },
-    [addLine, refresh, speak, token, unauthorized],
+    [addLine, followTurn, showReply, speak, token, unauthorized],
   );
 
   /** D34 Undo on an action chip: POST /api/ceo/undo; each undo works once. */
@@ -735,27 +845,22 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         refresh();
       } catch (e) {
         if (!alive.current || unauthorized(e)) return;
-        const gone = e instanceof ApiError && (e.code === "used" || e.code === "not_found");
-        setUndoState((u) => ({ ...u, [undoId]: gone ? "undone" : "failed" }));
-        setOutcome({ ok: gone, text: gone ? "That was already undone." : voiceError(e) });
+        const used = e instanceof ApiError && e.code === "used";
+        const gone = e instanceof ApiError && e.code === "not_found";
+        setUndoState((u) => ({ ...u, [undoId]: used ? "undone" : gone ? "gone" : "failed" }));
+        setOutcome({
+          ok: used,
+          text: used ? "That was already undone." : gone ? "That undo isn't available any more (the gateway restarted or it expired). Check the lists." : voiceError(e),
+        });
       }
     },
     [addLine, refresh, token, unauthorized],
   );
 
-  /** Words from the CEO outside Realtime (browser speech, or typed): a confirm word decides the card, else a command. */
-  const command = useCallback(
-    async (text: string, via: "voice" | "click") => {
-      const t = text.trim();
-      if (!t) return;
-      addLine("you", t);
-      if (isStopEverything(t)) {
-        // The STOP button's own path: it cancels an open card and pauses, whatever is on screen.
-        void stopRef.current("voice");
-        return;
-      }
-      // D34: a conversation, no confirm card (a card left from the command path is decided first).
-      if (!talkDown.current && !vs.current.proposal && (await talk(t))) return;
+  /** The command path: a confirm word decides the card, else /api/ceo/command (a proposal card). */
+  const commandPath = useCallback(
+    async (t: string, via: "voice" | "click", epoch: number) => {
+      if (epoch !== stopEpoch.current && !isStopCommand(t)) return; // STOP came first: nothing new from it
       const d = decideTyped(vs.current, t, Date.now(), via === "voice");
       if (d?.type === "ignored") {
         setOutcome({ ok: false, text: IGNORED });
@@ -770,11 +875,10 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         const m = matchConfirm(t, vs.current.proposal);
         if (m === "confirm" || (m === "cancel" && isBareCancel(t))) return;
       }
-      const epoch = stopEpoch.current;
       try {
         const r = await post("/ceo/command", { text: t.slice(0, 500) });
         if (!alive.current) return;
-        if (epoch !== stopEpoch.current) {
+        if (epoch !== stopEpoch.current && !isStopCommand(t)) {
           // STOP came while it was on its way: nothing new from it.
           if (r.kind === "proposal") void post("/ceo/confirm", { proposal_id: r.proposalId, decision: "cancel", via: "click", heard: "" }).catch(() => {});
           return;
@@ -787,7 +891,59 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         speak(msg, undefined, `error:${t}`);
       }
     },
-    [addLine, handle, post, settle, speak, talk, unauthorized],
+    [addLine, handle, post, settle, speak, unauthorized],
+  );
+
+  const talkUp = () => Date.now() - talkDownAt.current > TALK_RETRY_MS;
+
+  /** Run the queued words, one turn at a time; words queued before a STOP are dropped. */
+  const runTurns = useCallback(async () => {
+    if (turnBusy.current) return;
+    turnBusy.current = true;
+    setWorking(true);
+    try {
+      for (let next = turnQueue.current.shift(); next; next = turnQueue.current.shift()) {
+        if (!alive.current) return;
+        if (next.epoch !== stopEpoch.current) {
+          addLine("firm", `Dropped after your STOP: “${next.t}”.`);
+          continue;
+        }
+        const out = Date.now() - talkDownAt.current > TALK_RETRY_MS && !vs.current.proposal ? await talkTurn(next.t, next.epoch, false) : "fallback";
+        if (out === "fallback") await commandPath(next.t, next.via, next.epoch);
+      }
+    } finally {
+      turnBusy.current = false;
+      if (alive.current) setWorking(false);
+    }
+  }, [addLine, commandPath, talkTurn]);
+
+  /** Words from the CEO outside Realtime (browser speech, or typed). */
+  const command = useCallback(
+    async (text: string, via: "voice" | "click") => {
+      const t = text.trim();
+      if (!t) return;
+      addLine("you", t);
+      if (isStopEverything(t)) {
+        // The STOP button's own path: it cancels an open card and pauses, whatever is on screen.
+        void stopRef.current("voice");
+        return;
+      }
+      const epoch = stopEpoch.current;
+      // D34: a conversation, no confirm card (a card left from the command path is decided first).
+      if (talkUp() && !vs.current.proposal) {
+        if (isStopCommand(t)) {
+          // A stop never waits behind a turn; if talk can't take it, the command path runs it.
+          if ((await talkTurn(t, epoch, true)) === "fallback") await commandPath(t, via, epoch);
+          return;
+        }
+        if (turnBusy.current) addLine("firm", "Got it. I'll do that right after the current request.");
+        turnQueue.current.push({ t, via, epoch });
+        void runTurns();
+        return;
+      }
+      await commandPath(t, via, epoch);
+    },
+    [addLine, commandPath, runTurns, talkTurn],
   );
   useEffect(() => {
     spokenRef.current = (text) => void command(text, "voice");
@@ -893,7 +1049,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     hangUp();
     // D34: the conversation listens with the browser and answers with TTS; the Realtime model is
     // only the path when the assistant is down or this browser can't listen.
-    if (!talkDown.current && recognitionCtor() !== null) return toFallback(null);
+    if (Date.now() - talkDownAt.current > TALK_RETRY_MS && recognitionCtor() !== null && !deaf.current) return toFallback(null);
     const mine = attempt.current;
     const stale = () => mine !== attempt.current || !alive.current;
     go("connecting");
@@ -1320,6 +1476,12 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           </button>
         )}
       </div>
+      {/* D34: a turn is with the assistant (it may take up to half a minute): never silent on screen. */}
+      {working && (
+        <p className="working" role="status">
+          U-Tax is working on it…
+        </p>
+      )}
       {/* D33: what the browser's ear understood last (the chip above says whether it is listening). One line, below the controls, so STOP never moves. */}
       {link === "fallback" && heard && (
         <p className="heard" role="status" title={heard.text}>
@@ -1403,6 +1565,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
                         {a.undoId &&
                           (st === "undone" ? (
                             <span className="chip-note">Undone</span>
+                          ) : st === "gone" ? (
+                            <span className="chip-note">Undo not available</span>
                           ) : (
                             <button className="ghost undo" disabled={st === "undoing"} onClick={() => a.undoId && void undo(a.undoId)}>
                               {st === "undoing" ? "Undoing…" : st === "failed" ? "Retry undo" : "Undo"}
