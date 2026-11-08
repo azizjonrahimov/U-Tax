@@ -11,6 +11,11 @@
 3. The reply is the assistant's last `message.completed` after our message, plus what it did
    (`actions: [{tool, summary, undo_id?}]`). On a timeout: `{say: "Still working on it…",
    pending: true}`, and `GET /api/ceo/talk/{conversation_id}` picks it up.
+4. Task 50: Naive answering 429/503 ("at capacity", the shared backoff) never turns a turn
+   into a 503. The CEO's words go into the conversation's outbox (one idempotency key each)
+   and are retried within the 25 s budget; past it the turn answers pending, a background
+   task keeps delivering (up to DELIVER_SECONDS), and GET collects the reply. The CEO never
+   repeats himself. Stops stay instant (the grammar runs first, with no Naive call).
 """
 
 from __future__ import annotations
@@ -34,6 +39,13 @@ BUSY = "The assistant can't be reached right now. Stops still work: say stop."
 TEXT_MAX = 2000
 EVENTS_PAGE = 100  # task 49: Naive's max list limit
 EVENT_PAGES_MAX = 50
+BUSY_STATUSES = (429, 503)  # task 50: Naive at capacity, or the shared backoff's gate
+DELIVER_SECONDS = 600.0  # task 50: how long the background delivery keeps trying
+RETRY_FLOOR = 0.5  # never spin: at least this long between retries
+
+
+def _busy(err: NaiveError) -> bool:
+    return err.status_code in BUSY_STATUSES
 
 
 class TalkRefused(Exception):
@@ -52,7 +64,7 @@ class CeoTalk:
         self.conversations: dict[str, dict] = {}  # conversation_id -> its Naïve session
         self._by_owner: dict[str, str] = {}  # a sign-in -> its conversation
         self._lock = asyncio.Lock()
-        self._notes: set[asyncio.Task] = set()  # stop notes in flight (a reference each)
+        self._notes: set[asyncio.Task] = set()  # stop notes and deliveries (a reference each)
 
     async def drain(self) -> None:
         """Tests and shutdown: wait for the stop notes in flight."""
@@ -79,18 +91,98 @@ class CeoTalk:
                                                     "(naive up not run?)")
 
     async def _note(self, conversation: dict, text: str) -> None:
-        """The gateway's own message into the session (queued if it's mid-run)."""
+        """The gateway's own message into the session (queued if it's mid-run). Task 50:
+        through the outbox, so a busy Naive delays it instead of losing it."""
+        if conversation["session_id"] is None and not conversation.get("sending"):
+            return  # no session (Naive never took the first message): nobody to tell
+        conversation["outbox"].append((text, f"utax-note:{secrets.token_hex(8)}"))
+        if conversation.get("sending"):
+            return  # the turn or the delivery in flight sends it after the CEO's words
         try:
-            await self.client.send_message(conversation["session_id"], message=text, queue=True,
-                                           idempotency_key=f"utax-note:{secrets.token_hex(8)}")
+            await self._send(conversation, self._clock() + self.wait)
         except NaiveError as err:
-            log.warning("stop note not delivered to %s: %s", conversation["session_id"], err)
+            if _busy(err):
+                self._deliver_later(conversation)
+            else:
+                log.warning("stop note not delivered to %s: %s", conversation["session_id"],
+                            err)
+                conversation["outbox"].clear()
 
-    async def _reply(self, conversation: dict) -> str | None:
-        """Wait (bounded) for the session to idle; its last assistant message, or None."""
-        deadline = self._clock() + self.wait
+    # ------------------------------------------------------------------ task 50: Naive busy
+
+    async def _call(self, fn, deadline: float) -> Any:
+        """One Naive call, retried through 429/503 (waiting out Retry-After or the shared
+        backoff) until `deadline`; then the last NaiveError."""
         while True:
-            session = await self.client.get_session(conversation["session_id"])
+            try:
+                return await fn()
+            except NaiveError as err:
+                left = deadline - self._clock()
+                if not _busy(err) or left <= 0:
+                    raise
+                wait = err.retry_after or getattr(self.client.backoff, "remaining",
+                                                  lambda: 0.0)() or 1.0
+                await self._sleep(min(max(wait, RETRY_FLOOR), left))
+
+    async def _send(self, conversation: dict, deadline: float) -> None:
+        """Deliver the outbox in order: the first message creates the session. Each item keeps
+        its idempotency key across retries, so nothing is ever posted twice."""
+        conversation["sending"] = True
+        try:
+            while conversation["outbox"]:
+                text, key = conversation["outbox"][0]
+                if conversation["session_id"] is None:
+                    agent_id = await self._call(self._agent, deadline)
+                    created = await self._call(lambda: self.client.create_session(
+                        agent_id=agent_id, message=text, idempotency_key=key), deadline)
+                    conversation["session_id"] = str(created["id"])
+                else:
+                    sent = await self._call(lambda: self.client.send_message(
+                        conversation["session_id"], message=text, queue=True,
+                        idempotency_key=key), deadline)
+                    accepted = sent.get("accepted_seq") if isinstance(sent, dict) else None
+                    if isinstance(accepted, int):
+                        conversation["after_seq"] = max(conversation["after_seq"], accepted)
+                conversation["outbox"].pop(0)
+        finally:
+            conversation["sending"] = False
+
+    def _deliver_later(self, conversation: dict) -> None:
+        """Past the turn's budget: keep delivering in the background (GET collects)."""
+        if conversation.get("delivering"):
+            return
+        conversation["delivering"] = True
+
+        async def deliver() -> None:
+            try:
+                await self._send(conversation, self._clock() + DELIVER_SECONDS)
+            except (NaiveError, TalkRefused) as err:
+                log.warning("ceo talk: gave up delivering to Naïve: %s", err)
+                conversation["outbox"].clear()
+                conversation["gave_up"] = True
+            finally:
+                conversation["delivering"] = False
+
+        task = asyncio.create_task(deliver())
+        self._notes.add(task)
+        task.add_done_callback(self._notes.discard)
+
+    def _still_working(self, conversation: dict) -> dict:
+        conversation["pending"] = True
+        return {"conversation_id": conversation["conversation_id"], "say": STILL_WORKING,
+                "pending": True}
+
+    async def _reply(self, conversation: dict, deadline: float | None = None) -> str | None:
+        """Wait (bounded) for the session to idle; its last assistant message, or None."""
+        deadline = self._clock() + self.wait if deadline is None else deadline
+        while True:
+            try:
+                session = await self._call(
+                    lambda: self.client.get_session(conversation["session_id"]), deadline)
+            except NaiveError as err:
+                if _busy(err):
+                    return None  # task 50: busy past the budget is "still working"
+                raise
             stopped = session.get("stop_reason")
             if session.get("status") == "idle" and stopped == "awaiting_approval" \
                     and self.confirmer is not None and self.agent_id:
@@ -146,21 +238,19 @@ class CeoTalk:
             return await self._stop(self._conversation(owner, conversation_id, lenient=True),
                                     parsed[1][1])
         async with self._lock:  # one turn at a time for the CEO
+            deadline = self._clock() + self.wait
             conversation = self._conversation(owner, conversation_id, lenient=True)
             try:
-                agent_id = await self._agent()
-                if conversation is not None and conversation["pending"]:
+                if conversation is not None and conversation["pending"] \
+                        and not conversation["outbox"]:
                     await self._collect(conversation)  # task 41: the earlier reply first
                 if conversation is None:
                     cid = f"conv_{secrets.token_hex(6)}"
                     turn = await self._perform("ceo_turn", {"conversation_id": cid,
                                                             "text": text})
-                    created = await self.client.create_session(
-                        agent_id=agent_id, message=text,
-                        idempotency_key=f"utax-talk:{cid}:1")
                     conversation = {"conversation_id": cid, "owner": owner,
-                                    "session_id": str(created["id"]), "after_seq": 0,
-                                    "pending": True, "last": None,
+                                    "session_id": None, "after_seq": 0, "pending": True,
+                                    "last": None, "outbox": [(text, f"utax-talk:{cid}:1")],
                                     "turn_id": (turn.data or {}).get("turn_id")}
                     self.conversations[cid] = conversation
                     self._by_owner[owner] = cid
@@ -169,16 +259,27 @@ class CeoTalk:
                     turn = await self._perform("ceo_turn", {"conversation_id": cid,
                                                             "text": text})
                     conversation["turn_id"] = (turn.data or {}).get("turn_id")
-                    sent = await self.client.send_message(
-                        conversation["session_id"], message=text, queue=True,
-                        idempotency_key=f"utax-talk:{cid}:{secrets.token_hex(6)}")
-                    accepted = sent.get("accepted_seq") if isinstance(sent, dict) else None
-                    if isinstance(accepted, int):
-                        conversation["after_seq"] = max(conversation["after_seq"], accepted)
+                    conversation["outbox"].append(
+                        (text, f"utax-talk:{cid}:{secrets.token_hex(6)}"))
                     conversation["pending"] = True
-                return await self._finish(conversation)
+                    conversation.pop("gave_up", None)
+                if conversation.get("delivering"):
+                    return self._still_working(conversation)  # queued behind the delivery
+                try:
+                    await self._send(conversation, deadline)
+                except NaiveError as err:
+                    if not _busy(err):
+                        raise
+                    log.warning("ceo talk: Naïve busy past the turn budget: %s", err)
+                    self._deliver_later(conversation)
+                    return self._still_working(conversation)
+                return await self._finish(conversation, deadline)
             except NaiveError as err:
                 log.warning("ceo talk: Naïve failed: %s", err)
+                if conversation is not None and not conversation.get("delivering"):
+                    conversation["outbox"].clear()  # a hard refusal: never resent later
+                    if conversation["session_id"] is None:
+                        conversation["pending"] = False  # nothing to collect
                 raise TalkRefused(503, "assistant_unavailable", BUSY) from err
 
     async def check(self, owner: str, conversation_id: str) -> dict:
@@ -190,6 +291,11 @@ class CeoTalk:
             if not conversation["pending"]:
                 return conversation["last"] or {"conversation_id": conversation_id, "say": "",
                                                 "actions": []}
+            if conversation.pop("gave_up", False):  # task 50: Naive stayed busy 10 minutes
+                conversation["pending"] = False
+                raise TalkRefused(503, "assistant_unavailable", BUSY)
+            if conversation["outbox"]:  # task 50: still being delivered in the background
+                return self._still_working(conversation)
             try:
                 return await self._collect(conversation)
             except NaiveError as err:
@@ -203,9 +309,9 @@ class CeoTalk:
         finally:
             self.wait = saved
 
-    async def _finish(self, conversation: dict) -> dict:
+    async def _finish(self, conversation: dict, deadline: float | None = None) -> dict:
         cid = conversation["conversation_id"]
-        said = await self._reply(conversation)
+        said = await self._reply(conversation, deadline)
         if said is None:
             return {"conversation_id": cid, "say": STILL_WORKING, "pending": True}
         done = await self._perform("ceo_reply", {"conversation_id": cid,

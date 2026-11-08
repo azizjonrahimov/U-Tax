@@ -3456,11 +3456,13 @@ class Gateway:
         try:
             posted = self._with_retry("social post", lambda: self.ports.social.post(
                 Post(channel=channel, text=text, image_url=image_url), key))
-        except ToolError:
+        except ToolError as err:
             self._emit([NewEvent(type="post.published", actor="mkt",
                                  provider=self.ports.social.provider, status="failed",
                                  payload={"channel": channel, "text": text, "url": None,
-                                          "image_url": image_url})])
+                                          "image_url": image_url},
+                                 # task 50: why it failed, kept (admin-only)
+                                 private={"error": clip(f"{err.code}: {err}", 300)})])
             raise
         seen = None
         if unseen:  # the CEO approved this one: later posts from it take the normal trust

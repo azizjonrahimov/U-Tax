@@ -361,6 +361,12 @@ v1.18.2 (task 43):
     `set_trust` (any state), `unblock_case`, and an `undo` that would leave a pause, from a turn that began
     before the latest stop, are refused `{code: "stopped"}`. Reads, `pause` and `cancel_order` stay allowed.
   - `GET /api/ceo/talk/{id}` reads the turn's state under the same lock.
+- v1.19.1 (task 50):
+  - `POST /api/ceo/talk` rides out Naïve 429/503: each call retries within the 25 s budget, then answers
+    `{pending: true}`. A background outbox keeps delivering for up to 10 min (each message is sent once, in order),
+    and `GET /api/ceo/talk/{id}` collects the reply. Stops stay grammar-first.
+  - `post_social`: a channel that Naïve still holds in flight (409) answers the final code `channel_failed` (do not
+    retry; say so on the card). The failed `post.published` keeps a private `error`.
 - `POST /api/ceo/undo` `{undo_id}` (admin or session).
 - Events `ceo.said` `{conversation_id, text_len}` (the text is private) and `ceo.replied`
   `{conversation_id, actions}`.
@@ -888,6 +894,8 @@ everything below.
   content: the format, size and headline checks are filters, not a review.
 
 ## Changelog
+
+- v1.19.1 (2026-11-08, task 50): talk rides out Naïve 429s; post_social channel_failed.
 
 - v1.19 (2026-11-08, D38): agent market (§9): MCP tools hire_contractor/get_job (mkt); /market/* contractor routes; /agent/franchise-check (MPP 402); events job.*, payment.sent, agent.sale; provider tempo; trust type contractor_pay. §3/§6 rows landed with backend 47b + agents A41.
 

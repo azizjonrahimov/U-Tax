@@ -23,10 +23,13 @@ import httpx
 
 from app.gateway.adapters import _http
 from app.gateway.adapters.local import _KeyedJson
-from app.gateway.ports import NotConfigured, Post, Posted, Rejected, Unavailable
+from app.gateway.ports import ChannelFailed, NotConfigured, Post, Posted, Rejected
 from app.naive.client import API_VERSION, DEFAULT_API_BASE, _api_root
 
 PLATFORMS = {"x": "x", "linkedin": "linkedin"}  # our post_social channels -> Naïve platforms
+# task 50: Naive posts to X synchronously (it fetches the image and uploads it to X first);
+# 8 s gave up while it was still working, and every retry then met a 409 "still in flight"
+SOCIAL_TIMEOUT = httpx.Timeout(25.0, connect=3.0)
 
 
 def _post_url(body: Any, identity: str) -> str | None:
@@ -56,7 +59,7 @@ class NaiveSocial:
 
     def __init__(self, api_key: str, *, identity: str, data_dir: Path,
                  api_base: str = DEFAULT_API_BASE, transport: httpx.BaseTransport | None = None,
-                 timeout: httpx.Timeout | float = _http.TIMEOUT) -> None:
+                 timeout: httpx.Timeout | float = SOCIAL_TIMEOUT) -> None:
         if not api_key:
             raise NotConfigured("NAIVE_API_KEY is not set")
         if not identity:
@@ -90,8 +93,10 @@ class NaiveSocial:
                 headers={"Idempotency-Key": idem}))
         except Rejected as err:
             status = getattr(err, "status", 0)
-            if status == 409:  # the same key still in flight (a timed-out first try)
-                raise Unavailable(str(err)) from err
+            if status == 409:  # task 50: the same key still in flight (a timed-out try)
+                raise ChannelFailed(
+                    f"{post.channel}: the post didn't go through (Naïve still has the first "
+                    f"try in flight: {err}). Final: don't retry; say so on the card") from err
             if status in (403, 404):  # wrong identity, no social workspace, no scope
                 raise NotConfigured(f"{err} (check NAIVE_SOCIAL_IDENTITY, its activated social "
                                     "workspace, and the key's sessions:write scope)") from err

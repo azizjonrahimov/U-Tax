@@ -33,6 +33,14 @@ class Unavailable(PortError):
     retryable = True
 
 
+class ChannelFailed(PortError):
+    """Task 50: the provider took the call but the channel never confirmed it (Naive's X
+    post still in flight). Final: a retry with the same key only meets the stuck first try,
+    and a new key could post twice."""
+
+    code = "channel_failed"
+
+
 class AuthExpired(PortError):
     code = "auth_expired"
 
