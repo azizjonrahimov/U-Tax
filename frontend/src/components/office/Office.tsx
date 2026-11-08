@@ -8,6 +8,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Theater } from "@/components/theater/Theater";
 import { DeptAvatar } from "@/components/ui/DeptAvatar";
+import { Emblem } from "@/components/ui/Emblem";
 import { Switch } from "@/components/ui/Switch";
 import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
@@ -204,13 +205,13 @@ export function Office() {
   const maxSteps = Math.max(1, ...SEATS.map((s) => office.desks[s].steps.length));
 
   return (
-    <div className={session ? "office app with-panel" : "office app"} style={SEAT_VARS}>
+    <div className={session ? "office app stage-glow with-panel" : "office app stage-glow"} style={SEAT_VARS}>
       {/* D41 F46: the prototype's sidebar DOM (office-prototype.html), classes as is; .ox scopes office-page.css to it. */}
       <div className="ox" style={{ display: "contents" }}>
         <nav className="side" aria-label="Departments">
           <Link href="/" className="brand" aria-label="U-Tax home">
-            <span className="mark" aria-hidden>
-              U
+            <span className="mark emblem-mark" aria-hidden>
+              <Emblem size={30} />
             </span>
             U-Tax <small>office</small>
           </Link>
@@ -435,7 +436,7 @@ function Department({ desk, studio, numbers, working, following, now, session, s
       {banner && <TaskBanner order={banner.order} task={banner.task} />}
       <header className="dept-head">
         <div>
-          <h1>
+          <h1 className="dot-display">
             <span className="dot" aria-hidden /> {SEAT_NAME[seat]}
           </h1>
           <p>{SEAT_ROLE[seat]}</p>
@@ -600,7 +601,7 @@ function Window({ seat, step, tabs, trail, studio, now, session, served }: { sea
 
   const site = art ? ART_SITE[art.kind] : (step?.site ?? "about:blank");
   return (
-    <section className="win" aria-label={`${SEAT_NAME[seat]}'s workspace`}>
+    <section className="win glass" aria-label={`${SEAT_NAME[seat]}'s workspace`}>
       <div className="win-bar">
         <span className="lights" aria-hidden>
           <i />

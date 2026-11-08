@@ -50,6 +50,7 @@ import { current, emptyCaseDocs, stepCaseDocs, type CaseDocs } from "@/office/ar
 import { SEAT_NAME, SEATS } from "@/office/workspace";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
+import { Emblem } from "@/components/ui/Emblem";
 import "./ceo-page.css";
 import { DeptAvatar } from "@/components/ui/DeptAvatar";
 import { Switch } from "@/components/ui/Switch";
@@ -783,10 +784,12 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
     const navTo = (item: RailItem) => () => setRailOn(item);
     const allClear = EMPTY_ART["all-clear"];
     return (
-      <div className="cx app">
+      <div className="cx app stage-glow">
         <header className="top">
           <div className="brand">
-            <span className="mark">U</span>
+            <span className="mark emblem-mark" aria-hidden>
+              <Emblem size={30} />
+            </span>
             <span>U-Tax</span>
             <span className="chip">ceo</span>
           </div>
@@ -930,9 +933,9 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
           <div className="voice-alerts" ref={setAlertsSlot} />
 
           <section className="hero">
-            <div className="card brief" id="brief" role="region" aria-labelledby="brief-h">
+            <div className="card glass brief" id="brief" role="region" aria-labelledby="brief-h">
               <div className="kicker">your brief</div>
-              <h1 id="brief-h">
+              <h1 id="brief-h" className="dot-display">
                 {greeting}. The firm kept <em>working.</em>
               </h1>
               {brief ? (
@@ -976,7 +979,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
                 <p className="dim">Loading the brief…</p>
               )}
             </div>
-            <div className="card voice">
+            <div className="card glass voice">
               <CeoVoice key={token} token={token} refresh={refreshAfterVoice} signOut={voiceSignOut} feedRef={voiceFeed} names={caseNames} flagged={flaggedCases} skin="page" slots={slots} />
             </div>
           </section>
@@ -984,13 +987,13 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
           {orders.length > 0 && (
             <section aria-labelledby="ord-h" className="orders-live">
               <div className="sh">
-                <h2 id="ord-h">
+                <h2 id="ord-h" className="dot-display">
                   Your orders, <em>live</em>
                 </h2>
               </div>
               <ol>
                 {orders.map((o) => (
-                  <li key={o.id} className="card order-card">
+                  <li key={o.id} className="card glass order-card">
                     <div className="order-head">
                       <p className="order-text">
                         <q>{o.text}</q>
@@ -1040,7 +1043,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
 
           <section id="approvals" aria-labelledby="ap-h">
             <div className="sh">
-              <h2 id="ap-h">
+              <h2 id="ap-h" className="dot-display">
                 Waiting on <em>you</em>
               </h2>
               <span className="count">{waiting}</span>
@@ -1063,7 +1066,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
                     <article
                       key={a.approvalId}
                       id={`row-${a.approvalId}`}
-                      className={["card ap", old && "outdated", highlight === a.approvalId && "highlight"].filter(Boolean).join(" ")}
+                      className={["card glass ap", old && "outdated", highlight === a.approvalId && "highlight"].filter(Boolean).join(" ")}
                     >
                       <div className="ap-h">
                         <DeptAvatar seat={seat} size={36} />
@@ -1104,7 +1107,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
           <section className="split">
             <div id="hiring" role="region" aria-labelledby="hr-h">
               <div className="sh">
-                <h2 id="hr-h">Hiring</h2>
+                <h2 id="hr-h" className="dot-display">Hiring</h2>
                 <span className={toDecide ? "count" : "count dim"}>{toDecide ? `${toDecide} to decide` : candidates.length}</span>
                 <p>HR runs it; you make the call.</p>
               </div>
@@ -1112,7 +1115,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
                 <p className="empty">{loading ? "Loading…" : "No applicants yet."}</p>
               ) : (
                 <>
-                  <div className="card kan">
+                  <div className="card glass kan">
                     {KAN_COLS.map((col) => {
                       const inCol = column(col.stage);
                       return (
@@ -1160,13 +1163,13 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
             </div>
             <div id="standing" role="region" aria-labelledby="tr-h">
               <div className="sh">
-                <h2 id="tr-h">Standing orders</h2>
+                <h2 id="tr-h" className="dot-display">Standing orders</h2>
                 <p>A kind that asks you first runs on its own after you approve one. Switch a kind off to pause it; on puts it back as it was.</p>
               </div>
               {loading ? (
                 <p className="empty">Loading…</p>
               ) : (
-                <div className="card orders">
+                <div className="card glass orders">
                   {ACTION_TYPES.map((t) => {
                     const key = `tr:${t}`;
                     const state = view.trust[t] ?? "ASK";
@@ -1211,7 +1214,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
                 {blocked.map((c) => {
                   const key = `ub:${c.caseId}`;
                   return (
-                    <li key={c.caseId} className="card">
+                    <li key={c.caseId} className="card glass">
                       <div id={`w-${key}`}>
                         <b>{c.name}</b>
                         <span className="dim">
@@ -1277,7 +1280,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
               <h5 id="money-h">
                 where the money went <span>{spend.spentUsd ? formatUsd(spend.spentUsd) : ""}</span>
               </h5>
-              <div className="card spend">
+              <div className="card glass spend">
                 <div className="bar" aria-hidden="true">
                   {spend.byProvider.map((p, i) => (
                     <i key={p.name} style={{ width: `${(p.share * 100).toFixed(1)}%`, background: SPEND_COLORS[i % SPEND_COLORS.length] }} />
