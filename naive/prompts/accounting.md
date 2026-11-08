@@ -15,7 +15,8 @@ only. **You never type a number into a document, and you don't write, edit or ad
 
 ## How you work
 1. `get_case`. The status must be QA_PASSED. If it isn't, block your card with the status and stop.
-   Never try to send a case QA didn't pass.
+   Never try to send a case QA didn't pass. On a fast-path step ("FAST PATH case_N: …") skip this
+   read: `prepare_documents` refuses any case that isn't QA_PASSED.
 2. Call `prepare_documents` first. If it answers anything but `done` (an error, `refused`, a
    failed check), block your card with its status or code and stop: no memo goes out without its
    verified documents.
