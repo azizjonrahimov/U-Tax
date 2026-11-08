@@ -28,10 +28,10 @@ import {
   type Source,
 } from "@/theater/live";
 import { humanTouches, railFromEvents, type FirmNumbers } from "@/theater/rail";
-import { applyStep, emptyScreen, flaggedInLog, seedScreen, type ScreenState } from "@/theater/screen";
-import { appendEvents, startScript, type CursorStep, type Pane, type ScriptCursor } from "@/theater/script";
+import { applyStep, emptyScreen, flaggedInLog, seedOrders, seedScreen, visibleOrders, type ScreenState } from "@/theater/screen";
+import { appendEvents, buildScript, startScript, type CursorStep, type Pane, type ScriptCursor } from "@/theater/script";
 import { MOVE_MS, movesCursor, stepHoldMs } from "@/theater/timing";
-import { CalendarPane, MailPane, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
+import { CalendarPane, MailPane, OrdersStrip, PhonePane, plural, Rail, SearchPane, SheetPane, SocialPane, type Typed } from "./Panes";
 import { PaneBoundary } from "./PaneBoundary";
 import "./theater.css";
 
@@ -61,6 +61,8 @@ const LIVE_KEEP_EVENTS = 1000;
 /** Customer captions are skipped when the live backlog is deeper than this (public /talk can't stall the stage). */
 const CUSTOMER_CAPTION_BACKLOG = 30;
 const TOKEN_REJECTED = "Theater token rejected (check NEXT_PUBLIC_THEATER_TOKEN)";
+/** D31: a (re)connecting projector reads this many recent events to rebuild the CEO order cards it missed. */
+const ORDER_LOOKBACK = 300;
 
 /** Rail targets without their own element land on the nearest rail card. */
 const RAIL_FALLBACK: Record<string, string> = {
@@ -208,7 +210,9 @@ export function Theater() {
    * stage mode). After a resize or stage toggle the old coordinates are wrong,
    * so cursors fall back to their desks until they move again.
    */
-  const layout = `${size}|${stage}`;
+  // D31: the orders band moves every pane when it opens or closes, so it is part of the layout too.
+  const hasOrders = visibleOrders(screen).length > 0;
+  const layout = `${size}|${stage}|${hasOrders}`;
   const layoutRef = useRef(layout);
   const [moves, setMoves] = useState<{ layout: string; pos: Record<string, Pos> }>({ layout: "", pos: {} });
   const [sound, setSound] = useState(false);
@@ -497,6 +501,21 @@ export function Theater() {
           // Cards for cases already open, so a reload shows rows that match the rail's numbers.
           addSeed(feed, (sc) => seedScreen(sc, seed.cases));
           feed.wake?.();
+          if (seed.lastId) {
+            // D31: a reload mid-order would lose the order's card (live starts from now): rebuild the
+            // cards from the recent log, orders only, without replaying anything on the panes.
+            const upTo = seed.lastId;
+            void getJson(eventsUrl(GATEWAY, Math.max(0, upTo - ORDER_LOOKBACK), ORDER_LOOKBACK))
+              .then((page) => {
+                const data = (page as { data?: unknown }).data;
+                if (!alive || !Array.isArray(data)) return;
+                const recent = (data as UTaxEvent[]).filter((e) => typeof e?.id === "number" && e.id <= upTo);
+                const { steps } = buildScript(recent, { log: () => {}, onGap: () => {} });
+                addSeed(feed, (sc) => seedOrders(sc, steps));
+                feed.wake?.();
+              })
+              .catch(() => console.warn("[theater] couldn't read recent orders; the band starts with the next one"));
+          }
           if (seed.lastId) {
             // The clock shows the last event's time right away (else "--:--:--" until the next one plays).
             const lastId = seed.lastId;
@@ -797,7 +816,7 @@ export function Theater() {
   const onReplay = () => (source === "live" ? setOverride("replay") : setRun((r) => r + 1));
 
   return (
-    <div className={`theater${stage ? " stage" : ""}${finale?.lined ? " lined" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
+    <div className={`theater${stage ? " stage" : ""}${finale?.lined ? " lined" : ""}${hasOrders ? " has-orders" : ""}`} style={{ "--t": 1 / Math.max(speed, effSpeed) } as CSSProperties}>
       <header>
         <span className="logo">U</span>
         <span className="title">U-Tax</span>
@@ -821,6 +840,12 @@ export function Theater() {
           </span>
         </div>
       </header>
+
+      {hasOrders && (
+        <PaneBoundary resetKey={screen.lastEventId}>
+          <OrdersStrip screen={screen} />
+        </PaneBoundary>
+      )}
 
       <PaneBoundary resetKey={screen.lastEventId}>
         <main data-focus={screen.camera && screen.camera !== "rail" ? screen.camera : undefined}>
