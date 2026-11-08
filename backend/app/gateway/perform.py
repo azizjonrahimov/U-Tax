@@ -1558,10 +1558,6 @@ class Gateway:
 
     # ------------------------------------------------------------ cos tools
 
-    _NEXT = {"NEW": "get_case", "INTAKE_PENDING": "extract_facts", "READY": "compute_tax",
-             "COMPUTED": "qa_check", "QA_PASSED": "send_memo", "SENT": "book_call",
-             "STALLED": "ask_client", "QA_FAILED": None, "BLOCKED": None}
-
     def _waiting_reason(self, case: Case) -> str:
         if case.status == "BLOCKED":
             return case.blocked_reason or "blocked: needs a human"
@@ -1578,10 +1574,11 @@ class Gateway:
         open_cases = [c for c in self.state.cases.values()
                       if c.status not in ("CALL_BOOKED", "NOT_ELIGIBLE")]
         open_cases.sort(key=lambda c: (not c.priority, c.number))
+        # task 26: no `next` hint; the Chief of Staff's routing table decides the step (the
+        # hint contradicted it, e.g. ask_client on a STALLED case)
         return {"cases": [{"case_id": c.case_id, "masked_name": c.masked_name,
                            "status": c.status, "priority": c.priority,
-                           "waiting_reason": self._waiting_reason(c),
-                           "next": self._NEXT.get(c.status)} for c in open_cases]}
+                           "waiting_reason": self._waiting_reason(c)} for c in open_cases]}
 
     def _get_case(self, args: dict) -> dict:
         case = self._case(args)
@@ -2890,6 +2887,23 @@ class Gateway:
                 log.exception("HR_CANDIDATES entry not recorded; retried at the next boot")
                 return
 
+    def _booking_line(self) -> str:
+        """v1.11.3: the owner's booking page, https only (anything else is left out, and
+        the line holding only {{booking_url}} disappears)."""
+        from urllib.parse import urlsplit
+
+        url = (self.settings.hr_booking_url or "").strip()
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            return ""
+        if (parts.scheme != "https" or not parts.hostname or parts.username
+                or any(ch.isspace() or ord(ch) < 32 for ch in url)):
+            if url:
+                log.warning("HR_BOOKING_URL ignored: it must be an https link")
+            return ""
+        return f"You can also pick a time on my calendar: {url}"
+
     def _list_candidates(self, args: dict) -> dict:
         """v1.11.2 (hr): every candidate, masked: the applicants and the CEO's
         HR_CANDIDATES entries (stable ids). No names, no addresses."""
@@ -3068,7 +3082,8 @@ class Gateway:
             f"{self._first('calendar_invite')}calendar invite: {label} at {start}"), None)
         self._outreach_intents.put(candidate_id, start)  # before anything leaves
         body = self.templates.render("hr-outreach", {"slot_time": _when(start),
-                                                     "minutes": str(SLOT_MINUTES)})
+                                                     "minutes": str(SLOT_MINUTES),
+                                                     "booking_url": self._booking_line()})
         # the invite first: the email says it was sent
         self._with_retry("candidate call", lambda: self.ports.calendar.book(
             Slot(start=start, minutes=SLOT_MINUTES), cand["reply_to"],

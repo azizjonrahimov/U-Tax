@@ -141,11 +141,12 @@ SPECS: dict[str, Spec] = {
         "this time. A person made this decision, not the AI that ran the first screen.\n\n"
         + SIGN_OFF)),
     # v1.11 (D31): agents-lane files in naive/templates; these built-ins stand in
-    "hr-outreach": Spec(("slot_time", "minutes"), lines=(AI_SCREEN_LINE,), builtin=(
+    "hr-outreach": Spec(("slot_time", "minutes", "booking_url"), lines=(AI_SCREEN_LINE,),
+                        builtin=(
         "Hi there,\n\nU-Tax would like to offer you a paid 1-hour gig: reviewing Delaware "
         "franchise tax memos our AI agents write, before they go to founders.\n\n"
         + AI_SCREEN_LINE + "\n\nWe've sent a calendar invite for a {{minutes}}-minute intro "
-        "call on {{slot_time}}.\n\n" + SIGN_OFF)),
+        "call on {{slot_time}}.\n{{booking_url}}\n\n" + SIGN_OFF)),
     "follow-up-memo_check": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,),
                                  builtin=(
         "Hi {{greeting_name}},\n\nJust checking that our Delaware franchise tax memo reached "
