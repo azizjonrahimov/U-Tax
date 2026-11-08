@@ -26,7 +26,7 @@
 .office .side-item.busy .side-meta { color: var(--c); }
 .office .side .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--c, var(--faint)); }
 .office .side .dot.all { background: conic-gradient(#ff4d3d 0 14%, #4da3ff 0 28%, #ffb547 0 43%, #3ddc84 0 57%, #c77dff 0 71%, #ff6fb5 0 86%, #2ee6d6 0); }
-.office .side .dot.ceo { background: #fff; }
+.office .side .dot.ceo-dot { background: #fff; }
 .office .side .dot.pulse { animation: of-pulse .6s ease-out; }
 @keyframes of-pulse { from { transform: scale(1.9); } to { transform: scale(1); } }
 .office .side-sep { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
@@ -212,3 +212,23 @@
 .office .of-dept .sheet td.fresh { background: color-mix(in srgb, var(--c) 22%, transparent); }
 .office .of-dept .sheet { overflow: auto; }
 .office .of-dept .art .send.failed { background: transparent; color: var(--red); border: 1px solid var(--red); }
+
+/* ---------------------------------------------------------------- D33: the CEO console panel */
+.office.with-panel { grid-template-columns: 248px minmax(0, 1fr) auto; }
+.office .ceo-panel { position: relative; display: flex; flex-direction: column; min-height: 0; height: 100%; border-left: 1px solid var(--line); background: var(--bg); }
+.office .ceo-panel.closed { width: auto; }
+.office .ceo-tab { writing-mode: vertical-rl; transform: rotate(180deg); min-width: 44px; padding: 16px 10px; border: 0; background: var(--panel); color: var(--text); font: 600 14px var(--font-inter), sans-serif; cursor: pointer; }
+.office .ceo-tab:hover { background: var(--panel2); }
+.office .ceo-grip { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 2; }
+.office .ceo-grip:hover, .office .ceo-grip:focus-visible { background: color-mix(in srgb, var(--text) 18%, transparent); outline: none; }
+.office .ceo-bar { display: flex; justify-content: flex-end; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.office .ceo-bar .ghost, .office .popped .ghost { min-height: 36px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--line); background: transparent; color: var(--text); font: 500 14px var(--font-inter), sans-serif; cursor: pointer; }
+.office .ceo-bar .ghost:hover, .office .popped .ghost:hover { background: var(--panel2); }
+.office .ceo-body { flex: 1; min-height: 0; overflow: auto; }
+.office .popped { padding: 24px 20px; display: grid; gap: 12px; color: var(--dim); font-size: 15px; }
+.office .popped p { margin: 0; }
+@media (max-width: 1100px) {
+  .office.with-panel { grid-template-columns: 248px minmax(0, 1fr); }
+  .office .ceo-panel:not(.closed) { position: fixed; right: 0; top: 0; bottom: 0; z-index: 20; max-width: 94vw; box-shadow: -12px 0 32px rgba(0, 0, 0, .5); }
+  .office .ceo-panel.closed { position: fixed; right: 0; top: 40%; z-index: 20; height: auto; border: 0; }
+}

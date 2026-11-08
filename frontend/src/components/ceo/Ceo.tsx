@@ -39,6 +39,10 @@ import {
 } from "@/ceo/ceo";
 import { announceAgentAudio, CeoVoice } from "./CeoVoice";
 import { logout, useSessionToken, writeSession } from "@/ceo/session";
+import { foldOrders, type OrderCard } from "@/ceo/orders";
+import { usePopoutBeacon } from "@/ceo/popout";
+import { current } from "@/office/artifact";
+import { SEAT_NAME } from "@/office/workspace";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
 
@@ -107,7 +111,12 @@ interface Confirm {
   approval?: Approval;
 }
 
-export function Ceo() {
+/**
+ * `variant="panel"`: inside /office (the office has its own header and sign-out). Otherwise the
+ * standalone /ceo page, which tells the office it's open (one console at a time).
+ */
+export function Ceo({ variant = "page" }: { variant?: "page" | "panel" } = {}) {
+  usePopoutBeacon(variant === "page");
   const token = useSessionToken();
   /** Why the console signed out (a 401: the session expired or was revoked), shown on the sign-in link. */
   const [signInError, setSignInError] = useState<string | null>(null);
@@ -126,6 +135,9 @@ export function Ceo() {
   const [notice, setNotice] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [now, setNow] = useState(0);
+  /** D37: the CEO's orders, each with its live steps (folded from the same admin log the console reads). */
+  const [orders, setOrders] = useState<OrderCard[]>([]);
+  const ordersRef = useRef<OrderCard[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [announce, setAnnounce] = useState("");
@@ -159,6 +171,8 @@ export function Ceo() {
     (why: string | null) => {
       session.current += 1;
       stopAudio();
+      ordersRef.current = [];
+      setOrders([]);
       if (why === null) void logout(); // the CEO's own Sign out revokes the session
       else writeSession(null); // a 401: it is already dead at the gateway
       briefRef.current = null;
@@ -251,6 +265,16 @@ export function Ceo() {
           if (mine !== session.current) return;
         }
         logRef.current = foldLog(logRef.current, events as UTaxEvent[]);
+        {
+          const names = new Map(st?.cases.map((c) => [c.caseId, c.name]) ?? []);
+          const fl = new Set(st?.cases.filter((c) => c.flagged).map((c) => c.caseId) ?? []);
+          ordersRef.current = foldOrders(reset ? [] : ordersRef.current, events as UTaxEvent[], {
+            name: (id) => (id !== null && fl.has(id) ? "a flagged client" : id !== null ? (names.get(id) ?? "a client") : "a client"),
+            flagged: (id) => id !== null && fl.has(id),
+            image: () => undefined,
+          });
+          setOrders(ordersRef.current);
+        }
         setLog(logRef.current);
         voiceFeed.current?.(events as UTaxEvent[], reset);
         if (st) setView(st);
@@ -452,16 +476,18 @@ export function Ceo() {
     ) : null;
 
   return (
-    <div className="ceo">
+    <div className={`ceo${variant === "panel" ? " in-panel" : ""}`}>
       <header>
-        <span className="logo">U</span>
-        <span className="title">U-Tax · CEO console</span>
+        {variant === "page" && <span className="logo">U</span>}
+        <span className="title">{variant === "page" ? "U-Tax · CEO console" : "CEO console"}</span>
         <span className={`updated${stale ? " stale" : ""}`} role="status">
           {updatedAt === null ? "Loading…" : stale ? "Not updating · retrying" : `Updated ${new Date(updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" })}`}
         </span>
-        <button className="ghost" onClick={() => signOut(null)}>
-          Sign out
-        </button>
+        {variant === "page" && (
+          <button className="ghost" onClick={() => signOut(null)}>
+            Sign out
+          </button>
+        )}
       </header>
       <main>
         <p className="sr-only" role="status" aria-live="polite">
@@ -729,6 +755,37 @@ export function Ceo() {
             </ul>
           )}
         </section>
+
+        {orders.length > 0 && (
+          <section aria-labelledby="ord-h" className="orders">
+            <h2 id="ord-h">Your orders, live</h2>
+            <ol>
+              {orders.map((o) => (
+                <li key={o.id} className="order-card">
+                  <p className="order-text">
+                    <q>{o.text}</q>
+                  </p>
+                  {o.live && current(o.live.ts, now) && (
+                    <p className="order-live" role="status">
+                      {o.live.text}
+                    </p>
+                  )}
+                  {o.steps.length === 0 ? (
+                    <p className="dim">Waiting for the Chief of Staff to pick it up…</p>
+                  ) : (
+                    <ol className="order-steps">
+                      {o.steps.map((st) => (
+                        <li key={st.key} className={st.status}>
+                          <span className="who">{st.seat ? SEAT_NAME[st.seat] : "U-Tax"}</span> {st.text}
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
 
         <section aria-labelledby="or-h">
           <h2 id="or-h">Order to the Chief of Staff</h2>
