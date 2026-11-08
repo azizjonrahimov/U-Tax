@@ -8,6 +8,7 @@ This screen is run by an AI agent. A human makes the final hiring decision.
 
 We've sent a calendar invite for a {{minutes}}-minute intro call on {{slot_time}}. If you can't
 make it or aren't interested, just reply and let us know.
+{{booking_url}}
 
 Please don't send SSNs, EINs, ID documents or anything else personal.
 
