@@ -10,6 +10,9 @@
 }
 .site .mono { font-family: var(--font-jetbrains-mono), "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
 .site a { color: inherit; }
+/* Links inside running text look like links, and a visited one reads differently. */
+.site p a, .site .alt a, .site .how .after a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
+.site p a:visited, .site .alt a:visited, .site .how .after a:visited { color: #3d5a4f; }
 .site :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .site .wrap { width: 100%; max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
