@@ -333,6 +333,100 @@ def cmd_market_faucet(args: argparse.Namespace) -> int:
     return 0
 
 
+MARKET_HEADLINE = "Delaware franchise tax: $85,165 → $450"  # the post guard's fixed line (G6)
+MARKET_TYPES = ("job.posted,job.claimed,job.submitted,job.verified,job.failed,payment.sent,"
+                "job.delivered,approval.requested")
+
+
+def _mcp_call(http: httpx.Client, token: str, tool: str, arguments: dict) -> dict:
+    r = http.post("/mcp/mkt", headers={"Authorization": f"Bearer {token}"},
+                  json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": tool, "arguments": arguments}})
+    r.raise_for_status()
+    body = r.json()
+    if "error" in body:
+        raise SystemExit(f"{tool}: {body['error'].get('message')}")
+    result = body["result"]["structuredContent"]  # an agent seat: {ok, status, data, error}
+    if result.get("status") == "done" and isinstance(result.get("data"), dict):
+        return result["data"]
+    error = result.get("error") or {}
+    return {"status": result.get("status"), "code": error.get("code"),
+            "message": error.get("message")}
+
+
+def market_e2e(base: str, tool_token: str, admin_token: str, *, approve: bool = False,
+               timeout: float = 60.0, out=print, transport: httpx.BaseTransport | None = None,
+               clock=time.monotonic, http: httpx.Client | None = None) -> int:
+    """D38 §5 41e: one real job through the RUNNING gateway and PixelAgent. Marketing's own
+    seat hires (MCP, its tool token), get_job is polled until delivered, then the timeline,
+    the tx and the money panel are printed. Exit 0 only when it ends delivered with tx_ok
+    (or a `local:` tx with ADAPTER_WALLET=local). `approve`: the CEO approves the first
+    contractor_pay payment if one is waiting (otherwise approve it in the console)."""
+    import uuid
+
+    with (http or httpx.Client(base_url=base.rstrip("/"), timeout=40,
+                               transport=transport)) as http:
+        hired = _mcp_call(http, tool_token, "hire_contractor", {
+            "template": "share_card", "headline": MARKET_HEADLINE,
+            "key": f"e2e:{uuid.uuid4().hex[:10]}"})
+        if "job_id" not in hired:
+            out(f"hire refused: {hired.get('code')}: {hired.get('message')}")
+            return 1
+        job_id = hired["job_id"]
+        out(f"hired {job_id} at {hired['price_usd']} (open)")
+        deadline, view, approved = clock() + timeout, {}, False
+        while clock() < deadline:
+            view = _mcp_call(http, tool_token, "get_job", {"job_id": job_id})
+            out(f"  {job_id}: {view.get('status')}"
+                + (f" (approval {view['approval_id']} waits on the CEO)"
+                   if view.get("approval_id") else ""))
+            if view.get("approval_id") and approve and not approved:
+                http.post("/api/approve", headers={"Authorization": f"Bearer {admin_token}"},
+                          json={"approval_id": view["approval_id"], "decision": "allow",
+                                "note": "market-e2e"}).raise_for_status()
+                approved = True
+                out(f"  approved {view['approval_id']} as the CEO")
+            if view.get("status") in ("delivered", "failed", "expired"):
+                break
+        auth = {"Authorization": f"Bearer {admin_token}"}
+        events = http.get("/api/events", headers=auth,
+                          params={"types": MARKET_TYPES, "limit": 2000}).json().get("data", [])
+        out("timeline:")
+        for e in events:
+            if e["payload"].get("job_id") == job_id or (
+                    e["type"] == "approval.requested"
+                    and e["payload"].get("action_type") == "contractor_pay"):
+                out(f"  {e['ts']}  {e['type']:<18} {e['status']:<6} "
+                    + " ".join(f"{k}={v}" for k, v in e["payload"].items()
+                               if k in ("contractor", "reason", "tx_hash", "approval_id")))
+        money = http.get("/api/state", headers=auth).json().get("money", {})
+        out(f"money: contractor_paid_usd={money.get('contractor_paid_usd')} "
+            f"spent_usd={money.get('spent_usd')}")
+    tx = str(view.get("tx_hash") or "")
+    if view.get("status") != "delivered" or not tx:
+        out(f"FAILED: {job_id} ended {view.get('status')}")
+        return 1
+    if tx.startswith("local:"):
+        out(f"delivered: {view.get('image_url')} (ledger tokens, tx {tx})")
+        return 0
+    from app.gateway.adapters import tempo_wallet as tw
+
+    receipt = tw.rpc("eth_getTransactionReceipt", [tx])
+    ok = bool(receipt) and receipt.get("status") == "0x1"
+    out(f"delivered: {view.get('image_url')}\ntx {tx} ok={ok}\n{view.get('explorer_url')}")
+    return 0 if ok else 1
+
+
+def cmd_market_e2e(args: argparse.Namespace) -> int:
+    env = env_file_values(Path(args.env))
+    token = os.environ.get("UTAX_TOOL_TOKEN_MKT") or env.get("UTAX_TOOL_TOKEN_MKT", "")
+    admin = os.environ.get("ADMIN_TOKEN") or env.get("ADMIN_TOKEN", "")
+    if not token or not admin:
+        print("needs UTAX_TOOL_TOKEN_MKT and ADMIN_TOKEN (backend/.env)", file=sys.stderr)
+        return 1
+    return market_e2e(args.base, token, admin, approve=args.approve, timeout=args.timeout)
+
+
 def cmd_stripe_webhook(args: argparse.Namespace) -> int:
     outcome = stripe_webhook(args.url, Path(args.env))
     note = {"created": "secret written; restart the gateway",
@@ -449,6 +543,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("market-balance", help="D38: pathUSD of the firm and contractor wallets")
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"))
     p.set_defaults(func=cmd_market_balance)
+    p = sub.add_parser("market-e2e", help="D38: one job through the running gateway and "
+                                          "PixelAgent; exit 0 only when delivered and paid")
+    p.add_argument("--base", default=os.environ.get("UTAX_BASE", "http://localhost:8000"))
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    p.add_argument("--approve", action="store_true",
+                   help="approve the first contractor_pay payment as the CEO")
+    p.add_argument("--timeout", type=float, default=60.0)
+    p.set_defaults(func=cmd_market_e2e)
     p = sub.add_parser("market-faucet", help="D38: fund an address on the Tempo testnet")
     p.add_argument("address")
     p.set_defaults(func=cmd_market_faucet)

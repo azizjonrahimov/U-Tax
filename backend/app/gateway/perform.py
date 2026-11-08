@@ -1756,6 +1756,9 @@ class Gateway:
             result[owned[0]] = owned[1]
         self._wake_superseded(waiting)
         self._wake(f"Approval {approval_id} allowed for {target}")
+        if action_type == "contractor_pay" and self.market_kick:  # D38: pay now, off the lock
+            threading.Thread(target=self.advance_market_jobs, daemon=True,
+                             name="market-pay").start()
         return result
 
     def _newest(self, approval) -> str | None:

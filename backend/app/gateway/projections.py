@@ -269,9 +269,12 @@ class State:
             # contract §4: spend is cost.booked only; tool.bought, law.searched, ... may carry
             # cost_usd for display, and counting them would double the booking
             provider = e.provider or "unknown"
-            self.spent_by_provider[provider] = (self.spent_by_provider.get(provider, Decimal(0))
-                                                + Decimal(e.cost_usd))
             model = str(e.payload.get("model", ""))
+            # v1.19 §9.1 (D38): a contractor payment is testnet tokens, not dollars: it stays
+            # in the log and in contractor_paid_usd, never in the spend total or the cap
+            if not model.startswith("contractor:"):
+                self.spent_by_provider[provider] = (
+                    self.spent_by_provider.get(provider, Decimal(0)) + Decimal(e.cost_usd))
             # Gateway.settle_voice; the CEO's own mints have their own cap (v1.8)
             if model.startswith("realtime:") and not model.startswith(f"realtime:{CEO_MINT}"):
                 day = e.ts[:10]

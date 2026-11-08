@@ -376,7 +376,9 @@ def test_money_panel_counts_contractor_paid(m, c):
     m.gw.advance_market_jobs()
     money = m.gw.public_state(admin=True)["money"]
     assert money["contractor_paid_usd"] == "0.50" and money["agent_sales_usd"] == "0.00"
-    assert money["spent_by_provider"]["local"] == "0.50"
+    # testnet tokens are not dollars: logged as cost.booked, never in the spend or its cap
+    assert "local" not in money["spent_by_provider"] and money["spent_usd"] == "0.00"
+    assert m.gw.state.spent_usd() == Decimal(0)
     [booked] = [e for e in m.events("cost.booked") if e.payload["model"].startswith("contractor")]
     assert booked.payload == {"provider": "local", "model": "contractor:share_card",
                               "estimated": False} and booked.cost_usd == "0.50"
@@ -397,6 +399,24 @@ def test_events_payload_keys_match_contract_v1_19(m, c):
     [paid] = m.events("payment.sent")
     assert paid.provider == "local" and paid.cost_usd == "0.50"
     assert TOKEN not in json.dumps([e.record() for e in m.store.since(0)])
+
+
+def test_contractor_payments_never_count_against_the_spend_cap(make_harness):
+    h = make_harness(admin_token=ADMIN, market_enabled=True, public_url="https://gw.test",
+                     spend_cap_usd=Decimal("0.10"), market_price_usd=Decimal("0.50"),
+                     market_contractors_raw=f"pixelagent|{TOKEN}|{WALLET}|{BASE}")
+    h.contractor = Contractor()
+    h.gw.market_http = httpx.Client(transport=httpx.MockTransport(h.contractor))
+    h.wallet = h.ports.wallet = CountingWallet()
+    h.gw.market_kick = False
+    with TestClient(create_app(h.gw, start_background=False)) as c:
+        for key in ("k1", "k2"):
+            job_id = to_verified(h, c, key=key)
+            if key == "k1":
+                approve_first_payment(h, job_id)
+            h.gw.advance_market_jobs()
+    assert len(h.wallet.paid) == 2 and h.gw.state.spent_usd() == Decimal(0)
+    assert h.gw.voice_refusal("tts") is None  # the $0.10 dollar cap is untouched
 
 
 # ---------------------------------------------------------------- get_job (agents A41)
@@ -431,3 +451,35 @@ def test_get_job_returns_at_once_when_final_and_shows_approval_id(m, c):
     m.gw.advance_market_jobs()
     m.slept.clear()
     assert m.ok("get_job", job_id=job_id)["status"] == "delivered" and m.slept == []
+
+
+# ---------------------------------------------------------------- 47e market-e2e
+
+
+def test_market_e2e_runs_one_job_to_delivered_and_exits_0(make_harness):
+    from app import devtools
+
+    mkt = "mkt-" + "m" * 28
+    h = make_harness(admin_token=ADMIN, market_enabled=True, public_url="https://gw.test",
+                     tool_tokens={"mkt": mkt},
+                     market_contractors_raw=f"pixelagent|{TOKEN}|{WALLET}|{BASE}")
+    h.contractor = Contractor()
+    h.gw.market_http = httpx.Client(transport=httpx.MockTransport(h.contractor))
+    h.ports.wallet = CountingWallet()
+    h.gw.market_kick = False
+    lines = []
+    with TestClient(create_app(h.gw, start_background=False)) as c:
+        def contractor_and_tick(seconds):  # PixelAgent works, the tick runs, while get_job waits
+            job = next(iter(h.gw.state.jobs.values()), None)
+            if job and job["status"] == "open":
+                claim(c, job["job_id"])
+                submit(c, job["job_id"])
+            h.gw.advance_market_jobs()
+
+        h.gw.sleep = contractor_and_tick
+        code = devtools.market_e2e("http://testserver", mkt, ADMIN, approve=True,
+                                   out=lines.append, http=c, clock=iter(range(100)).__next__)
+    text = "\n".join(lines)
+    assert code == 0, text
+    assert "approved apr_" in text and "delivered: https://gw.test/assets/ad_1.png" in text
+    assert "payment.sent" in text and "contractor_paid_usd=0.50" in text
