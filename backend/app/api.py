@@ -258,6 +258,12 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         admin = not auth_configured() or is_admin(authorization)
         return gw().public_state(admin=admin)
 
+    @router.get("/api/admin/mail-health")
+    def mail_health(authorization: str | None = Header(None)):
+        """D42 M4 (v1.21): the console's mail chip (admin)."""
+        require_admin(authorization)
+        return gw().mail_health()
+
     @router.get("/api/payments")
     def payments(token: str | None = Query(None), authorization: str | None = Header(None)):
         """D41 §E (v1.20 §10.3): the payment ledger, the same token rule as /api/state."""

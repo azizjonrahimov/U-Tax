@@ -179,6 +179,10 @@ For Replay mode and catch-up. Ordered by `id`.
   `payment.recorded` by `tx_hash`, plus `totals: {contractors_paid, agent_sales, clients_paid_usd}`. Testnet tokens never
   enter USD totals. Cached 5 s.
 
+- `GET /api/admin/mail-health` (v1.21 §11, D42; admin only) → `{last_poll_at, last_inbound_at, last_outbound_at, provider,
+  ok}`. Inbound arrives by webhook, so `last_poll_at` is the last live provider check (at most once a minute). `ok` is false
+  when that check is older than 2 min or the last send failed.
+
 ## 5. Control endpoints (admin token)
 
 - `POST /api/approve` `{approval_id, decision: "allow"|"deny", note}` → `200 {"ok": true}`.
