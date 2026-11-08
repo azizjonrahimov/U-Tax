@@ -1,4 +1,4 @@
-# API contract (v1.13): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.14): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -267,6 +267,26 @@ For Replay mode and catch-up. Ordered by `id`.
   - Greetings and mic checks never become orders. That means utterances made only of
     hey/hi/hello/test/testing/okay, or containing "can you hear me", "are you there" or
     "is this working". They answer `{kind: "say", say: "I'm listening. Tell me an order."}`.
+
+## 5a-ter. CEO conversation (v1.14, design D34)
+
+- `POST /api/ceo/talk` `{text, conversation_id?}` (admin or session).
+  - It sends `text` into the CEO assistant's Naïve session for this sign-in: it creates one on the
+    first turn, then posts `POST /v1/sessions/{id}/messages`.
+  - It waits until the session idles, for at most 25 s, and returns `{conversation_id, say, actions:
+    [{tool, summary, undo_id?}]}`. On a timeout it answers `{say: "Still working on it…", pending: true}`, and
+    the page polls `GET /api/ceo/talk/{conversation_id}`.
+  - Stop phrases never wait on the LLM: the gateway's grammar catches them first and runs `pause` at
+    once (v1.13.1).
+- MCP seat `/mcp/ceo` (token `UTAX_TOOL_TOKEN_CEO`, the agent `ceo-assistant`). Its tools are the §5b
+  registry, but start tools **run directly**, with no proposal (owner's D34). Read tools mask as before.
+  Each action writes its normal events plus `touch.operating` with `channel: "voice"`.
+  - Undo: `pause` ↔ `set_trust RESUME`; `set_trust` ↔ the previous state; `order` (a CoS card) →
+    `cancel_order {order_id}` closes the order's open cards. `approve`, `deny` and `decide_candidate`
+    have no undo; the reply says so.
+- `POST /api/ceo/undo` `{undo_id}` (admin or session).
+- Events `ceo.said` `{conversation_id, text_len}` (the text is private) and `ceo.replied`
+  `{conversation_id, actions}`.
 
 ## 5b. CEO voice console (v1.8, design D28)
 
@@ -662,6 +682,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.14 (2026-11-07, design D34): /api/ceo/talk conversation, MCP seat ceo (direct actions, no confirm), undo.
 
 - v1.13.1 (2026-11-07, frontend review): stop-kind commands bypass the open-proposal guard.
 
