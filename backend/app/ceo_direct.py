@@ -162,7 +162,7 @@ def run(gw: Any, name: str, raw_args: Any, *, actor: str = ASSISTANT) -> dict:
     with acting_as(gw, actor), gw._channel("voice"):
         if tool.kind == "stop":
             target = args["action_type"]
-            types = ceo_tools.TRUST_TYPES if target == "everything" else (target,)
+            types = gw.trust_types() if target == "everything" else (target,)
             before = {t: gw.state.trust.get(t) for t in types}
             summary = tool.carry(gw, args)
             changed = [t for t in types if before[t] != "PAUSED"]

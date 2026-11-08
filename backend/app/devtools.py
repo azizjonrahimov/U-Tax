@@ -232,6 +232,253 @@ def stripe_webhook(public: str, env_path: Path,
         return "created"
 
 
+# ---------------------------------------------------------------- D38 market wallets
+
+PIXELAGENT_ENV = Path(__file__).resolve().parents[2] / "contractors" / "pixelagent" / ".env"
+PIXELAGENT_BASE = "http://127.0.0.1:8020"
+
+
+def _address_of(key: str) -> str:
+    from mpp.methods.tempo import TempoAccount
+
+    return TempoAccount.from_key(key if key.startswith("0x") else "0x" + key).address
+
+
+def market_wallets(env_path: Path, contractor_env: Path, *, out=print,
+                   transport: httpx.BaseTransport | None = None,
+                   new_key=None, fund=None) -> dict[str, str]:
+    """D38 §2.3: the firm's and PixelAgent's testnet wallets, funded from the faucet.
+    Idempotent: a key already in the .env is kept (never overwritten) and only its address
+    and balance are printed. Writes FIRM_WALLET_KEY and MARKET_CONTRACTORS (backend .env);
+    PIXELAGENT_KEY, MPP_SECRET_KEY and MARKET_TOKEN (the contractor's .env). Prints only
+    addresses and balances: never a key or a token."""
+    import secrets
+
+    from app.gateway.adapters import tempo_wallet as tw
+
+    new_key = new_key or tw.new_key
+    fund = fund or (lambda address: tw.faucet(address, transport=transport))
+    backend = env_file_values(env_path)
+    contractor = env_file_values(contractor_env)
+    addresses: dict[str, str] = {}
+    backend_updates: dict[str, str] = {}
+    contractor_updates: dict[str, str] = {}
+    for who, values, var, updates in (("firm", backend, "FIRM_WALLET_KEY", backend_updates),
+                                      ("pixelagent", contractor, "PIXELAGENT_KEY",
+                                       contractor_updates)):
+        key = values.get(var, "")
+        if key:
+            addresses[who] = _address_of(key)
+            continue
+        key, address = new_key()
+        fund(address)
+        updates[var] = key
+        addresses[who] = address
+    if not contractor.get("MPP_SECRET_KEY"):
+        contractor_updates["MPP_SECRET_KEY"] = secrets.token_hex(32)
+    if not backend.get("MPP_SECRET_KEY"):  # the gateway's own, for the sell side's 402s
+        backend_updates["MPP_SECRET_KEY"] = secrets.token_hex(32)
+    token = contractor.get("MARKET_TOKEN") or secrets.token_hex(16)
+    if not contractor.get("MARKET_TOKEN"):
+        contractor_updates["MARKET_TOKEN"] = token
+    if "pixelagent|" not in backend.get("MARKET_CONTRACTORS", "") or "PIXELAGENT_KEY" in \
+            contractor_updates:
+        base = contractor.get("PIXELAGENT_PUBLIC_URL") or PIXELAGENT_BASE
+        backend_updates["MARKET_CONTRACTORS"] = f"pixelagent|{token}|{addresses['pixelagent']}|{base}"
+    if contractor_updates:
+        contractor_env.parent.mkdir(parents=True, exist_ok=True)
+        set_env_values(contractor_env, contractor_updates)
+    if backend_updates:
+        set_env_values(env_path, backend_updates)
+    for who, address in addresses.items():
+        try:
+            balance = f"{tw.balance_of(address, transport=transport):,.2f} pathUSD"
+        except Exception as err:  # noqa: BLE001 - the RPC down: still print the address
+            balance = f"balance unknown ({type(err).__name__})"
+        out(f"{who}: {address}  {balance}")
+    written = sorted(backend_updates) + sorted(contractor_updates)
+    out("written: " + (", ".join(written) if written else "nothing (all keys already set)"))
+    return addresses
+
+
+def cmd_market_wallets(args: argparse.Namespace) -> int:
+    market_wallets(Path(args.env), Path(args.contractor_env))
+    return 0
+
+
+def cmd_market_balance(args: argparse.Namespace) -> int:
+    """The firm wallet and every MARKET_CONTRACTORS wallet: addresses and pathUSD only."""
+    from app.gateway.adapters import tempo_wallet as tw
+    from app.gateway.settings import parse_contractors
+
+    env = env_file_values(Path(args.env))
+    rows = []
+    if env.get("FIRM_WALLET_KEY"):
+        rows.append(("firm", _address_of(env["FIRM_WALLET_KEY"])))
+    rows += [(c.name, c.wallet) for c in parse_contractors(env.get("MARKET_CONTRACTORS", ""))]
+    for who, address in rows:
+        print(f"{who}: {address}  {tw.balance_of(address):,.2f} pathUSD")
+    return 0 if rows else 1
+
+
+def cmd_market_faucet(args: argparse.Namespace) -> int:
+    """Testnet only: fund one address from the Tempo Moderato faucet."""
+    import re
+
+    from app.gateway.adapters import tempo_wallet as tw
+
+    if not re.fullmatch(r"0x[0-9a-fA-F]{40}", args.address):
+        print("needs a 0x address", file=sys.stderr)
+        return 1
+    tw.faucet(args.address)
+    print(f"{args.address}: {tw.balance_of(args.address):,.2f} pathUSD")
+    return 0
+
+
+MARKET_HEADLINE = "Delaware franchise tax: $85,165 → $450"  # the post guard's fixed line (G6)
+MARKET_TYPES = ("job.posted,job.claimed,job.submitted,job.verified,job.failed,payment.sent,"
+                "job.delivered,approval.requested")
+
+
+def _mcp_call(http: httpx.Client, token: str, tool: str, arguments: dict) -> dict:
+    r = http.post("/mcp/mkt", headers={"Authorization": f"Bearer {token}"},
+                  json={"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": {"name": tool, "arguments": arguments}})
+    r.raise_for_status()
+    body = r.json()
+    if "error" in body:
+        raise SystemExit(f"{tool}: {body['error'].get('message')}")
+    result = body["result"]["structuredContent"]  # an agent seat: {ok, status, data, error}
+    if result.get("status") == "done" and isinstance(result.get("data"), dict):
+        return result["data"]
+    error = result.get("error") or {}
+    return {"status": result.get("status"), "code": error.get("code"),
+            "message": error.get("message")}
+
+
+def market_e2e(base: str, tool_token: str, admin_token: str, *, approve: bool = False,
+               timeout: float = 60.0, out=print, transport: httpx.BaseTransport | None = None,
+               clock=time.monotonic, http: httpx.Client | None = None) -> int:
+    """D38 §5 41e: one real job through the RUNNING gateway and PixelAgent. Marketing's own
+    seat hires (MCP, its tool token), get_job is polled until delivered, then the timeline,
+    the tx and the money panel are printed. Exit 0 only when it ends delivered with tx_ok
+    (or a `local:` tx with ADAPTER_WALLET=local). `approve`: the CEO approves the first
+    contractor_pay payment if one is waiting (otherwise approve it in the console)."""
+    import uuid
+
+    with (http or httpx.Client(base_url=base.rstrip("/"), timeout=40,
+                               transport=transport)) as http:
+        hired = _mcp_call(http, tool_token, "hire_contractor", {
+            "template": "share_card", "headline": MARKET_HEADLINE,
+            "key": f"e2e:{uuid.uuid4().hex[:10]}"})
+        if "job_id" not in hired:
+            out(f"hire refused: {hired.get('code')}: {hired.get('message')}")
+            return 1
+        job_id = hired["job_id"]
+        out(f"hired {job_id} at {hired['price_usd']} (open)")
+        deadline, view, approved = clock() + timeout, {}, False
+        while clock() < deadline:
+            view = _mcp_call(http, tool_token, "get_job", {"job_id": job_id})
+            out(f"  {job_id}: {view.get('status')}"
+                + (f" (approval {view['approval_id']} waits on the CEO)"
+                   if view.get("approval_id") else ""))
+            if view.get("approval_id") and approve and not approved:
+                http.post("/api/approve", headers={"Authorization": f"Bearer {admin_token}"},
+                          json={"approval_id": view["approval_id"], "decision": "allow",
+                                "note": "market-e2e"}).raise_for_status()
+                approved = True
+                out(f"  approved {view['approval_id']} as the CEO")
+            if view.get("status") in ("delivered", "failed", "expired"):
+                break
+        auth = {"Authorization": f"Bearer {admin_token}"}
+        events = http.get("/api/events", headers=auth,
+                          params={"types": MARKET_TYPES, "limit": 2000}).json().get("data", [])
+        out("timeline:")
+        for e in events:
+            if e["payload"].get("job_id") == job_id or (
+                    e["type"] == "approval.requested"
+                    and e["payload"].get("action_type") == "contractor_pay"):
+                out(f"  {e['ts']}  {e['type']:<18} {e['status']:<6} "
+                    + " ".join(f"{k}={v}" for k, v in e["payload"].items()
+                               if k in ("contractor", "reason", "tx_hash", "approval_id")))
+        money = http.get("/api/state", headers=auth).json().get("money", {})
+        out(f"money: contractor_paid_usd={money.get('contractor_paid_usd')} "
+            f"spent_usd={money.get('spent_usd')}")
+    tx = str(view.get("tx_hash") or "")
+    if view.get("status") != "delivered" or not tx:
+        out(f"FAILED: {job_id} ended {view.get('status')}")
+        return 1
+    if tx.startswith("local:"):
+        out(f"delivered: {view.get('image_url')} (ledger tokens, tx {tx})")
+        return 0
+    from app.gateway.adapters import tempo_wallet as tw
+
+    receipt = tw.rpc("eth_getTransactionReceipt", [tx])
+    ok = bool(receipt) and receipt.get("status") == "0x1"
+    out(f"delivered: {view.get('image_url')}\ntx {tx} ok={ok}\n{view.get('explorer_url')}")
+    return 0 if ok else 1
+
+
+SELL_DEMO_FACTS = {"authorized_shares": 10_000_000, "issued_shares": 8_000_000,
+                   "gross_assets_cents": 50_000_000}
+
+
+def sell_demo(base: str, *, out=print, max_usd: str = "0.50") -> int:
+    """D38 §9.4: a THIRD fresh "buyer agent" wallet, funded from the testnet faucet, pays
+    U-Tax's /agent/franchise-check 402 and prints the answer and the explorer link."""
+    import asyncio
+
+    from app.gateway.adapters import tempo_wallet as tw
+
+    key, address = tw.new_key()
+    tw.faucet(address)
+    for _ in range(20):
+        if tw.balance_of(address) > 0:
+            break
+        time.sleep(1)
+    out(f"buyer agent: {address}  {tw.balance_of(address):,.2f} pathUSD")
+    url = base.rstrip("/") + "/agent/franchise-check"
+
+    async def buy() -> httpx.Response:
+        from mpp.client import Mpp
+        from mpp.methods.tempo import TempoAccount
+        from mpp.methods.tempo import client as tempo
+
+        account = TempoAccount.from_key(key)
+        method = tempo.charge(account=account, chain_id=tw.TESTNET_CHAIN_ID,
+                              currencies=[tw.PATH_USD], max_amount=max_usd,
+                              max_amount_decimals=tw.DECIMALS,
+                              allowed_chain_ids=[tw.TESTNET_CHAIN_ID])
+        async with Mpp(methods=[method]) as mpp:
+            return await mpp.fetch(url, method="POST", json=SELL_DEMO_FACTS)
+
+    r = asyncio.run(buy())
+    if r.status_code != 200:
+        out(f"FAILED: {r.status_code} {r.text[:200]}")
+        return 1
+    body = r.json()
+    out(f"answer: total ${body['total_cents'] / 100:,.2f} (authorized "
+        f"${body['authorized_method_cents'] / 100:,.2f}, assumed par "
+        f"${body['assumed_par_method_cents'] / 100:,.2f}), due {body['due_date']}")
+    out(f"note: {body['note']}")
+    out(f"paid: {tw.EXPLORER}{body['receipt_tx']}")
+    return 0
+
+
+def cmd_sell_demo(args: argparse.Namespace) -> int:
+    return sell_demo(args.base)
+
+
+def cmd_market_e2e(args: argparse.Namespace) -> int:
+    env = env_file_values(Path(args.env))
+    token = os.environ.get("UTAX_TOOL_TOKEN_MKT") or env.get("UTAX_TOOL_TOKEN_MKT", "")
+    admin = os.environ.get("ADMIN_TOKEN") or env.get("ADMIN_TOKEN", "")
+    if not token or not admin:
+        print("needs UTAX_TOOL_TOKEN_MKT and ADMIN_TOKEN (backend/.env)", file=sys.stderr)
+        return 1
+    return market_e2e(args.base, token, admin, approve=args.approve, timeout=args.timeout)
+
+
 def cmd_stripe_webhook(args: argparse.Namespace) -> int:
     outcome = stripe_webhook(args.url, Path(args.env))
     note = {"created": "secret written; restart the gateway",
@@ -340,6 +587,29 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
                    help="the .env that gets AGENTMAIL_WEBHOOK_SECRET (default backend/.env)")
     p.set_defaults(func=cmd_agentmail_webhook)
+    p = sub.add_parser("market-wallets",
+                       help="D38: the firm's and PixelAgent's testnet wallets, funded")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    p.add_argument("--contractor-env", default=str(PIXELAGENT_ENV))
+    p.set_defaults(func=cmd_market_wallets)
+    p = sub.add_parser("market-balance", help="D38: pathUSD of the firm and contractor wallets")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    p.set_defaults(func=cmd_market_balance)
+    p = sub.add_parser("market-e2e", help="D38: one job through the running gateway and "
+                                          "PixelAgent; exit 0 only when delivered and paid")
+    p.add_argument("--base", default=os.environ.get("UTAX_BASE", "http://localhost:8000"))
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    p.add_argument("--approve", action="store_true",
+                   help="approve the first contractor_pay payment as the CEO")
+    p.add_argument("--timeout", type=float, default=60.0)
+    p.set_defaults(func=cmd_market_e2e)
+    p = sub.add_parser("sell-demo", help="D38: a fresh buyer agent pays U-Tax's "
+                                         "/agent/franchise-check (testnet)")
+    p.add_argument("--base", default=os.environ.get("UTAX_BASE", "http://localhost:8000"))
+    p.set_defaults(func=cmd_sell_demo)
+    p = sub.add_parser("market-faucet", help="D38: fund an address on the Tempo testnet")
+    p.add_argument("address")
+    p.set_defaults(func=cmd_market_faucet)
     p = sub.add_parser("stripe-webhook",
                        help="point the Stripe webhook at https://<public-host>/hooks/stripe")
     p.add_argument("url", help="the public https URL (the tunnel host)")

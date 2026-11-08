@@ -311,6 +311,36 @@ class NoVoice:
         raise NotConfigured("voice_unavailable: no OPENAI_API_KEY")
 
 
+class LocalWallet:
+    """D38: the wallet stand-in (ADAPTER_WALLET=local): a "ledger token" payment, recorded
+    with a fake tx `local:<sha>`, no network. Still enforces the payer's own rules: it
+    never pays more than max_usd (the contractor's ask is read from its invoice status)."""
+
+    provider = "local"
+    token = "ledger token"
+    address = "0x000000000000000000000000000000000000dEaD"
+
+    def __repr__(self) -> str:
+        return "LocalWallet()"
+
+    def balance_usd(self, address: str | None = None):
+        from decimal import Decimal
+
+        return Decimal("1000")
+
+    def tx_ok(self, tx_hash: str) -> bool | None:
+        return True if str(tx_hash).startswith("local:") else None
+
+    def explorer_url(self, tx_hash: str) -> str:
+        return ""
+
+    def pay_invoice(self, url: str, *, max_usd: str, recipient: str):
+        from app.gateway.ports import PaidInvoice
+
+        tx = "local:" + hashlib.sha256(f"{url}|{recipient}|{max_usd}".encode()).hexdigest()[:24]
+        return PaidInvoice(tx_hash=tx, amount_usd=str(max_usd), explorer_url="", paid=False)
+
+
 class NoSTT:
     """Task 40a: no ADAPTER_STT (or no key): /api/stt answers 503 and the pages keep the
     browser's own recognizer."""

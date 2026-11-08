@@ -47,6 +47,9 @@ FACTS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_
 _CASE = {"case_id": {"type": "string", "description": "e.g. case_7"}}
 
 
+MARKET_TOOLS = ("hire_contractor", "get_job")  # D38: listed only with the market on
+
+
 def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "object", "properties": props}
     if required:
@@ -148,6 +151,22 @@ TOOLS: dict[str, dict[str, Any]] = {
                 "inputSchema": _obj({"kind": {"type": "string", "enum": ["client", "hiring"]},
                                      "headline": {"type": "string", "maxLength": 80}},
                                     ["kind", "headline"])},
+    # v1.19 §9.2 (D38): listed only with MARKET_ENABLED=1
+    "hire_contractor": {"description": "Hire an outside contractor agent to make a share card "
+                                       "(template share_card) for this headline; the gateway "
+                                       "checks the work and pays it in test tokens. The price "
+                                       "is the gateway's. Then get_job, then post_social.",
+                        "inputSchema": _obj({"template": {"type": "string",
+                                                          "enum": ["share_card"]},
+                                             "headline": {"type": "string", "maxLength": 80},
+                                             "key": {"type": "string", "maxLength": 120}},
+                                            ["template", "headline", "key"])},
+    "get_job": {"description": "A hired job's status (waits up to ~20 s for a change): open, "
+                               "claimed, submitted, verified, paid, delivered (image_url to "
+                               "post), failed or expired; approval_id while the payment waits "
+                               "on the CEO.",
+                "inputSchema": _obj({"job_id": {"type": "string", "maxLength": 40}},
+                                    ["job_id"])},
     "source_candidates": {"description": "Public leads for the reviewer gig (Monid search): "
                                          "headline and public URL only, never an address.",
                           "inputSchema": _obj({"count": {"type": "integer", "minimum": 1,
@@ -342,7 +361,8 @@ async def _handle(gw: Gateway, actor: str, message: Any, request: Request) -> di
 
             return {"jsonrpc": "2.0", "id": id_, "result": {"tools": seat_tools()}}
         tools = [{"name": name, **spec} for name, spec in TOOLS.items()
-                 if actor in TOOL_ACTORS[name]]
+                 if actor in TOOL_ACTORS[name]
+                 and (name not in MARKET_TOOLS or gw.settings.market_enabled)]
         return {"jsonrpc": "2.0", "id": id_, "result": {"tools": tools}}
     if method == "tools/call":
         name = params.get("name")

@@ -14,6 +14,10 @@ from app.gateway.events import Event
 from app.gateway.pricing import usd_string
 
 TRUST_TYPES = ("email", "social_post", "calendar_invite", "voice_screen")
+# v1.19 §9.5 (D38): the market's own trust type. Kept apart from the firm's four so that
+# MARKET_ENABLED=0 leaves the firm exactly as it was (/api/state, "stop everything").
+MARKET_TRUST_TYPES = ("contractor_pay",)
+ALL_TRUST_TYPES = TRUST_TYPES + MARKET_TRUST_TYPES
 CEO_MINT = "ceo/"  # model prefix of the CEO console's voice mints (api.py, settle_voice)
 OPEN_STATUSES = ("NEW", "INTAKE_PENDING", "READY", "COMPUTED", "QA_PASSED", "QA_FAILED",
                  "STALLED", "BLOCKED")
@@ -45,6 +49,7 @@ CAP_EVENTS = {
     "social_post": ("post.published",),
     "calendar_invite": ("call.booked",),
     "voice_screen": ("screen.call",),
+    "contractor_pay": ("payment.sent",),  # v1.19 §9.5
 }
 
 
@@ -182,6 +187,12 @@ class State:
                                                            "shortlisted": 0, "hired": 0,
                                                            "declined": 0, "sourced": 0, "contacted": 0})
     cap_log: dict[str, list[str]] = field(default_factory=lambda: {t: [] for t in TRUST_TYPES})
+    # D38: the market (job_id -> job), and its money
+    jobs: dict[str, dict] = field(default_factory=dict)
+    contractor_paid_usd: Decimal = Decimal(0)
+    contractor_paid_by_day: dict[str, Decimal] = field(default_factory=dict)
+    agent_sales_usd: Decimal = Decimal(0)
+    contractor_images_ok: set[str] = field(default_factory=set)  # §9.6: seen by the CEO
     crm_pending: dict[str, dict] = field(default_factory=dict)  # key -> {case_id, object, stage}
     last_login_brief: dict | None = None
     memo_log: dict[str, list[str]] = field(default_factory=dict)  # reply address -> ts
@@ -258,9 +269,12 @@ class State:
             # contract §4: spend is cost.booked only; tool.bought, law.searched, ... may carry
             # cost_usd for display, and counting them would double the booking
             provider = e.provider or "unknown"
-            self.spent_by_provider[provider] = (self.spent_by_provider.get(provider, Decimal(0))
-                                                + Decimal(e.cost_usd))
             model = str(e.payload.get("model", ""))
+            # v1.19 §9.1 (D38): a contractor payment is testnet tokens, not dollars: it stays
+            # in the log and in contractor_paid_usd, never in the spend total or the cap
+            if not model.startswith("contractor:"):
+                self.spent_by_provider[provider] = (
+                    self.spent_by_provider.get(provider, Decimal(0)) + Decimal(e.cost_usd))
             # Gateway.settle_voice; the CEO's own mints have their own cap (v1.8)
             if model.startswith("realtime:") and not model.startswith(f"realtime:{CEO_MINT}"):
                 day = e.ts[:10]
@@ -523,6 +537,69 @@ class State:
     def _on_ad_created(self, e: Event) -> None:
         self.ads_created += 1
 
+    # ---------------------------------------------------------------- D38 market
+
+    def _on_job_posted(self, e: Event) -> None:
+        p = e.payload
+        self.jobs[p["job_id"]] = {
+            "job_id": p["job_id"], "template": p["template"], "headline": p["headline"],
+            "price_usd": p["price_usd"], "status": "open", "posted_at": e.ts,
+            "expires_at": (e.private or {}).get("expires_at"), "submits": 0,
+            "order_id": (e.private or {}).get("order_id")}
+
+    def _on_job_claimed(self, e: Event) -> None:
+        job = self.jobs.get(e.payload["job_id"])
+        if job is not None:
+            job.update(status="claimed", contractor=e.payload["contractor"],
+                       **{k: (e.private or {}).get(k) for k in ("wallet", "invoice_url")})
+
+    def _on_job_submitted(self, e: Event) -> None:
+        job = self.jobs.get(e.payload["job_id"])
+        if job is not None:
+            job.update(status="submitted", sha256=e.payload["sha256"],
+                       submits=job.get("submits", 0) + 1)
+
+    def _on_job_verified(self, e: Event) -> None:
+        job = self.jobs.get(e.payload["job_id"])
+        if job is not None:
+            job.update(status="verified", checks=e.payload["checks"])
+
+    def _on_job_failed(self, e: Event) -> None:
+        job = self.jobs.get(e.payload["job_id"])
+        if job is None:
+            return
+        reason = e.payload["reason"]
+        job.update(checks=e.payload["checks"] or job.get("checks"), reason=reason)
+        if reason == "expired":
+            job["status"] = "expired"
+        elif reason == "checks_failed" and job.get("submits", 0) < 2:
+            job["status"] = "claimed"  # one resubmit is allowed
+        else:
+            job["status"] = "failed"
+
+    def _on_payment_sent(self, e: Event) -> None:
+        job = self.jobs.get(e.payload["job_id"])
+        if e.status != "ok":
+            if job is not None:
+                job["unsure"] = True
+            return
+        amount = Decimal(e.payload["amount_usd"])
+        self.contractor_paid_usd += amount
+        day = e.ts[:10]
+        self.contractor_paid_by_day[day] = self.contractor_paid_by_day.get(day, Decimal(0)) + amount
+        if job is not None:
+            job.update(status="paid", tx_hash=e.payload["tx_hash"],
+                       explorer_url=e.payload["explorer_url"], unsure=False)
+
+    def _on_job_delivered(self, e: Event) -> None:
+        self.ads_created += 1  # the card is the firm's next ad_<n>.png
+        job = self.jobs.get(e.payload["job_id"])
+        if job is not None:
+            job.update(status="delivered", image_url=e.payload["image_url"])
+
+    def _on_agent_sale(self, e: Event) -> None:
+        self.agent_sales_usd += Decimal(e.payload["amount_usd"])
+
     def _on_hr_sourced(self, e: Event) -> None:
         self.hiring["sourced"] = self.hiring.get("sourced", 0) + int(e.payload["count"])
 
@@ -698,6 +775,9 @@ class State:
     def _on_post_published(self, e: Event) -> None:
         if e.status == "ok":
             self.posts += 1
+            seen = (e.private or {}).get("contractor_seen")
+            if seen:  # §9.6: the CEO approved a post with this contractor's image
+                self.contractor_images_ok.add(seen)
 
     def _on_brief_generated(self, e: Event) -> None:
         self.briefs.append(e.id)

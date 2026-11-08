@@ -11,13 +11,48 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
 
 PORT_NAMES = ("mail", "llm", "crm", "device", "scrape", "toolbuy", "voice", "calendar",
-              "social", "pay")
+              "social", "pay", "wallet")
 DEFAULT_ADAPTERS = {name: "local" for name in PORT_NAMES} | {"voice": "none", "pay": "none"}
 # task 40a (D36): the voice ports split. ADAPTER_VOICE keeps working as the TTS default;
 # Realtime defaults to openai only when ADAPTER_VOICE=openai (the old one-switch setup).
 VOICE_PORTS = ("tts", "realtime", "stt")
 VOICE_CHOICES = {"tts": ("elevenlabs", "openai", "none"), "realtime": ("openai", "none"),
                  "stt": ("openai", "none")}
+
+
+@dataclass(frozen=True)
+class Contractor:
+    """D38: one MARKET_CONTRACTORS entry. The token is a secret: repr hides it."""
+
+    name: str
+    token: str = field(repr=False)
+    wallet: str
+    invoice_base: str
+
+
+def parse_contractors(raw: str) -> tuple[Contractor, ...]:
+    import re
+
+    out = []
+    for i, entry in enumerate(e.strip() for e in (raw or "").split(",") if e.strip()):
+        parts = [p.strip() for p in entry.split("|")]
+        name = parts[0] if parts else ""
+        where = f"MARKET_CONTRACTORS entry {i + 1} ({name or '?'})"
+        if len(parts) != 4:
+            raise ValueError(f"{where}: needs name|token|wallet|invoice_base")
+        name, token, wallet, base = parts
+        if not re.fullmatch(r"[a-z0-9_-]{2,40}", name):
+            raise ValueError(f"{where}: the name must be 2-40 of a-z 0-9 _ -")
+        if len(token) < 16:
+            raise ValueError(f"{where}: the token must be at least 16 characters")
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", wallet):
+            raise ValueError(f"{where}: the wallet must be a 0x address")
+        if not re.match(r"https?://[^\s/]+", base):
+            raise ValueError(f"{where}: invoice_base must be an http(s) URL")
+        if any(c.name == name for c in out):
+            raise ValueError(f"{where}: the name is listed twice")
+        out.append(Contractor(name, token, wallet, base.rstrip("/")))
+    return tuple(out)
 
 
 def _env(name: str, default: str = "") -> str:
@@ -88,6 +123,20 @@ class Settings:
     stripe_live: bool = False
     stripe_price_id: str = ""  # optional: reuse one Price instead of making one at boot
     filing_price_cents: int = 4900  # the filing-help offer (memo.md's copy says $49)
+    # D38 agent market (all off unless MARKET_ENABLED=1)
+    market_enabled: bool = False
+    tempo_chain_id: int = 42431
+    firm_wallet_key: str = ""  # 0x...; never logged or shown (devtools market-wallets)
+    market_price_usd: Decimal = Decimal("0.50")
+    market_max_job_usd: Decimal = Decimal("1.00")
+    market_max_day_usd: Decimal = Decimal("10.00")
+    market_job_ttl_minutes: int = 3  # §9.6: Marketing checks about 9 x 20 s
+    market_contractors_raw: str = ""  # name|token|wallet|invoice_base, comma-separated
+    mpp_secret_key: str = ""
+    sell_enabled: bool = False
+    sell_price_usd: Decimal = Decimal("0.50")
+    stripe_profile_id: str = ""
+    stripe_tempo_deposit_address: str = ""
     naive_api_key: str = ""
     naive_api_base: str = "https://api.vetta.sh"
     naive_confirm: bool = True  # v1.9 §6b-bis: answer Naïve's confirms (UTAX_NAIVE_CONFIRM=off)
@@ -95,6 +144,12 @@ class Settings:
     # names it, "utax-mkt". Whether the {id} path takes a name is UNVERIFIED: use the idn_
     # id from `naive identity list` if a post answers 404.
     naive_social_identity: str = ""
+
+    @property
+    def market_contractors(self) -> tuple["Contractor", ...]:
+        """D38: the contractor registry from MARKET_CONTRACTORS. A malformed line raises
+        ValueError naming the entry by position and name, never the token."""
+        return parse_contractors(self.market_contractors_raw)
 
     @property
     def events_file(self) -> Path:
@@ -177,6 +232,19 @@ class Settings:
             stripe_live=_env("STRIPE_LIVE") == "1",
             stripe_price_id=_env("STRIPE_PRICE_ID"),
             filing_price_cents=int(_env("FILING_PRICE_CENTS") or 4900),
+            market_enabled=_env("MARKET_ENABLED") == "1",
+            tempo_chain_id=int(_env("TEMPO_CHAIN_ID") or 42431),
+            firm_wallet_key=_env("FIRM_WALLET_KEY"),
+            market_price_usd=Decimal(_env("MARKET_PRICE_USD") or "0.50"),
+            market_max_job_usd=Decimal(_env("MARKET_MAX_JOB_USD") or "1.00"),
+            market_max_day_usd=Decimal(_env("MARKET_MAX_DAY_USD") or "10.00"),
+            market_job_ttl_minutes=int(_env("MARKET_JOB_TTL_MINUTES") or 3),
+            market_contractors_raw=_env("MARKET_CONTRACTORS"),
+            mpp_secret_key=_env("MPP_SECRET_KEY"),
+            sell_enabled=_env("SELL_ENABLED") == "1",
+            sell_price_usd=Decimal(_env("SELL_PRICE_USD") or "0.50"),
+            stripe_profile_id=_env("STRIPE_PROFILE_ID"),
+            stripe_tempo_deposit_address=_env("STRIPE_TEMPO_DEPOSIT_ADDRESS"),
             naive_api_key=_env("NAIVE_API_KEY"),
             naive_api_base=_env("NAIVE_API_BASE") or "https://api.vetta.sh",
             naive_confirm=_env("UTAX_NAIVE_CONFIRM").lower() != "off",

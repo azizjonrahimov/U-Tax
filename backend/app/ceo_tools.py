@@ -263,7 +263,7 @@ def read_activity(gw: Any, args: dict) -> list[dict]:
 
 def carry_pause(gw: Any, args: dict) -> str:
     target = args["action_type"]
-    types = TRUST_TYPES if target == "everything" else (target,)
+    types = gw.trust_types() if target == "everything" else (target,)  # D38: + contractor_pay
     for action_type in types:
         gw._set_trust({"action_type": action_type, "state": "PAUSED"})
     label = "everything" if target == "everything" else trust_label(target)
