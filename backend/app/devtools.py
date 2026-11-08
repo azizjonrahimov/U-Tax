@@ -276,6 +276,8 @@ def market_wallets(env_path: Path, contractor_env: Path, *, out=print,
         addresses[who] = address
     if not contractor.get("MPP_SECRET_KEY"):
         contractor_updates["MPP_SECRET_KEY"] = secrets.token_hex(32)
+    if not backend.get("MPP_SECRET_KEY"):  # the gateway's own, for the sell side's 402s
+        backend_updates["MPP_SECRET_KEY"] = secrets.token_hex(32)
     token = contractor.get("MARKET_TOKEN") or secrets.token_hex(16)
     if not contractor.get("MARKET_TOKEN"):
         contractor_updates["MARKET_TOKEN"] = token
@@ -417,6 +419,56 @@ def market_e2e(base: str, tool_token: str, admin_token: str, *, approve: bool = 
     return 0 if ok else 1
 
 
+SELL_DEMO_FACTS = {"authorized_shares": 10_000_000, "issued_shares": 8_000_000,
+                   "gross_assets_cents": 50_000_000}
+
+
+def sell_demo(base: str, *, out=print, max_usd: str = "0.50") -> int:
+    """D38 §9.4: a THIRD fresh "buyer agent" wallet, funded from the testnet faucet, pays
+    U-Tax's /agent/franchise-check 402 and prints the answer and the explorer link."""
+    import asyncio
+
+    from app.gateway.adapters import tempo_wallet as tw
+
+    key, address = tw.new_key()
+    tw.faucet(address)
+    for _ in range(20):
+        if tw.balance_of(address) > 0:
+            break
+        time.sleep(1)
+    out(f"buyer agent: {address}  {tw.balance_of(address):,.2f} pathUSD")
+    url = base.rstrip("/") + "/agent/franchise-check"
+
+    async def buy() -> httpx.Response:
+        from mpp.client import Mpp
+        from mpp.methods.tempo import TempoAccount
+        from mpp.methods.tempo import client as tempo
+
+        account = TempoAccount.from_key(key)
+        method = tempo.charge(account=account, chain_id=tw.TESTNET_CHAIN_ID,
+                              currencies=[tw.PATH_USD], max_amount=max_usd,
+                              max_amount_decimals=tw.DECIMALS,
+                              allowed_chain_ids=[tw.TESTNET_CHAIN_ID])
+        async with Mpp(methods=[method]) as mpp:
+            return await mpp.fetch(url, method="POST", json=SELL_DEMO_FACTS)
+
+    r = asyncio.run(buy())
+    if r.status_code != 200:
+        out(f"FAILED: {r.status_code} {r.text[:200]}")
+        return 1
+    body = r.json()
+    out(f"answer: total ${body['total_cents'] / 100:,.2f} (authorized "
+        f"${body['authorized_method_cents'] / 100:,.2f}, assumed par "
+        f"${body['assumed_par_method_cents'] / 100:,.2f}), due {body['due_date']}")
+    out(f"note: {body['note']}")
+    out(f"paid: {tw.EXPLORER}{body['receipt_tx']}")
+    return 0
+
+
+def cmd_sell_demo(args: argparse.Namespace) -> int:
+    return sell_demo(args.base)
+
+
 def cmd_market_e2e(args: argparse.Namespace) -> int:
     env = env_file_values(Path(args.env))
     token = os.environ.get("UTAX_TOOL_TOKEN_MKT") or env.get("UTAX_TOOL_TOKEN_MKT", "")
@@ -551,6 +603,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="approve the first contractor_pay payment as the CEO")
     p.add_argument("--timeout", type=float, default=60.0)
     p.set_defaults(func=cmd_market_e2e)
+    p = sub.add_parser("sell-demo", help="D38: a fresh buyer agent pays U-Tax's "
+                                         "/agent/franchise-check (testnet)")
+    p.add_argument("--base", default=os.environ.get("UTAX_BASE", "http://localhost:8000"))
+    p.set_defaults(func=cmd_sell_demo)
     p = sub.add_parser("market-faucet", help="D38: fund an address on the Tempo testnet")
     p.add_argument("address")
     p.set_defaults(func=cmd_market_faucet)

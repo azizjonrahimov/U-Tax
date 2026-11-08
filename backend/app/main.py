@@ -205,6 +205,9 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
     from app.market_api import build_market_router  # D38: /market/* (off: 404 market_off)
 
     app.include_router(build_market_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]
+    from app.sell_api import build_sell_router  # D38 §9.4: /agent/* (off: 404 sell_off)
+
+    app.include_router(build_sell_router(lambda: state["gw"]))  # type: ignore[arg-type,return-value]
     app.state.utax = state
     return app
 

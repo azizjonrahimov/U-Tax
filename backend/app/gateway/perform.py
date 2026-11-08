@@ -3609,6 +3609,21 @@ class Gateway:
         except market.MarketRefused as err:
             raise Refused(err.code, err.message, {"http": err.status}) from err
 
+    def record_agent_sale(self, amount_usd: str, tx_hash: str, payer_masked: str) -> None:
+        """D38 §9.4: an agent paid for a franchise check (the MPP receipt is already
+        verified). agent.sale, once per transaction; revenue in test tokens, never dollars."""
+        from app.gateway.adapters.tempo_wallet import EXPLORER, TOKEN
+
+        with self._lock:
+            if tx_hash and self._done_from(f"sale:{tx_hash}") is not None:
+                return
+            self._emit([NewEvent(type="agent.sale", actor="system", provider="tempo",
+                                 payload={"amount_usd": amount_usd, "token": TOKEN,
+                                          "tx_hash": tx_hash,
+                                          "explorer_url": EXPLORER + tx_hash if tx_hash else "",
+                                          "payer_masked": payer_masked},
+                                 idempotency_key=f"sale:{tx_hash}" if tx_hash else None)])
+
     def advance_market_jobs(self) -> list[str]:
         """D38: the pay tick (app/main.py's tick, and right after a verified submit)."""
         from app.gateway import market
