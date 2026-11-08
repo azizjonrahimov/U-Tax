@@ -7,7 +7,10 @@ checks that each quote appears verbatim in the client's messages.
 ## Your tools
 - `utax.get_case {case_id}`: the client's messages as written (real names; only contact details and
   SSNs/EINs redacted, see firm rule 6), facts so far, status, `offered_slots`.
-- `utax.extract_facts {case_id, quotes, incorporated_delaware, foreign_owner_25, services}`:
+- `utax.extract_facts {case_id, quotes, incorporated_delaware, foreign_owner_25, services,
+  entity_type, state, first_year_in_state, retail_wholesale}`: the last four are D42 args for the
+  income tax (see the facts table). Every fact you pass, as an arg or a quote, also needs its
+  verbatim span in `quotes`.
   `services` (D42) is what the email asks for: `de_franchise` (the Delaware franchise tax),
   `income_tax` (the federal Form 1120 and the state tax where the company is based), or both. A
   Delaware C-corp asking "what do we owe" gets both.
@@ -32,11 +35,12 @@ checks that each quote appears verbatim in the client's messages.
 | `foreign_owner_25` | boolean you pass: does any foreign person or entity own 25% or more? |
 | `gross_receipts` | the span naming this year's gross receipts (revenue). Needed for `income_tax`; otherwise optional, for the R&D credit flag |
 | `years_with_receipts` | **optional**: the span naming how many years they've had receipts. Only for the R&D credit flag |
-| `entity_type` | `income_tax`: the span naming what the company is ("we're a C-corp") |
-| `state` | `income_tax`: the span naming the state the company is based in ("based in California") |
+| `entity_type` | `income_tax`: a string arg you pass, exactly one of `c_corp`, `s_corp`, `llc`, `individual`, `other`, plus the span naming it in `quotes` ("we're a C-corp") |
+| `state` | `income_tax`: a 2-letter string arg you pass (`CA`), plus the span naming where the company is based in `quotes` ("based in California") |
 | `cost_of_goods` | `income_tax`: the span naming cost of goods sold |
 | `total_deductions` | `income_tax`: the span naming total deductions (expenses) |
-| `first_year_in_state`, `retail_wholesale`, `compensation` | **optional**, `income_tax` only: quote them only when the email states them |
+| `compensation` | **optional**, `income_tax` only: the span naming officer or employee compensation, when stated |
+| `first_year_in_state`, `retail_wholesale` | **optional**, `income_tax` only: booleans you pass, like the two above, plus the span that says so in `quotes`, only when the email states it |
 
 The optional facts never hold a case up. Without the R&D ones the memo carries a "you may qualify
 if…" line for the R&D credit instead of a claim. The gateway's missing-facts check asks only for

@@ -491,7 +491,8 @@ MUST_KEEP["chief-of-staff.md"].push("Every `FAST PATH case_N` wake runs this cha
 MUST_KEEP["_firm-rules.md"].push("We prepare drafts and estimates. We never file a return, never e-sign, never send a number the engine did not compute.");
 (MUST_KEEP["intake.md"] ??= []).push("Never ask for an EIN or an SSN", "Never add `income_tax` for an S-corp, an LLC or an individual",
   "block the card \"case_N: a person prepares this (<entity>)\"", "reply \"case_N: asked the client\" so the chain stops",
-  "from the engine's `FACT_LABELS`");
+  "from the engine's `FACT_LABELS`", "Every fact you pass, as an arg or a quote, also needs its verbatim span in `quotes`",
+  "exactly one of `c_corp`, `s_corp`, `llc`, `individual`, `other`");
 (MUST_KEEP["tax.md"] ??= []).push("Never state a rate yourself: quote the engine's steps", "add one line naming which taxes were computed and the total, exactly as returned");
 (MUST_KEEP["accounting.md"] ??= []).push("it also makes the draft Form 1120", "memo sent with the draft Form 1120 and the returns workbook");
 {
