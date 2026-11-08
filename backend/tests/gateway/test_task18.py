@@ -334,7 +334,8 @@ def test_the_command_path_answers_like_the_tool_path(make_harness):
         assert say("yes") == {"kind": "confirm", "proposal_id": proposal["proposal_id"],
                               "readback": proposal["readback"]}
         assert say("cancel")["kind"] == "cancel"
-        assert say("make it rain")["kind"] == "proposal"  # v1.12.3: an order now
+        # v1.13: the approve proposal is still open (cancel only points at it): one at a time
+        assert say("make it rain") == {"kind": "say", "say": "Say confirm or cancel."}
     assert h.events("ceo.proposed")[-1].payload["source"] == "command"
 
 
@@ -419,7 +420,7 @@ def test_approve_it_never_confirms_a_deny(make_harness):
         r = voice_confirm(client, deny["proposal_id"], "approve it")
         assert r.status_code == 400 and r.json()["error"]["code"] == "not_a_confirm"
         said = client.post("/api/ceo/command", headers=AUTH, json={"text": "approve it"}).json()
-    assert said["kind"] == "proposal" and said["readback"].startswith("Approve")  # a new one
+    assert said == {"kind": "say", "say": "Say confirm or cancel."}  # v1.13: one at a time
     assert h.gw.state.approvals[approval_id].decision is None
 
 

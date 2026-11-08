@@ -3689,6 +3689,14 @@ class Gateway:
 
         raw = _str(args, "text", max_len=600)
         parsed = ceo_tools.parse(raw)
+        live = [p for p in self._open_proposals() if not self._expired(p)]
+        kind = parsed[0] if parsed else None
+        confirms = kind in ("confirm", "cancel") or (
+            kind == "approve_it" and bool(live) and live[-1]["tool"] == "approve")
+        if live and not confirms:  # v1.13: one decision at a time, never a second order
+            return {"kind": "say", "say": ceo_tools.CONFIRM_OR_CANCEL}
+        if ceo_tools.is_greeting(raw):  # v1.13: hello / mic checks are never orders
+            return {"kind": "say", "say": ceo_tools.LISTENING}
         if parsed is None:
             # v1.12.3: anything else said as an order goes to the Chief of Staff, read back
             # whole and confirmed like any order ("advertise our firm", "hire 2 people")
@@ -3703,7 +3711,6 @@ class Gateway:
                         "Say confirm.")
             return self._propose("order", pinned, readback, "command")
         kind, value = parsed
-        live = [p for p in self._open_proposals() if not self._expired(p)]
         if kind == "approve_it":  # confirms an open approve, else proposes the latest
             if live and live[-1]["tool"] == "approve":
                 kind = "confirm"
