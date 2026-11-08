@@ -323,3 +323,37 @@
 .office .office-main { position: relative; }
 .office .tour-toast { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--lime); color: var(--on-lime); font: 600 14px var(--font-geist), sans-serif; border-radius: 999px; padding: 8px 18px; box-shadow: 0 12px 40px -12px rgba(190, 242, 67, .6); }
 @media (prefers-reduced-motion: reduce) { .office .tb-pulse, .office .tb-step.run.cur { animation: none; } }
+
+/* D41 F49 (runbook §D.2): the Intake desk's Workspace | Inbox switch and the mail app */
+.office .desk-tabs { display: inline-flex; border: 1px solid var(--line-2); border-radius: 10px; overflow: hidden; }
+.office .desk-tabs button { padding: 7px 14px; border: 0; background: transparent; color: var(--dim); font: 500 13px var(--font-geist), sans-serif; cursor: pointer; min-height: 36px; }
+.office .desk-tabs button.on { background: var(--lime); color: var(--on-lime); }
+.office .desk-tabs button:focus-visible { outline: 2px solid var(--lime); outline-offset: -2px; }
+.office .mailapp { flex: 1; min-height: 0; display: grid; grid-template-columns: 280px minmax(0, 1fr); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.office .mailapp.empty-mail { display: flex; align-items: center; justify-content: center; }
+.office .ml-list { list-style: none; margin: 0; padding: 6px; border-right: 1px solid var(--line); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.office .ml-row { width: 100%; display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 9px 10px; border: 0; border-radius: 10px; background: transparent; color: var(--dim); text-align: left; cursor: pointer; font: 13px var(--font-geist), sans-serif; }
+.office .ml-row:hover { background: rgba(255, 255, 255, .04); }
+.office .ml-row.on { background: rgba(190, 242, 67, .08); box-shadow: inset 2px 0 0 var(--lime); }
+.office .ml-row:focus-visible { outline: 2px solid var(--lime); outline-offset: -2px; }
+.office .ml-ini { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; font: 600 12px var(--font-geist-mono), monospace; color: var(--seat-intake, #4da3ff); background: rgba(77, 163, 255, .14); border: 1px solid rgba(77, 163, 255, .4); }
+.office .ml-mid { min-width: 0; display: flex; flex-direction: column; }
+.office .ml-mid b { color: var(--text); font-weight: 500; }
+.office .ml-mid span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; }
+.office .ml-time { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font: 11px var(--font-geist-mono), monospace; color: var(--faint); }
+.office .ml-new { width: 8px; height: 8px; border-radius: 50%; background: var(--lime); box-shadow: 0 0 8px var(--lime); }
+.office .ml-thread { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.office .ml-head { padding: 14px 18px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 14px; }
+.office .ml-head b { color: var(--text); font-weight: 600; }
+.office .ml-msgs { list-style: none; margin: 0; padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.office .ml-msg { max-width: 72%; padding: 10px 14px; border-radius: 14px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.office .ml-msg.in { align-self: flex-start; background: var(--panel2); border-bottom-left-radius: 4px; }
+.office .ml-msg.out { align-self: flex-end; background: rgba(190, 242, 67, .08); border-color: rgba(190, 242, 67, .3); border-bottom-right-radius: 4px; }
+.office .ml-msg p { margin: 0; }
+.office .ml-label { font-size: 11px; color: var(--lime); margin-bottom: 4px !important; }
+.office .ml-msg.in .ml-label { color: #3ddc84; }
+.office .ml-subj { font-weight: 600; color: var(--text); font-size: 14px; }
+.office .ml-body { color: var(--dim); font-size: 14px; white-space: pre-wrap; margin-top: 4px !important; }
+.office .ml-body.hidden-body { color: #ffb547; font-style: italic; }
+.office .ml-meta { font-size: 11px; color: var(--faint); margin-top: 6px !important; }
+@media (max-width: 900px) { .office .mailapp { grid-template-columns: minmax(0, 1fr); } .office .ml-list { border-right: 0; border-bottom: 1px solid var(--line); max-height: 200px; } }

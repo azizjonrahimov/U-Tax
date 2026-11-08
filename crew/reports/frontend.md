@@ -401,3 +401,14 @@ The fix each time was to derive from the event log and to check, after each awai
   - Mock: POST /api/dev/event (admin) to drive order.* events.
 - Verified live on the mock: queued, task_started, mkt step → Marketing desk with the banner; task_done → "✓ Task 1 done"; order.done → toast, then Overview.
 - Cut: the Window showing the newest in-task artifact (it shows the newest step as before).
+
+## D41 F49 the Intake Inbox
+- office/mail.ts: foldMail groups the 7 mail events into threads per case, newest first.
+  - It is idempotent per id and caps bodies at 600.
+  - It prefers payload.sent (signed in) and marks a possible_injection case flagged, whose bodies are never shown.
+  - mail.test.ts has 3 tests, including the case_1 log giving one thread with 7 messages in order.
+- feed.ts folds mail over history and the stream.
+- components/office/Mail.tsx: a 280px list (initials, masked name, subject, time, a lime dot when unanswered) and the thread as bubbles (inbound left; outbound lime right with "sent via AgentMail · time"); the header is "Team #N · case_N · N messages". EmptyState when there is no mail.
+- The Intake desk header has a Workspace | Inbox switch. follow.ts initialTab reads ?tab=inbox. The tour opens the Inbox while the running Intake task's newest work is an email.
+- Verified on the mock: 4 injected mails before page load, then /office?d=intake&tab=inbox shows the full thread (history folded on open).
+- Cut: the Overview Mail pane's "Last email" line (the allowed cut).
