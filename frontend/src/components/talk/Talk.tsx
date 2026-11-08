@@ -14,16 +14,19 @@ import type { UTaxEvent } from "@/theater/events";
 import { formatCents } from "@/theater/format";
 import { ECHO_TAIL_MS, Speaker, type TalkPhrase } from "@/lib/tts";
 import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition, type RecognitionCtor } from "@/lib/recognition";
-import { canRecord, serverRecognition, STT_LIMITED, STT_UNAVAILABLE } from "@/lib/stt";
+import { canRecord, serverRecognition, STT_LIMITED, STT_NOISY, STT_UNAVAILABLE, STT_UNREADABLE } from "@/lib/stt";
 
-/** D36: after the gateway's STT says it isn't available (503), the browser recognizer listens for this long. */
-const STT_RETRY_MS = 10 * 60_000;
+/** D36: after passing STT trouble (429, a noisy room), the browser recognizer listens this long. */
+const STT_RETRY_MS = 2 * 60_000;
 /** The public STT (purpose "talk", no sign-in): reliable transcripts, from the visitors' shared budget. */
 let talkEar: RecognitionCtor | null = null;
-let sttDownAt = 0;
+/** A 503 (no STT here) holds for the page; passing trouble until `until`. */
+const sttDown = { until: 0, permanent: false };
 const earCtorFor = (): RecognitionCtor | null => {
-  if (canRecord() && Date.now() - sttDownAt > STT_RETRY_MS) return (talkEar ??= serverRecognition("talk", () => null));
-  return recognitionCtor();
+  const browser = recognitionCtor();
+  // Passing trouble with no browser recognizer to fall back on: the STT is simply tried again.
+  if (canRecord() && !sttDown.permanent && (Date.now() >= sttDown.until || !browser)) return (talkEar ??= serverRecognition("talk", () => null));
+  return browser;
 };
 const canHear = () => canRecord() || recognitionCtor() !== null;
 import { stateUrl, streamUrl, seedFromState, type Endpoints } from "@/theater/live";
@@ -213,7 +216,13 @@ export function Talk() {
     const r = recRef.current;
     recRef.current = null;
     if (r) {
-      r.onend = r.onresult = r.onerror = null;
+      r.onend = r.onerror = null;
+      // D36: the gateway's STT closes the mic now but still delivers what was already said.
+      if ((r as { server?: boolean }).server) {
+        r.stop();
+        return;
+      }
+      r.onresult = null;
       try {
         r.abort();
       } catch {
@@ -244,18 +253,17 @@ export function Talk() {
       }
     };
     r.onerror = (e) => {
-      if (e.error === STT_LIMITED) {
-        // D36: the visitors' shared transcription budget is used up for now: type instead.
-        earWanted.current = false;
-        setEar("limited");
-        return;
-      }
-      if (e.error === STT_UNAVAILABLE) {
-        // No STT on the gateway: the browser's recognizer takes over (onend restarts it), or typing.
-        sttDownAt = Date.now();
+      if (e.error === STT_UNREADABLE) return; // that clip only: the next answer goes through
+      if (e.error === STT_LIMITED || e.error === STT_NOISY || e.error === STT_UNAVAILABLE) {
+        // D36: the gateway's STT said no. The browser's recognizer takes over (onend restarts it);
+        // without one, a 503 means type, and a busy minute means type for a minute.
+        const permanent = e.error === STT_UNAVAILABLE;
+        sttDown.until = Date.now() + STT_RETRY_MS;
+        sttDown.permanent ||= permanent;
         if (!recognitionCtor()) {
           earWanted.current = false;
-          setEar("unsupported");
+          setEar(permanent ? "unsupported" : "limited");
+          if (!permanent) setTimeout(() => setEar((cur) => (cur === "limited" ? "off" : cur)), 60_000);
         }
         return;
       }

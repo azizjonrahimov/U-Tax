@@ -58,7 +58,7 @@ import { parseTalkReply, replyLine, spokenPart, TALK_GIVE_UP_MS, TALK_LATE_MS, T
 import { MicIcon } from "@/components/MicIcon";
 import { Speaker } from "@/lib/tts";
 import { isBlockedError, isQuietError, MAX_EAR_FAILURES, recognitionCtor, type Recognition, type RecognitionCtor } from "@/lib/recognition";
-import { canRecord, serverRecognition, STT_LIMITED, STT_UNAVAILABLE } from "@/lib/stt";
+import { canRecord, serverRecognition, STT_LIMITED, STT_NOISY, STT_UNAVAILABLE, STT_UNREADABLE } from "@/lib/stt";
 import { API, authJson } from "./gateway";
 
 const MINT_MS = 8000;
@@ -87,8 +87,8 @@ type Flow = "listening" | "thinking" | "speaking" | "idle";
 type Line = { who: "you" | "firm" | "alert"; text: string; n: number; actions?: TalkAction[] };
 /** A failed STOP from a console that unmounted mid-STOP, for the next console in this tab to show. */
 const STOP_FAILED_KEY = "utax.ceo.stopFailed";
-/** D36: after the gateway's STT says no (503, 429, refused), the browser recognizer listens for this long. */
-const STT_RETRY_MS = 10 * 60_000;
+/** D36: after a passing STT trouble (429, the network, a noisy room) the browser recognizer listens this long. */
+const STT_RETRY_MS = 2 * 60_000;
 /** A talk turn waits this long at most per request (the gateway holds it up to 25 s). */
 const TALK_REQUEST_MS = 35_000;
 interface Card extends Proposal {
@@ -294,13 +294,20 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
 
   // ------------------------------------------------------------ browser speech
 
-  const stopListening = useCallback(() => {
+  const stopListening = useCallback((keep = true) => {
     const r = recRef.current;
     recRef.current = null;
     if (r) {
       r.onend = null;
-      r.onresult = null;
       r.onerror = null;
+      // D36: the gateway's STT closes the mic at once but still delivers what the CEO already said
+      // (a "stop everything" said just before an alert must not vanish). The browser's is dropped,
+      // and so is everything at STOP, End voice or unmount (`keep` false).
+      if (keep && (r as { server?: boolean }).server) {
+        r.stop();
+        return;
+      }
+      r.onresult = null;
       try {
         r.abort();
       } catch {
@@ -384,14 +391,18 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
    * D36: the ear. The gateway's STT (recorded utterances, reliable transcripts) while this browser
    * can record and the gateway hasn't said no lately; otherwise the browser's own recognizer.
    */
-  const sttDownAt = useRef(0);
+  const sttDown = useRef<{ until: number; permanent: boolean }>({ until: 0, permanent: false });
   const serverEar = useRef<RecognitionCtor | null>(null);
   const earCtor = useCallback((): RecognitionCtor | null => {
-    if (canRecord() && Date.now() - sttDownAt.current > STT_RETRY_MS) {
+    const browser = recognitionCtor();
+    // A 503 means no STT on this gateway: the browser listens for the rest of the session. Passing
+    // trouble: the browser listens for a while, or (none) the STT is simply tried again.
+    const serverOk = canRecord() && !sttDown.current.permanent && (Date.now() >= sttDown.current.until || !browser);
+    if (serverOk) {
       serverEar.current ??= serverRecognition("ceo", () => tokenRef.current);
       return serverEar.current;
     }
-    return recognitionCtor();
+    return browser;
   }, []);
   const canHear = () => canRecord() || recognitionCtor() !== null;
   const goDeaf = useCallback((why: string | null) => {
@@ -426,14 +437,26 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     };
     let failed = false;
     r.onerror = (e) => {
-      if (e.error === STT_UNAVAILABLE || e.error === STT_LIMITED || e.error === "not-allowed-stt") {
+      if (e.error === STT_UNREADABLE) {
+        // That clip only: the gateway couldn't read it. Same ear, say it again.
+        setNotice("Didn't catch that. Say it again (STOP or Esc always works).");
+        return;
+      }
+      if (e.error === STT_UNAVAILABLE || e.error === STT_LIMITED || e.error === STT_NOISY || e.error === "not-allowed-stt") {
         // The gateway's STT said no: the browser's recognizer takes over (a restart, not a failure).
-        sttDownAt.current = Date.now();
-        if (recognitionCtor()) {
-          if (!handsRef.current) setNotice("Transcription is busy right now, so the browser listens instead. Say it again.");
-        } else {
-          setNotice(e.error === STT_LIMITED ? "Transcription is busy right now: type below for a moment." : "Transcription isn't available here: type below.");
-        }
+        const permanent = e.error === STT_UNAVAILABLE;
+        sttDown.current = { until: Date.now() + STT_RETRY_MS, permanent };
+        const browser = recognitionCtor() !== null;
+        setNotice(
+          e.error === STT_NOISY
+            ? `It's too noisy to listen hands-free here${browser ? ", so the browser listens instead" : ""}. Tap Talk when you speak; STOP or Esc always works.`
+            : browser
+              ? "Transcription isn't available right now, so the browser listens instead. If you just said something, say it again."
+              : permanent
+                ? "Transcription isn't available here: type below. STOP or Esc always works."
+                : "Transcription is busy for a moment. Say it again, or type below.",
+        );
+        if (!browser && permanent) goDeaf(null);
         return;
       }
       if (isBlockedError(e.error)) {
@@ -1253,7 +1276,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
 
   const endVoice = useCallback(() => {
     hangUp();
-    stopListening();
+    stopListening(false);
     hush();
     micRef.current = false;
     handsRef.current = false;
@@ -1272,6 +1295,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     stoppedAt.current = Date.now();
     wantResponse.current = false;
     hush();
+    if ((recRef.current as { server?: boolean } | null)?.server) {
+      // D36: clips said before STOP but not transcribed yet never run after it.
+      stopListening(false);
+      if (handsRef.current && linkRef.current === "fallback") setTimeout(() => alive.current && listenRef.current(), 0);
+    }
     send([{ type: "response.cancel" }, { type: "output_audio_buffer.clear" }]);
     const p = vs.current.proposal;
     closeCard();
@@ -1318,7 +1346,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
       stopping.current = false;
       if (!signedOut && alive.current) refresh();
     }
-  }, [closeCard, hush, post, refresh, send, speak, tellModel, token, unauthorized]);
+  }, [closeCard, hush, post, refresh, send, speak, stopListening, tellModel, token, unauthorized]);
   // Esc is STOP EVERYTHING, anywhere on the console (not while an input method is composing).
   useEffect(() => {
     stopRef.current = stopEverything;
@@ -1439,7 +1467,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     return () => {
       alive.current = false;
       hangUp();
-      stopListening();
+      stopListening(false);
       speakerRef.current?.stop();
     };
   }, [hangUp, stopListening]);

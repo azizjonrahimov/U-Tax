@@ -6,33 +6,41 @@ import { LevelGate, recordingType, SttError, transcribe } from "./stt";
 const feed = (gate: LevelGate, rms: number, ms: number) => {
   const out: ("start" | "end")[] = [];
   for (let t = 0; t < ms; t += 50) {
-    const r = gate.step(rms);
+    const r = gate.step(rms, 50);
     if (r) out.push(r);
   }
   return out;
 };
 
 describe("D36 utterance detector", () => {
-  it("speech starts after 150 ms above the room's level and ends after a 900 ms pause", () => {
+  it("speech starts after 120 ms above the room's level and ends after a 700 ms pause", () => {
     const g = new LevelGate();
-    expect(feed(g, 0.005, 1000)).toEqual([]); // a quiet room
+    expect(feed(g, 0.003, 1000)).toEqual([]); // a quiet room
     expect(feed(g, 0.2, 100)).toEqual([]); // a click is not speech
-    expect(feed(g, 0.005, 200)).toEqual([]);
+    expect(feed(g, 0.003, 200)).toEqual([]);
     expect(feed(g, 0.2, 1500)).toEqual(["start"]);
-    expect(feed(g, 0.005, 850)).toEqual([]); // a short breath keeps the utterance
+    expect(feed(g, 0.003, 650)).toEqual([]); // a short breath keeps the utterance
     expect(feed(g, 0.2, 500)).toEqual([]);
-    expect(feed(g, 0.005, 1000)).toEqual(["end"]);
+    expect(feed(g, 0.003, 800)).toEqual(["end"]);
+    expect(g.voicedMs).toBeGreaterThanOrEqual(1900);
   });
 
-  it("an utterance never runs past the gateway's 30 s", () => {
+  it("a soft voice still counts (the bar follows a quiet room down)", () => {
     const g = new LevelGate();
-    expect(feed(g, 0.3, 40_000)).toEqual(["start", "end", "start"]);
+    expect(feed(g, 0.001, 2000)).toEqual([]);
+    expect(feed(g, 0.012, 300)).toEqual(["start"]);
   });
 
-  it("a noisy room raises the bar (its hum isn't speech)", () => {
+  it("a noisy room raises the bar (its hum isn't speech), and keeps adapting during speech", () => {
     const g = new LevelGate();
     expect(feed(g, 0.03, 5000)).toEqual([]); // steady fan noise
     expect(feed(g, 0.25, 400)).toEqual(["start"]);
+  });
+
+  it("time comes from the clock, not the number of readings (a throttled tab)", () => {
+    const g = new LevelGate();
+    expect(g.step(0.003, 1000)).toBeNull();
+    expect(g.step(0.2, 1000)).toBe("start"); // one slow reading covers the onset
   });
 });
 
@@ -49,6 +57,8 @@ describe("D36 transcribe", () => {
     expect(calls[0].init.body).toBe(audio);
     expect(calls[0].init.headers).toEqual({ "Content-Type": "audio/webm", Authorization: "Bearer s.live" });
     await transcribe(audio, 99, "talk", "s.live", f);
+    await transcribe(audio, 0.1, "talk", null, f);
+    expect(calls[2].url).toMatch(/seconds=1$/); // never declares 0 seconds
     expect(calls[1].url).toMatch(/purpose=talk&seconds=30$/);
     expect(calls[1].init.headers).toEqual({ "Content-Type": "audio/webm" }); // public: never the session
   });
