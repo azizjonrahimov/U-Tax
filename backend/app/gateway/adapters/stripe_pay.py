@@ -121,6 +121,11 @@ class StripePay:
         return PaymentLink(url=url, link_id=str(link_id or ""))
 
     MIRROR_KIND = "contractor_payment_mirror"  # /hooks/stripe never books it as revenue
+    # B53c: Stripe stores an idempotency key even on a validation 400, and a stored key only
+    # accepts the same parameters again. v1 keys hold the refused payment_method_types
+    # requests, so the new parameters need new keys. Bump this whenever the body changes.
+    # (The gateway's own event key, stripe_mirror:{tx}, still records each payment once.)
+    MIRROR_IDEM_VERSION = "v2"
 
     def mirror_contractor_payment(self, *, tx_hash: str, amount_usd: str, token: str,
                                   job_id: str, contractor: str, explorer_url: str,
@@ -150,7 +155,7 @@ class StripePay:
             "metadata[contractor]": contractor, "metadata[amount_token]": f"{amount_usd} {token}",
             "metadata[tempo_tx]": tx_hash, "metadata[explorer_url]": explorer_url,
             **({"metadata[order_id]": order_id} if order_id else {}),
-        }, f"utax-mirror-{tx_hash}")
+        }, f"utax-mirror-{self.MIRROR_IDEM_VERSION}-{tx_hash}")
         pi = body.get("id")
         if not isinstance(pi, str) or not pi.startswith("pi_") or body.get("status") != "succeeded":
             raise Rejected("stripe did not record the mirror")

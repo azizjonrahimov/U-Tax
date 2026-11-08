@@ -60,7 +60,7 @@ def test_the_adapter_posts_a_labelled_test_mode_payment_intent():
     assert pi == "pi_1"
     [call] = fake.calls
     form = call["form"]
-    assert call["path"] == "/v1/payment_intents" and call["key"] == f"utax-mirror-{TXS[0]}"
+    assert call["path"] == "/v1/payment_intents" and call["key"] == f"utax-mirror-v2-{TXS[0]}"  # B53c
     assert form["amount"] == "50" and form["currency"] == "usd" and form["confirm"] == "true"
     assert form["payment_method"] == "pm_card_visa"
     # B53b: live Stripe refuses payment_method_types on this account's API version
