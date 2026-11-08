@@ -108,6 +108,10 @@ describe("D38 market on the theater", () => {
     expect(n.money.contractor_paid_usd).toBe("0.5");
     expect(n.money.agent_sales_usd).toBe("0.5");
     expect(railFromEvents(happy().slice(0, 4)).money.contractor_paid_usd).toBeUndefined(); // market off: no row
+    // The payment's own cost.booked is tokens, never dollars spent (v1.19 §9.1, amended).
+    const booked = ev(10, "cost.booked", { provider: "tempo", model: "contractor:share_card", estimated: false }, { cost_usd: "0.50" });
+    const dollars = ev(11, "cost.booked", { provider: "openrouter", model: "x", estimated: false }, { cost_usd: "0.02" });
+    expect(railFromEvents([...events, booked, dollars]).money.spent_usd).toBe("0.02");
     expect(numbersFromState({ money: { spent_usd: "1.2" }, contractor_paid_usd: "1.5", agent_sales_usd: 0.5 })?.money).toMatchObject({ contractor_paid_usd: "1.5", agent_sales_usd: "0.5" });
     expect(numbersFromState({ money: {} })?.money.contractor_paid_usd).toBeUndefined();
     expect(screenOf(events).rail.log.at(-1)?.text).toBe("An agent bought a franchise-tax check · 0.50 pathUSD (testnet)");
