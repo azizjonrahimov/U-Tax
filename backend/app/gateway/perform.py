@@ -3600,6 +3600,18 @@ class Gateway:
             "attempt": attempt}, idempotency_key=f"naive.recovered:{session_id}:{attempt}")])
         return {"attempt": attempt}
 
+    def agent_done_since(self, actor: str, since: str) -> bool:
+        """Task 27: has this seat finished a tool call after `since` (an ISO time)? Then a
+        session of it that errored earlier is stale: its card moved on without it."""
+        with self._lock:
+            done = self.state.agent_done_at.get(actor)
+        if not done:
+            return False
+        try:
+            return parse_ts(done) > parse_ts(since)
+        except ValueError:
+            return False
+
     def naive_recovery(self, session_id: str) -> tuple[int, str | None]:
         """(nudges so far, the last one's timestamp): from the log, so a restart never
         grants a session more tries."""

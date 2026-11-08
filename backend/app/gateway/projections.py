@@ -170,6 +170,7 @@ class State:
     signup_cases: set[str] = field(default_factory=set)  # v1.12: welcome mail owed
     # task 27: a Naive session nudged after a platform error -> (attempts, last one's ts)
     naive_recoveries: dict[str, tuple[int, str]] = field(default_factory=dict)
+    agent_done_at: dict[str, str] = field(default_factory=dict)  # seat -> last done tool.called
     candidate_call_starts: set[str] = field(default_factory=set)  # v1.11: held like case calls
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
@@ -441,6 +442,10 @@ class State:
         case = self._case(e)
         if case is not None and e.status == "ok":
             case.call = dict(e.payload)
+
+    def _on_tool_called(self, e: Event) -> None:
+        if e.payload.get("status") == "done":  # task 27: the agent got work done since
+            self.agent_done_at[e.actor] = max(self.agent_done_at.get(e.actor, ""), e.ts)
 
     def _on_naive_recovered(self, e: Event) -> None:
         sid = e.payload["session_id"]

@@ -610,3 +610,19 @@ def test_a_restart_never_grants_more_nudges(h):
     h.restart()
     recover_run(h, fake, [0, 31, 121])
     assert len(fake.messages) == 2  # the log remembers both
+
+
+def test_an_errored_session_whose_card_moved_on_is_left_alone(h):
+    # live: "tax is stuck" was mailed after a NEW tax session had finished the card
+    newer = errored("tax", iso(h, 30))
+    newer.update(status="running", stop_reason=None)
+    fake = RecoveringNaive(h.gw, {"ses_old": errored("tax", iso(h, 600)), "ses_new": newer})
+    recover_run(h, fake, [0, 40, 200, 200])
+    assert fake.messages == [] and not h.events("ceo.notified")
+
+
+def test_an_agent_that_got_work_done_since_the_error_is_not_nudged(h):
+    fake = RecoveringNaive(h.gw, {"ses_t": errored("tax", iso(h, 600))})
+    h.gw.record_tool_call("tax", "compute_tax", "done", None)  # the tax seat worked since
+    recover_run(h, fake, [0, 40, 200, 200])
+    assert fake.messages == [] and not h.events("ceo.notified")
