@@ -58,6 +58,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "ceo.notified": ("channel", "subject", "summary", "reason"),
     "naive.confirm": ("session_id", "agent", "tool", "decision", "read_people"),  # v1.9 §6b-bis
     "tool.called": ("tool", "status"),  # v1.12 §5a: every MCP tool call, no args or data
+    "naive.recovered": ("session_id", "agent", "attempt"),  # task 27
     # v1.11.1 (D31): the live CEO orders
     "ad.created": ("kind", "headline", "image_url"),
     "hr.sourced": ("count", "source"),

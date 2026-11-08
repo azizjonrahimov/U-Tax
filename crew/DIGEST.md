@@ -1,14 +1,17 @@
-# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 08:05 local · SATURDAY LIVE SETUP
+# Digest (Naive YC Hackathon · U-Tax) — 2026-11-07 08:05 local · SATURDAY LIVE
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (now): the tunnel is DOWN (cloudflared not running). Restart it and paste the new URL: `& "C:\Program Files (x86)\cloudflared\cloudflared.exe" tunnel --no-autoupdate --url http://localhost:8000`. I re-run naive up with it.
-- B: decide D29 (Naïve data-leak confirms): A = the gateway resolves them with an allowlist (rec), B = click each in Naïve, C = ask the Naïve team
-- C: sponsor keys via `crew/scripts/set-key.ps1 <NAME>`: AGENTMAIL_API_KEY first, then OPENAI_API_KEY
-- D (later): change the Naïve password; delete the utax-up key after the event
+- Nothing right now. Next owner moment: approve the first X/LinkedIn post and the first calendar invite during the order rehearsal.
+- After the event: rotate every key pasted in chat (Naïve utax-up + utax-gateway, AgentMail, Mobilerun, Monid, Neon, ElevenLabs, Render, Vercel), and pause the Naïve schedule.
 
 ## New
+
+- all · 0m · LIVE E2E PASSED on case_1 (email → intake → re-ask → reply → tax $450 → QA → memo sent) on the Naïve agents (haiku)
+- frontend · 25m · site live at https://u-tax.vercel.app (owner deploy); D32 product shell started (landing, login/signup, department workspaces)
+- backend · 0m · MERGED task 27 (session-error recovery, 1301 tests); task 28 (signup + tool.called) building
+- agents · 5m · signup-welcome template building
 
 - backend · 0m · MERGED 17b (1106 tests); Monid hold lifted; lane free for the AgentMail swap
 - captain · 10m · LIVE: naive up done (7 agents; engine bug worked around in 2 phases); the CoS ran through the tunnel; D29 found and proposed
