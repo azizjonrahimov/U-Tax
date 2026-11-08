@@ -31,6 +31,8 @@ export const GATEWAY_TOOLS = [
   "hr_outreach",
   "follow_up",
   "list_candidates",
+  // v1.15 (design D35): the xlsx workpaper, docx memo and books entry, built and verified by the gateway
+  "prepare_documents",
 ] as const;
 
 export type GatewayTool = (typeof GATEWAY_TOOLS)[number];
@@ -89,8 +91,8 @@ export const CREW: Record<AgentKey, Seat> = {
     actor: "acct",
     tokenEnv: "UTAX_TOOL_TOKEN_ACCT",
     prompt: "accounting.md",
-    description: "Sends the QA-passed memo to the client. Only through the gateway template, only after QA.",
-    tools: ["get_case", "send_memo"],
+    description: "Prepares the case's documents (workpaper, memo, books entry; built by the gateway from the engine) and sends the QA-passed memo with them. Only after QA.",
+    tools: ["get_case", "prepare_documents", "send_memo"],
   },
   mkt: {
     name: "marketing",
