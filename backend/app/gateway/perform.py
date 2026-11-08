@@ -3693,7 +3693,10 @@ class Gateway:
         kind = parsed[0] if parsed else None
         confirms = kind in ("confirm", "cancel") or (
             kind == "approve_it" and bool(live) and live[-1]["tool"] == "approve")
-        if live and not confirms:  # v1.13: one decision at a time, never a second order
+        # v1.13.1: a stop ("stop posting", "pause emails", "okay, stop everything") always
+        # runs at once; the open card is never in its way (the pause then cancels it, §5b)
+        stops = kind == "tool" and ceo_tools.REGISTRY[parsed[1][0]].kind == "stop"
+        if live and not confirms and not stops:  # v1.13: one decision at a time
             return {"kind": "say", "say": ceo_tools.CONFIRM_OR_CANCEL}
         if ceo_tools.is_greeting(raw):  # v1.13: hello / mic checks are never orders
             return {"kind": "say", "say": ceo_tools.LISTENING}
