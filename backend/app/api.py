@@ -10,10 +10,13 @@ from __future__ import annotations
 import asyncio
 import hmac
 import json
-import re
 import logging
+import os
+import re
+import secrets
 import threading
 import time
+from datetime import datetime, timezone
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
@@ -22,8 +25,9 @@ from fastapi import APIRouter, Body, Header, Query, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.background import BackgroundTask
 
+from app.auth import Sessions, verify_password
 from app.errors import APIError
-from app.gateway.events import Event
+from app.gateway.events import Event, iso_ts
 from app.gateway.perform import Gateway, ToolResult
 from app.gateway.ports import NotConfigured, PortError
 
@@ -171,6 +175,9 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     free_limiter = RateLimiter(limit=FREE_LIMITS[False][0])
     audio_limiter = RateLimiter(limit=30, global_limit=120)
     ceo_mint_limiter = RateLimiter(limit=10, window=3600.0)  # v1.8: the CEO's 10 an hour
+    # v1.13: 10 sign-ins per IP and email per 15 min; 200 in all, so rotating keys stop too
+    login_limiter = RateLimiter(limit=10, window=900.0, global_limit=200)
+    auth_state: dict[str, Any] = {}  # v1.13: the Sessions object for this app
     # v1.12 §5a: the public sign-up has /talk's per-IP limits, in its own bucket
     signup_limiter = RateLimiter(limit=SEND_LIMITS[False][0], global_limit=SEND_LIMITS[False][1])
     # one IP can't use up the public daily case cap (shared with /talk) or relay mail
@@ -183,26 +190,46 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def gw() -> Gateway:
         return get_gateway()
 
+    def sessions() -> Sessions:
+        """v1.13: the CEO's signed sessions. UTAX_SESSION_SECRET (the lifespan generates and
+        persists one at first boot); a test app without one gets a random in-memory key."""
+        secret = gw().settings.session_secret or os.environ.get("UTAX_SESSION_SECRET", "")
+        if auth_state.get("secret") != (secret or auth_state.get("secret")):
+            auth_state.clear()
+        if "sessions" not in auth_state:
+            key = secret or secrets.token_urlsafe(48)
+            auth_state.update(secret=key, sessions=Sessions(key))
+        return auth_state["sessions"]
+
+    def is_admin(authorization: str | None, token: str | None = None) -> bool:
+        """The CEO: ADMIN_TOKEN as a bearer (scripts), or a signed-in session as a bearer or
+        as ?token= (EventSource can't send headers). v1.7.1 hiding: with no ADMIN_TOKEN and
+        no session, nobody is admin (the safe default for injection text)."""
+        settings = gw().settings
+        bearer = _bearer(authorization)
+        if settings.admin_token and _same(bearer, settings.admin_token):
+            return True
+        return sessions().valid(bearer) or sessions().valid(token)
+
     def require_theater(token: str | None, authorization: str | None) -> None:
         settings = gw().settings
         if not settings.theater_token:
             return
         if _same(token, settings.theater_token):
             return
-        if settings.admin_token and _same(_bearer(authorization), settings.admin_token):
+        if is_admin(authorization, token):
             return  # the CEO console may read what the theater reads
         raise APIError(401, "unauthorized", "theater token required")
 
-    def is_admin(authorization: str | None) -> bool:
-        """v1.7.1 hiding: only a real ADMIN_TOKEN bearer sees a flagged case's mail (with no
-        ADMIN_TOKEN set, nobody does: the safe default for injection text)."""
+    def auth_configured() -> bool:
+        """Admin routes are closed once an ADMIN_TOKEN or a CEO password exists (open only
+        in bare local dev with neither): a blank ADMIN_TOKEN never undoes the CEO login."""
         settings = gw().settings
-        return bool(settings.admin_token) and _same(_bearer(authorization), settings.admin_token)
+        return bool(settings.admin_token or settings.ceo_password_hash)
 
     def require_admin(authorization: str | None) -> None:
-        settings = gw().settings
-        if settings.admin_token and not _same(_bearer(authorization), settings.admin_token):
-            raise APIError(401, "unauthorized", "admin token required")
+        if auth_configured() and not is_admin(authorization):
+            raise APIError(401, "unauthorized", "admin token or a CEO session required")
 
     def _talk_limit(limiter: RateLimiter, limits: dict[bool, tuple[int, int | None]]) -> None:
         # PUBLIC_MODE=event: the finale crowd shares one venue IP, so the per-IP cap rises
@@ -218,7 +245,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
     def state(token: str | None = Query(None), authorization: str | None = Header(None)):
         require_theater(token, authorization)
         settings = gw().settings
-        admin = not settings.admin_token or _same(_bearer(authorization), settings.admin_token)
+        admin = not auth_configured() or is_admin(authorization, token)
         return gw().public_state(admin=admin)
 
     @router.get("/api/events")
@@ -228,7 +255,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         batch = list(gw().store.since(after_id, limit=limit + 1))
         has_more = len(batch) > limit
         batch = batch[:limit]
-        admin = is_admin(authorization)
+        admin = is_admin(authorization, token)
         return {"data": [gw().public_event(e, admin=admin) for e in batch],
                 "next_after_id": batch[-1].id if batch else after_id, "has_more": has_more}
 
@@ -240,7 +267,7 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         start = after_id
         if last_event_id and last_event_id.strip().isdigit():
             start = max(start, int(last_event_id.strip()))
-        admin = is_admin(authorization)
+        admin = is_admin(authorization, token)
         body = sse_events(gw(), start, is_disconnected=request.is_disconnected,
                           heartbeat=request.app.state.sse_heartbeat,
                           view=lambda e: gw().public_event(e, admin=admin))
@@ -248,6 +275,33 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     # ------------------------------------------------------------------ §5 control
+
+    # ------------------------------------------------------------------ v1.13 §5a-bis
+
+    @router.post("/api/auth/login")
+    def login(request: Request, body: dict = Body(...)):
+        """The CEO signs in: CEO_EMAIL (any case) and the password behind CEO_PASSWORD_HASH.
+        One answer for a wrong email or a wrong password; 10 tries per IP per 15 minutes."""
+        settings = gw().settings
+        email, password = body.get("email"), body.get("password")
+        # per IP and email: a crowd sharing the venue's IP can't lock the CEO out
+        login_limiter.check(f"{_client_ip(request)}|{str(email or '').strip().lower()[:320]}")
+        given = email.strip().lower() if isinstance(email, str) else ""
+        expected = settings.ceo_email.strip().lower()
+        email_ok = bool(expected) and hmac.compare_digest(given.encode(), expected.encode())
+        # always a full scrypt check, so the reply time never tells which field was wrong
+        password_ok = verify_password(password if isinstance(password, str) else "",
+                                      settings.ceo_password_hash)
+        if not (email_ok and password_ok):
+            raise APIError(401, "bad_login", "wrong email or password")
+        token, expires = sessions().issue()
+        return {"session": token, "expires_at": iso_ts(
+            datetime.fromtimestamp(expires, tz=timezone.utc))}
+
+    @router.post("/api/auth/logout")
+    def logout(authorization: str | None = Header(None)):
+        sessions().revoke(_bearer(authorization))
+        return {"ok": True}
 
     @router.post("/api/approve")
     def approve(body: dict = Body(...), authorization: str | None = Header(None)):

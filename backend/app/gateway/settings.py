@@ -35,6 +35,8 @@ class Settings:
     adapters: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_ADAPTERS))
     theater_token: str = ""
     admin_token: str = ""
+    ceo_password_hash: str = ""  # v1.13: scrypt$<salt_b64>$<hash_b64> (devtools set-ceo-password)
+    session_secret: str = ""  # v1.13: UTAX_SESSION_SECRET, generated at first boot if unset
     theater_origin: str = ""
     openai_api_key: str = ""
     elevenlabs_api_key: str = ""  # v1.10 §5c (ADAPTER_VOICE=elevenlabs)
@@ -115,6 +117,8 @@ class Settings:
             adapters=adapters,
             theater_token=_env("THEATER_TOKEN"),
             admin_token=_env("ADMIN_TOKEN"),
+            ceo_password_hash=_env("CEO_PASSWORD_HASH"),
+            session_secret=_env("UTAX_SESSION_SECRET"),
             theater_origin=_env("THEATER_ORIGIN"),
             openai_api_key=_env("OPENAI_API_KEY"),
             elevenlabs_api_key=_env("ELEVENLABS_API_KEY"),

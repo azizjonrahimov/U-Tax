@@ -591,6 +591,19 @@ _PURE_WORDS = frozenset(
 _QUESTION_START = re.compile(
     r"(?:what|what's|whats|why|how|who|whose|when|where|which|is|are|am|do|does|did)\b", re.I)
 FREE_ORDER_MIN, FREE_ORDER_MAX = 3, 300
+# v1.13: a greeting or a mic check is never an order (live: "hey can you hear me" was one)
+_GREETING_WORDS = frozenset("hey hi hello test testing okay".split())
+_MIC_CHECKS = ("can you hear me", "are you there", "is this working")
+LISTENING = "I'm listening. Tell me an order."
+CONFIRM_OR_CANCEL = "Say confirm or cancel."
+
+
+def is_greeting(text: str) -> bool:
+    words = _speech(text).split()
+    if words and all(w in _GREETING_WORDS for w in words):
+        return True
+    said = " ".join(words)
+    return any(check in said for check in _MIC_CHECKS)
 
 
 def free_order(text: str) -> str | None:

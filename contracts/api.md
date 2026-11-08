@@ -1,4 +1,4 @@
-# API contract (v1.12): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.15): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -247,6 +247,47 @@ For Replay mode and catch-up. Ordered by `id`.
   order_id?}`, written by the gateway for **every** MCP tool call, reads included. No args or data,
   so nothing private. It's what the department workspaces animate.
 
+## 5a-bis. CEO sign-in (v1.13, design D33)
+
+- `POST /api/auth/login` `{email, password}`. `email` must equal `CEO_EMAIL` (case-insensitive) and
+  `password` must match `CEO_PASSWORD_HASH` (scrypt, `scrypt$<salt_b64>$<hash_b64>`). It returns
+  `{session, expires_at}`: an HMAC-signed token (`UTAX_SESSION_SECRET`, generated at first boot
+  if unset) that lasts 12 h.
+  - Every admin route accepts `Authorization: Bearer <session>` just as it accepts
+    `ADMIN_TOKEN`. The admin token stays, for scripts only.
+  - Rate limit: 10 attempts per IP per 15 min. A failure answers `401 bad_login` (same body
+    for a wrong email or a wrong password).
+  - `POST /api/auth/logout` revokes the session (a denylist kept in memory until it expires).
+- `/api/ceo/command` (v1.13):
+  - While a proposal is open (unexpired, unconfirmed), any text that isn't a confirm or cancel
+    answers `{kind: "say", say: "Say confirm or cancel."}`, and no new order is created.
+    v1.13.1: stop-kind commands (`pause`: "stop posting", "pause emails", "stop everything", fillers
+    included) are exempt. They run at once, and the pause cancels the open card (§5b: a pause from any
+    path cancels open proposals), so nothing proposed before a STOP can run after it.
+  - Greetings and mic checks never become orders. That means utterances made only of
+    hey/hi/hello/test/testing/okay, or containing "can you hear me", "are you there" or
+    "is this working". They answer `{kind: "say", say: "I'm listening. Tell me an order."}`.
+
+## 5a-ter. CEO conversation (v1.14, design D34)
+
+- `POST /api/ceo/talk` `{text, conversation_id?}` (admin or session).
+  - It sends `text` into the CEO assistant's Naïve session for this sign-in: it creates one on the
+    first turn, then posts `POST /v1/sessions/{id}/messages`.
+  - It waits until the session idles, for at most 25 s, and returns `{conversation_id, say, actions:
+    [{tool, summary, undo_id?}]}`. On a timeout it answers `{say: "Still working on it…", pending: true}`, and
+    the page polls `GET /api/ceo/talk/{conversation_id}`.
+  - Stop phrases never wait on the LLM: the gateway's grammar catches them first and runs `pause` at
+    once (v1.13.1).
+- MCP seat `/mcp/ceo` (token `UTAX_TOOL_TOKEN_CEO`, the agent `ceo-assistant`). Its tools are the §5b
+  registry, but start tools **run directly**, with no proposal (owner's D34). Read tools mask as before.
+  Each action writes its normal events plus `touch.operating` with `channel: "voice"`.
+  - Undo: `pause` ↔ `set_trust RESUME`; `set_trust` ↔ the previous state; `order` (a CoS card) →
+    `cancel_order {order_id}` closes the order's open cards. `approve`, `deny` and `decide_candidate`
+    have no undo; the reply says so.
+- `POST /api/ceo/undo` `{undo_id}` (admin or session).
+- Events `ceo.said` `{conversation_id, text_len}` (the text is private) and `ceo.replied`
+  `{conversation_id, actions}`.
+
 ## 5b. CEO voice console (v1.8, design D28)
 
 All admin token. One registry of CEO tools (design table "CEO tool set") serves both paths below;
@@ -457,6 +498,15 @@ v1.11.1, event payloads (the frontend's proposal, adopted):
   - The theater groups steps by `order_id`, and falls back to matching by department when it's
     absent.
 
+**v1.15 (design D35, documents):**
+
+`prepare_documents` (acct, `{case_id, order_id?}`): its §6 table row lands in the same merge as the crew.ts change that seats it (see the backend task 34 brief). Behaviour: refused unless `QA_PASSED`; the gateway builds the workpaper .xlsx, the memo .docx and a books entry from the engine's result and the extracted facts only; it verifies each file, stores them under `UTAX_DATA_DIR/docs/<case_id>/`, and emits `doc.step`, `doc.created` and `doc.verified`; it's idempotent per case and memo version.
+
+`send_memo` (v1.15) attaches the case's verified workpaper and memo (AgentMail attachments), and is refused
+(`docs_missing`) when `prepare_documents` hasn't run for the current memo version. The theater gets
+`doc.*` payloads with no client names (masked labels only). The files are never served publicly;
+`GET /api/docs/<case_id>/<file_name>` is admin or session only (the CEO can open them in `/office`).
+
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
 `gross_assets`, `foreign_owner_25`. Optional (never required to finish a case, asked once
 at most): `gross_receipts` (cents) and `years_with_receipts` (int), used only for the R&D
@@ -641,6 +691,14 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.15 (2026-11-07, design D35): prepare_documents (xlsx workpaper, docx memo, books entry), doc.step/created/verified events, memo attachments, /api/docs.
+
+- v1.14 (2026-11-07, design D34): /api/ceo/talk conversation, MCP seat ceo (direct actions, no confirm), undo.
+
+- v1.13.1 (2026-11-07, frontend review): stop-kind commands bypass the open-proposal guard.
+
+- v1.13 (2026-11-07, design D33): CEO password login + sessions; command loop guard; greetings never orders.
 
 - v1.12.3 (2026-11-07, owner UX): unparsed CEO command text becomes an order proposal.
 
