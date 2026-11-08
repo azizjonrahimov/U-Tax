@@ -196,6 +196,28 @@ def cmd_rotate_host(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_set_ceo_password(args: argparse.Namespace) -> int:
+    """v1.13: the CEO's password from stdin (a hidden prompt on a terminal), scrypt-hashed
+    into the .env as CEO_PASSWORD_HASH. Never echoed or printed."""
+    import getpass
+
+    from app.auth import hash_password
+
+    if sys.stdin.isatty():
+        password = getpass.getpass("CEO password: ")
+        if getpass.getpass("again: ") != password:
+            print("the two didn't match; nothing written", file=sys.stderr)
+            return 1
+    else:
+        password = sys.stdin.readline().rstrip("\r\n")
+    if len(password) < 10:
+        print("use at least 10 characters; nothing written", file=sys.stderr)
+        return 1
+    set_env_values(Path(args.env), {"CEO_PASSWORD_HASH": hash_password(password)})
+    print("CEO_PASSWORD_HASH written; restart the gateway")
+    return 0
+
+
 def cmd_agentmail_webhook(args: argparse.Namespace) -> int:
     outcome = agentmail_webhook(args.url, Path(args.env))
     note = {"created": "secret written; restart the gateway",
@@ -230,6 +252,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
                    help="the .env that gets AGENTMAIL_WEBHOOK_SECRET (default backend/.env)")
     p.set_defaults(func=cmd_agentmail_webhook)
+    p = sub.add_parser("set-ceo-password",
+                       help="hash the CEO's password (read from stdin) into the .env")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
+                   help="the .env to update (default backend/.env)")
+    p.set_defaults(func=cmd_set_ceo_password)
     p = sub.add_parser("rotate-host",
                        help="a new tunnel host: UTAX_PUBLIC_URL and the AgentMail webhook")
     p.add_argument("url", help="the new public https URL (the tunnel host)")
