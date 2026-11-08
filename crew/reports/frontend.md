@@ -282,6 +282,15 @@ If either page can't hear you at all: check Chrome's site permission (the lock i
   - The theater's speech and the console's voice share one window in `/office`; the theater doesn't announce its audio to the console's ear.
   - Hiding the panel mid-turn drops that turn's on-screen result (the gateway still runs it).
 
+## Downloading the real documents (D35)
+
+- **Downloads:** signed in, the Accounting window's case documents offer "Workpaper (Excel)" and "Memo (Word)", and the memo email's attachment chips download the same files.
+  - GET `/api/docs/<case>/<file>` with the session as Bearer; the file is saved from a blob, never via a URL token.
+  - Buttons appear only for files the gateway serves: all three documents of that build verified, never for a flagged case. The books stay in the firm.
+- **Decision taken with the recommended option:** gate downloads on the gateway's served set (verified), not on "built".
+- **Known:** downloads live on the desk's current artifact, so once the desk moves on there is no per-case file list yet. A case list in the CEO panel would close that.
+- **Backend ask:** `documents.py` writes the client's verbatim quotes with openpyxl, so a quote starting with "=" becomes a live formula in the downloaded .xlsx. Write user-derived strings as literal text.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
