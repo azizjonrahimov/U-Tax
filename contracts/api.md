@@ -1,4 +1,4 @@
-# API contract (v1.20): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.21): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -947,7 +947,30 @@ explorer_url?, stripe?: {id, mode, dashboard_url}}` from `payment.sent`, `agent.
 in USD totals. A Stripe mirror is test mode only (an `sk_test_` key) and is never revenue (`/hooks/stripe` ignores
 `metadata.utax_kind=contractor_payment_mirror`).
 
+## 11. Tax returns, autopilot and mail health (v1.21, design D42)
+
+Source: `docs/designs/D42-RUNBOOK.md` §C. **Landing rule (as in §9/§10):** these rows are copied into §3/§4/§6 in the
+SAME merge as the code (backend-tax T1/T2, backend M1–M4, agents T4/M2).
+
+| type | actor | payload |
+|---|---|---|
+| `tax.return_computed` | tax | `{jurisdiction, tax, form, due, amount_usd, status: "ok"\|"no_tax_due"\|"human_review", steps[], source}` |
+| `tax.summary` | tax | `{total_usd, assumptions[]}` |
+| `form.step` | tax | `{doc, n, of, key, label, value, page, rect[4], image}` for admin/session readers; theater readers get `{doc, n, of, label}` |
+| `sheet.cell` | acct | `{book, n, of, sheet, cell, label, value, formula}` |
+
+- Any step the M3 autopilot runs carries `payload.via = "autopilot"` (the same handler as the MCP tool; `AUTOPILOT=0` off).
+- Facts gain `entity_type`, `state`, `cost_of_goods`, `total_deductions`, plus optional `first_year_in_state`,
+  `retail_wholesale` and `compensation`; `extract_facts` gains the optional `services[]` (`de_franchise`, `income_tax`).
+- `list_open_cases` rows gain `in_flight`. `FAST PATH case_N` is the wake for every email case (new, or a reply after an ask).
+- Every client mail carries `in_reply_to` (the thread), with the subject `Re: <first_subject>`.
+- `GET /api/admin/mail-health` → `{last_poll_at, last_inbound_at, last_outbound_at, provider, ok}`.
+- Tax output is always "DRAFT, estimate for review, not filed". The firm never files or e-signs; no real EIN or address
+  appears in any event; form page images are for admin/session readers only.
+
 ## Changelog
+
+- v1.21 (2026-11-08, D42): §11 tax returns (tax.return_computed, tax.summary, form.step, sheet.cell), autopilot via, the new facts + services, in_flight, FAST PATH for email, mail-health. Rows land with their code.
 
 - v1.20 (2026-11-08, D41): §10 multi-task orders (order.queued/task_started/task_done/done, task_no, utax.task_done, merged), /api/payments, payment.recorded (Stripe test mirror). Rows land with their code.
 

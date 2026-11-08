@@ -1,0 +1,48 @@
+<!doctype html><html><head><meta charset="utf-8"><title>U-Tax immersive</title>
+<link href="https://fonts.googleapis.com/css2?family=Doto:wght@700;800&family=Geist:wght@400;600&family=Geist+Mono:wght@400;500&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
+<script type="importmap">{"imports":{"three":"./node_modules/three/build/three.module.js","three/addons/":"./node_modules/three/examples/jsm/"}}</script>
+<style>
+:root{--bg:#050505;--lime:#BEF243;--text:#F2F3EE;--dim:#A1A39B;--line:rgba(255,255,255,.12)}
+*{box-sizing:border-box;margin:0}html,body{background:var(--bg);color:var(--text);font-family:Geist,system-ui,sans-serif}
+canvas{position:fixed;inset:0;width:100vw;height:100vh;display:block}
+.nav{position:fixed;top:22px;right:26px;z-index:5;display:flex;align-items:center;gap:14px;padding:10px 18px;border-radius:999px;background:rgba(10,10,12,.55);border:1px solid var(--line);backdrop-filter:blur(14px);font:500 12px/1 "Geist Mono",monospace;letter-spacing:.12em}
+.nav i{width:44px;height:1px;background:rgba(255,255,255,.35)}
+.brand{position:fixed;top:24px;left:28px;z-index:5;font:600 15px Geist;display:flex;gap:10px;align-items:center}
+.brand b{width:26px;height:26px;border-radius:8px;background:var(--lime);color:#0B0D06;display:grid;place-items:center;font-weight:800}
+.act{position:fixed;left:72px;bottom:96px;z-index:4;max-width:640px;transition:opacity .5s,transform .5s;opacity:0;transform:translateY(16px)}.act.on{opacity:1;transform:none}
+.dot{font:800 84px/0.92 Doto,"Geist Mono",monospace;letter-spacing:.01em;text-transform:uppercase}
+.cap{margin-top:18px;font:400 13px/1.6 "Geist Mono",monospace;color:var(--dim);max-width:440px;letter-spacing:.02em}
+.cap em{font:italic 20px "Instrument Serif",serif;color:var(--lime)}
+.cta{margin-top:22px;display:flex;gap:12px}.b{padding:13px 20px;border-radius:999px;font:600 14px Geist}.b1{background:var(--lime);color:#0B0D06}.b2{border:1px solid var(--line)}
+.ticker{position:fixed;right:26px;bottom:28px;z-index:4;font:500 11px "Geist Mono",monospace;color:var(--dim);display:flex;gap:8px;align-items:center;padding:8px 12px;border:1px solid var(--line);border-radius:999px;background:rgba(10,10,12,.55);backdrop-filter:blur(12px)}
+.ticker i{width:7px;height:7px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime)}
+.scroll{height:600vh}
+.scrim{position:fixed;inset:0;z-index:3;pointer-events:none;background:linear-gradient(90deg,rgba(5,5,5,.78) 0%,rgba(5,5,5,.35) 38%,transparent 60%),linear-gradient(0deg,rgba(5,5,5,.7),transparent 45%)}
+</style></head><body>
+<canvas id="c"></canvas><div class="scrim"></div>
+<div class="brand"><b>U</b>U-Tax</div>
+<div class="nav">OFFICE<i></i>CEO CONSOLE</div>
+<div class="act" data-from="0" data-to="0.17"><div class="dot">An AI-run<br>tax firm</div><p class="cap">Seven agents answer the email, fill the forms, keep the books and pay their contractors. <em>Live.</em></p><div class="cta"><span class="b b1">Free tax checkup</span><span class="b b2">Watch the office ↗</span></div></div>
+<div class="act" data-from="0.2" data-to="0.36"><div class="dot">Every dot<br>is a move</div><p class="cap">An email answered, a line filled, a payment sent. Colored by the department that did it.</p></div>
+<div class="act" data-from="0.4" data-to="0.68"><div class="dot">The work,<br>on glass</div><p class="cap">Real artifacts from the action log: the federal return, the live ledger, the inbox, the receipts.</p></div>
+<div class="act" data-from="0.7" data-to="0.82"><div class="dot">Built to<br>be checked</div><p class="cap">Every number comes from the engine, is checked by QA, and is <em>shown, line by line.</em></p></div>
+<div class="act" data-from="0.84" data-to="1.01"><div class="dot">One firm.<br>One human.</div><p class="cap">You give the order by voice. <em>The firm does the rest.</em></p><div class="cta"><span class="b b1">Free tax checkup</span><span class="b b2">Open the CEO console ↗</span></div></div>
+<div class="ticker"><i></i>LIVE · Tax filled Form 1120 line 31 · 14:02</div>
+<div class="scroll"></div>
+<script type="module">
+import { createImmersive } from "./immersive.js";
+await document.fonts.ready;
+const s = createImmersive(document.getElementById("c"), { cards: [
+  { title: "FORM\n1120", caption: "federal return · filled live · draft", hue: 265 },
+  { title: "LIVE\nLEDGER", caption: "excel · formulas · every cell on screen", hue: 160 },
+  { title: "INBOX", caption: "client email · answered in seconds", hue: 210 },
+  { title: "PAID\nAGENT", caption: "0.50 pathUSD · tempo testnet · tx", hue: 300 },
+  { title: "7 AGENTS", caption: "one firm · one human CEO", hue: 85 },
+]});
+window.immersive = s;
+const acts = [...document.querySelectorAll(".act")];
+const show = (x) => acts.forEach(a => a.classList.toggle("on", x >= +a.dataset.from && x < +a.dataset.to));
+window.show = show;
+const onScroll = () => { const x = scrollY / (document.body.scrollHeight - innerHeight); s.setProgress(x); show(x); };
+addEventListener("scroll", onScroll, { passive: true }); onScroll();
+</script></body></html>

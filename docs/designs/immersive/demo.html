@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Firm Orb</title>
+<script type="importmap">{"imports":{"three":"./node_modules/three/build/three.module.js"}}</script>
+<style>
+:root{--bg:#050505;--lime:#BEF243;--text:#F2F3EE;--dim:#A1A39B;--line:rgba(255,255,255,.08)}
+*{box-sizing:border-box;margin:0}body{background:var(--bg);color:var(--text);font:15px/1.5 Geist,Inter,system-ui,sans-serif;overflow:hidden}
+.hero{position:relative;height:100vh;display:grid;grid-template-columns:1.05fr 1fr;align-items:center;padding:0 72px}
+.hero::before{content:"";position:absolute;inset:0;background:radial-gradient(900px 600px at 72% 50%,rgba(190,242,67,.10),transparent 60%),radial-gradient(600px 400px at 10% 90%,rgba(46,230,214,.06),transparent 70%);pointer-events:none}
+h1{font-size:76px;line-height:.98;letter-spacing:-.035em;font-weight:600}
+h1 em{font-family:"Instrument Serif",Georgia,serif;font-weight:400;font-style:italic;color:var(--lime)}
+.k{font:12px/1 "Geist Mono",ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--lime);margin-bottom:22px;display:flex;gap:10px;align-items:center}
+.k i{width:8px;height:8px;border-radius:50%;background:var(--lime);box-shadow:0 0 12px var(--lime)}
+p.s{color:var(--dim);font-size:19px;max-width:520px;margin:26px 0 34px}
+.cta{display:flex;gap:12px}.b{padding:14px 22px;border-radius:999px;font-weight:600}.b1{background:var(--lime);color:#0B0D06}.b2{border:1px solid rgba(255,255,255,.14)}
+.stage{position:relative;height:min(78vh,760px)}
+canvas#hero{width:100%;height:100%;display:block}
+.tag{position:absolute;font:12px "Geist Mono",monospace;color:var(--dim);background:rgba(18,20,16,.72);border:1px solid var(--line);backdrop-filter:blur(10px);padding:8px 12px;border-radius:12px;display:flex;gap:8px;align-items:center}
+.tag b{color:var(--text);font-weight:500}.tag i{width:8px;height:8px;border-radius:50%}
+.t1{left:4%;top:20%}.t2{right:2%;top:36%}.t3{left:12%;bottom:16%}
+</style></head><body>
+<section class="hero">
+  <div><div class="k"><i></i>An AI-run tax &amp; accounting firm · live</div>
+  <h1>Seven agents.<br>One firm, <em>alive.</em></h1>
+  <p class="s">Every pulse is a real move from the action log: an email answered, a form filled, a payment sent.</p>
+  <div class="cta"><span class="b b1">Get a free tax checkup</span><span class="b b2">Watch the office ↗</span></div></div>
+  <div class="stage"><canvas id="hero"></canvas>
+    <div class="tag t1"><i style="background:#4DA3FF"></i><b>Intake</b> replied to Team #9 · 14:02</div>
+    <div class="tag t2"><i style="background:#FFB547"></i><b>Tax</b> filled Form 1120 line 31 · $63,000</div>
+    <div class="tag t3"><i style="background:#C77DFF"></i><b>Accounting</b> paid PixelAgent 0.50 · tx 0x02f0…</div>
+  </div>
+</section>
+<script type="module">
+import { createFirmOrb } from "./firm-orb.js";
+const orb = createFirmOrb(document.getElementById("hero"), { points: 16000, size: 3.0 });
+window.orb = orb;
+const seats = ["#4DA3FF","#FFB547","#3DDC84","#C77DFF","#FF6FB5","#2EE6D6","#FF4D3D"];
+let i = 0; setInterval(() => orb.pulse(seats[i++ % seats.length]), 700);
+</script></body></html>
