@@ -800,3 +800,24 @@ const oneLine = (s: string) => Array.from(s.replace(/\s+/g, " ").trim().replace(
 
 /** Seconds left on a card, for the countdown. */
 export const secondsLeft = (expiresAt: number, now: number) => Math.max(0, Math.ceil((expiresAt - now) / 1000));
+
+/** The gateway's own grammar (ceo_tools._norm, one leading filler and a trailing "please"). */
+const gatewayNorm = (t: string) =>
+  t
+    .toLowerCase()
+    .replace(/’/g, "'")
+    .replace(/[^a-z0-9#'_ ]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^(please|ok|okay|hey|so) /, "")
+    .replace(/ please$/, "");
+const GATEWAY_STOP_RE = /^(?:stop|pause) (?:posting|posts|post|emails|email|mail|invites|invite|calendar|screens|screen|calls|everything|all)$/;
+
+/**
+ * D34: a stop the gateway runs at once inside /api/ceo/talk, before the assistant (ceo_tools.parse:
+ * "(stop|pause) <posting|emails|invites|screens|everything|all…>"). Only these skip the turn queue;
+ * any other stop-ish words ("stop hiring") are an ordinary turn for the assistant.
+ */
+export const isGatewayStop = (text: string) => GATEWAY_STOP_RE.test(gatewayNorm(text));
+/** A bare "stop" / "wait" / "hold on": while a turn is running it means stop now (STOP EVERYTHING). */
+export const isBareStop = (text: string) => /^(?:stop|wait|hold on|stop it|stop that)$/.test(gatewayNorm(text));

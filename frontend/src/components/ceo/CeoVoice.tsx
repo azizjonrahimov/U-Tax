@@ -43,6 +43,8 @@ import {
   type Proposal,
   type ToolResult,
   earFinals,
+  isBareStop,
+  isGatewayStop,
   isStopCommand,
   isStopEverything,
   newEarMemory,
@@ -672,8 +674,6 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const turnBusy = useRef(false);
   const turnQueue = useRef<{ t: string; via: "voice" | "click"; epoch: number }[]>([]);
   const [working, setWorking] = useState(false);
-  /** The last reply shown, so a poll that returns it again (or a stale one) is never shown twice. */
-  const lastShown = useRef("");
 
   /** Something the assistant did landed after STOP: pause everything again, as a late confirm does. */
   const pauseAgain = useCallback(
@@ -682,7 +682,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       try {
         await post("/ceo/tool", { name: STOP_EVERYTHING.name, args: STOP_EVERYTHING.args, call_id: `stop-${Date.now()}`, channel: "click" });
       } catch (e) {
-        if (unauthorized(e)) return;
+        if (!alive.current || unauthorized(e)) return;
         paused = await authJson(token, `${API}/trust`, { method: "POST", body: JSON.stringify({ action_type: "*", state: "PAUSED" }) }).then(
           () => true,
           () => false,
@@ -702,14 +702,13 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const showReply = useCallback(
     (r: TalkReply, t: string, epoch: number) => {
       if (!alive.current) return;
-      const sig = JSON.stringify([r.say, r.actions]);
-      if (sig === lastShown.current) return;
-      lastShown.current = sig;
       if (epoch !== stopEpoch.current) {
         if (!r.actions.length) return;
         addLine("firm", "After your STOP, the assistant still did this:", r.actions);
         refresh();
-        void pauseAgain(r.actions.map((a) => a.summary).join("; "));
+        // Only something that could act needs another pause (a pause or a cancel already stops things).
+        const acting = r.actions.filter((a) => !/^(pause|cancel_order|undo)$/.test(a.tool));
+        if (acting.length) void pauseAgain(acting.map((a) => a.summary).join("; "));
         return;
       }
       const line = replyLine(r);
@@ -746,7 +745,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           fails = 0;
           if (next && !next.pending) return next;
         } catch (e) {
-          if (unauthorized(e)) return null;
+          if (!alive.current || unauthorized(e)) return null;
           if (e instanceof ApiError && e.status === 404) return null;
           if (++fails >= 3) return null;
         }
@@ -814,16 +813,14 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
           }
           return "fallback";
         }
-        if (!accepted && (code === "timeout" || code === "network_error") && convo.current) {
-          // The words may have arrived: follow the thread rather than guess (a stale reply is never shown twice).
-          const late = await followTurn(convo.current, t, epoch);
-          if (late) {
-            showReply(late, t, epoch);
-            return "done";
-          }
-        }
         if (stopped()) return "done";
-        const msg = accepted ? "The assistant dropped mid-turn; it may have acted. Check the lists before asking again." : voiceError(e);
+        // A timeout can't tell whether the words arrived (the thread may still show the last answer):
+        // say so plainly, never guess.
+        const msg = accepted
+          ? "The assistant dropped mid-turn; it may have acted. Check the lists before asking again."
+          : code === "timeout" || code === "network_error"
+            ? "No answer in time. It may still be working on it: check the lists before asking again."
+            : voiceError(e);
         addLine("firm", msg);
         speak(msg, undefined, `error:${t}`);
         return "done";
@@ -931,9 +928,15 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       const epoch = stopEpoch.current;
       // D34: a conversation, no confirm card (a card left from the command path is decided first).
       if (talkUp() && !vs.current.proposal) {
-        if (isStopCommand(t)) {
-          // A stop never waits behind a turn; if talk can't take it, the command path runs it.
+        if (isGatewayStop(t)) {
+          // The gateway runs these at once, before the assistant: they never wait behind a turn. If
+          // talk can't take one, the command path runs it.
           if ((await talkTurn(t, epoch, true)) === "fallback") await commandPath(t, via, epoch);
+          return;
+        }
+        if (turnBusy.current && isBareStop(t)) {
+          // "Stop" / "wait" while the assistant is working: stop now, never a new turn behind it.
+          void stopRef.current("voice");
           return;
         }
         if (turnBusy.current) addLine("firm", "Got it. I'll do that right after the current request.");
