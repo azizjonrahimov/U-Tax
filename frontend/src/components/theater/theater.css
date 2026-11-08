@@ -428,5 +428,8 @@
 .theater .ui-empty.after-q svg { display: none; }
 @container (max-height: 120px) { .theater .ui-empty span { display: none; } }
 /* The rail never clips its last card (Cases) on a short screen: it keeps a minimum height and the rail scrolls inside itself. */
-.theater aside { grid-template-rows: auto auto auto minmax(calc(96px * var(--k)), 1fr); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .15) transparent; }
+/* Human touches, Money and Hiring never shrink (their rows are sized to their content); only Cases gives up room
+   (it lists what fits), and if even its minimum doesn't fit, the rail scrolls inside itself. */
+.theater aside { grid-template-rows: max-content max-content max-content minmax(calc(72px * var(--k)), 1fr); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .15) transparent; }
+.theater aside > .pane:not([data-target="rail.cases"]) { min-height: max-content; flex-shrink: 0; }
 .theater.stage aside { overflow: hidden; }
