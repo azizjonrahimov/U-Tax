@@ -20,6 +20,6 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | D39 phase 2: /signup + /login re-skin only | 0m |
+| frontend | `frontend/` | resting (freeze); /signup + /login re-skin merged and live | 0m |
 | backend | `backend/`, `contractors/` | resting | 5m |
 | agents | `naive/` | resting | 20m |
