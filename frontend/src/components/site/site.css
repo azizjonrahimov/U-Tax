@@ -14,6 +14,8 @@
 .site p a, .site .alt a, .site .how .after a { color: var(--primary); text-decoration: underline; text-underline-offset: 3px; font-weight: 600; }
 .site p a:visited, .site .alt a:visited, .site .how .after a:visited { color: #3d5a4f; }
 .site :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.site .skip { position: absolute; left: 16px; top: -60px; z-index: 10; background: var(--ink); color: #fff; padding: 10px 14px; border-radius: 8px; font-weight: 600; text-decoration: none; }
+.site .skip:focus { top: 12px; }
 .site .wrap { width: 100%; max-width: 1120px; margin: 0 auto; padding: 0 24px; }
 
 /* Top bar */

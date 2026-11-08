@@ -64,6 +64,9 @@ function Foot() {
 function Shell({ children }: { children: ReactNode }) {
   return (
     <div className="site">
+      <a href="#main" className="skip">
+        Skip to content
+      </a>
       <Top />
       {children}
       <Foot />
@@ -100,7 +103,7 @@ export function Landing() {
   const live = useLiveSavings();
   return (
     <Shell>
-      <main>
+      <main id="main">
         <section className="hero">
           <div className="wrap">
             <div>
@@ -287,7 +290,7 @@ export function Signup() {
 
   return (
     <Shell>
-      <main className="form-page">
+      <main id="main" className="form-page">
         <div className="card">
           {done ? (
             <div className="done-box" role="status">
@@ -365,7 +368,7 @@ export function Login() {
 
   return (
     <Shell>
-      <main className="form-page">
+      <main id="main" className="form-page">
         <div className="card">
           <form
             onSubmit={(e) => {
