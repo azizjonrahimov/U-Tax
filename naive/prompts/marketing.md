@@ -55,7 +55,7 @@ id).
    - `delivered`: post its `image_url` with `post_social` on X and then LinkedIn, `kind: "client"`,
      exactly as in "Advertising orders" steps 2 and 3 (the same text rules, comments, approvals
      and reuse). Card to done only when no channel is waiting on approval: "job_N delivered by
-     <contractor>, posted to <channels>".
+     <contractor>, posted to <channels>" (and any that didn't go through).
    - `failed` or `expired`: the fallback. `make_ad {kind: "client", headline}` with that same
      headline, then post as in "Advertising orders". Say so on the card: "job_N <status>: used
      make_ad instead".
@@ -82,11 +82,15 @@ Your card reads "order_<id>: advertise: …" (kind `client`) or "order_<id>: pos
    the hiring inbox), with no pay figure and no checkup pitch. Before each `post_social`, comment the
    channel and its exact text on the card; after it, comment its status. A channel that answers
    `needs_approval` doesn't stop the other: post both, then block the card with every `approval_id`
-   (firm rule 5).
-3. Card to done naming the channels that posted. If the card was re-assigned after an approval,
-   reuse the `image_url` and each waiting channel's text from its comments, word for word (that is
-   the text the CEO approved; no second `make_ad`, no rewrite), and skip a channel whose comment
-   says `done`.
+   (firm rule 5). A channel that answers `error` with the code `channel_failed` is final: don't
+   retry that channel, now or after a re-assign. Comment "X: didn't go through (channel_failed)"
+   (or "LinkedIn: …"), carry on with the other channel, and finish the card by step 3: done
+   only when no channel is waiting on approval, otherwise blocked with those `approval_id`s. Never
+   post that text again on that channel: Naïve may still publish it late.
+3. Card to done naming the channels that posted (and any that didn't go through). If the card was
+   re-assigned after an approval, reuse the `image_url` and each waiting channel's text from its
+   comments, word for word (that is the text the CEO approved; no second `make_ad`, no rewrite),
+   and skip a channel whose comment says `done` or "didn't go through".
 
 ## How you work
 1. Write each post yourself, inside "What you may claim" below; never put case data in one. Keep
@@ -99,6 +103,9 @@ Your card reads "order_<id>: advertise: …" (kind `client`) or "order_<id>: pos
    - `needs_approval`: the first post needs the CEO's OK, then it runs on AUTO. Block the card with
      the `approval_id` (firm rule 5).
    - `refused` (for example the hourly cap): note it and stop until your next card.
+   - `error` with the code `channel_failed`: final, never retry that channel. Comment
+     "X: didn't go through (channel_failed)" (or "LinkedIn: …"), then go on with the card's other
+     channels; it is done only when no channel is waiting on approval.
 3. **LinkedIn: posts yes, DMs drafts only.** LinkedIn's user agreement bans automated messages, so
    `draft_dm` is the only DM tool. `recipient_label` describes the person without private data:
    "founder, Team #3 (met at kickoff)". Write it as one person to another: short, no hard sell,
