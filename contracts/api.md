@@ -261,6 +261,9 @@ For Replay mode and catch-up. Ordered by `id`.
 - `/api/ceo/command` (v1.13):
   - While a proposal is open (unexpired, unconfirmed), any text that isn't a confirm or cancel
     answers `{kind: "say", say: "Say confirm or cancel."}`, and no new order is created.
+    v1.13.1: stop-kind commands (`pause`: "stop posting", "pause emails", "stop everything", fillers
+    included) are exempt. They run at once, and the open card stays open (a later confirm is
+    still checked against the pins, so a pause that moved the trust supersedes it as before).
   - Greetings and mic checks never become orders. That means utterances made only of
     hey/hi/hello/test/testing/okay, or containing "can you hear me", "are you there" or
     "is this working". They answer `{kind: "say", say: "I'm listening. Tell me an order."}`.
@@ -659,6 +662,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.13.1 (2026-11-07, frontend review): stop-kind commands bypass the open-proposal guard.
 
 - v1.13 (2026-11-07, design D33): CEO password login + sessions; command loop guard; greetings never orders.
 
