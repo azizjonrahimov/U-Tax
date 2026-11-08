@@ -1,4 +1,4 @@
-# API contract (v1.12): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.13): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -246,6 +246,24 @@ For Replay mode and catch-up. Ordered by `id`.
 - Event `tool.called` (actor = the seat): `{tool, status: "done"|"needs_approval"|"refused"|"error",
   order_id?}`, written by the gateway for **every** MCP tool call, reads included. No args or data,
   so nothing private. It's what the department workspaces animate.
+
+## 5a-bis. CEO sign-in (v1.13, design D33)
+
+- `POST /api/auth/login` `{email, password}`. `email` must equal `CEO_EMAIL` (case-insensitive) and
+  `password` must match `CEO_PASSWORD_HASH` (scrypt, `scrypt$<salt_b64>$<hash_b64>`). It returns
+  `{session, expires_at}`: an HMAC-signed token (`UTAX_SESSION_SECRET`, generated at first boot
+  if unset) that lasts 12 h.
+  - Every admin route accepts `Authorization: Bearer <session>` just as it accepts
+    `ADMIN_TOKEN`. The admin token stays, for scripts only.
+  - Rate limit: 10 attempts per IP per 15 min. A failure answers `401 bad_login` (same body
+    for a wrong email or a wrong password).
+  - `POST /api/auth/logout` revokes the session (a denylist kept in memory until it expires).
+- `/api/ceo/command` (v1.13):
+  - While a proposal is open (unexpired, unconfirmed), any text that isn't a confirm or cancel
+    answers `{kind: "say", say: "Say confirm or cancel."}`, and no new order is created.
+  - Greetings and mic checks never become orders. That means utterances made only of
+    hey/hi/hello/test/testing/okay, or containing "can you hear me", "are you there" or
+    "is this working". They answer `{kind: "say", say: "I'm listening. Tell me an order."}`.
 
 ## 5b. CEO voice console (v1.8, design D28)
 
@@ -641,6 +659,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.13 (2026-11-07, design D33): CEO password login + sessions; command loop guard; greetings never orders.
 
 - v1.12.3 (2026-11-07, owner UX): unparsed CEO command text becomes an order proposal.
 
