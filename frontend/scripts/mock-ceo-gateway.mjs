@@ -131,8 +131,12 @@ function command(text) {
     return [200, { kind: "confirm", proposal_id: open.id, readback: open.readback }];
   }
   if (open && /^(?:no|cancel|cancel it|never mind)$/.test(w)) return [200, { kind: "cancel", proposal_id: open.id, readback: open.readback }];
+  // v1.13.1 (the gateway's order): stop commands run at once, even with a card open (a pause
+  // cancels it); then, while a card is open, only confirm or cancel act; greetings are never orders.
   if (has(text, "everything") && (has(text, "stop") || has(text, "pause"))) return tool("pause", { action_type: "everything" }, "command");
   if (has(text, "stop posting")) return tool("pause", { action_type: "social_post" }, "command");
+  if (open) return [200, { kind: "say", say: "Say confirm or cancel." }];
+  if (/^(?:(?:hey|hi|hello|test|testing)\s*)+$/.test(w) || /can you hear me|are you there|is this working/.test(w)) return [200, { kind: "say", say: "I'm listening. Tell me an order." }];
   if (has(text, "approve")) return tool("approve", { approval: "latest" }, "command");
   if (has(text, "deny")) return tool("deny", { approval: "latest" }, "command");
   if (has(text, "money")) return tool("get_money", {}, "command");

@@ -122,3 +122,8 @@
 @media (prefers-reduced-motion: reduce) {
   .ceo *, .ceo *::before, .ceo *::after { transition-duration: 0s !important; animation: none !important; }
 }
+
+/* D33: what the ear heard last: one line under the controls, the transcript at body size */
+.ceo .heard { margin: 6px 0 0; font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ceo .heard q { color: var(--text); font-size: 17px; font-weight: 600; }
+.ceo .heard .note { color: var(--amber); }
