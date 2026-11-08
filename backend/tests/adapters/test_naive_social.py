@@ -11,7 +11,8 @@ import pytest
 
 from app.gateway.adapters import _http
 from app.gateway.adapters.naive_social import NaiveSocial
-from app.gateway.ports import NotConfigured, Post, RateLimited, Rejected, Unavailable
+from app.gateway.ports import (ChannelFailed, NotConfigured, Post, RateLimited, Rejected,
+                               Unavailable)
 
 from .fakes import FakeNaive
 
@@ -92,8 +93,9 @@ def test_any_2xx_is_a_live_post_and_a_retry_never_reposts(tmp_path, answer):
     assert port.post(Post(channel="x", text="hi"), key="k") == first and len(calls) == 1
 
 
-def test_409_in_flight_is_retryable_and_404_is_configuration(tmp_path):
-    for status, error in ((409, Unavailable), (404, NotConfigured), (403, NotConfigured)):
+def test_409_in_flight_is_final_and_404_is_configuration(tmp_path):
+    # task 50: a 409 "still in flight" never clears on a retry with the same key
+    for status, error in ((409, ChannelFailed), (404, NotConfigured), (403, NotConfigured)):
         transport = httpx.MockTransport(lambda r, s=status: httpx.Response(s, json={}))
         port = NaiveSocial("sk_test", identity="utax-mkt", data_dir=tmp_path / str(status),
                            transport=transport)
