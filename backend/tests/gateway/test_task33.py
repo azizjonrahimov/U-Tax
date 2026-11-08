@@ -14,6 +14,8 @@ from app.main import create_app
 from app.naive import NaiveClient
 from app.naive_confirm import naive_decision
 
+from ..naive_strict import strict
+
 from .test_api import ADMIN, admin
 from .test_mcp import TOKENS, call, mcp, tool  # noqa: F401  (the mcp fixture)
 
@@ -161,13 +163,15 @@ class FakeAssistant:
                                              "status": status, "stop_reason": "end_turn"})
         if path == "/sessions/ses_ceo/events":
             after = int(request.url.params.get("after_seq") or 0)
-            return httpx.Response(200, json={"data": [e for e in self.events if e["seq"] > after],
-                                             "has_more": False})
+            limit = int(request.url.params.get("limit") or 20)  # task 49: real paging
+            rows = [e for e in self.events if e["seq"] > after]
+            return httpx.Response(200, json={"data": rows[:limit],
+                                             "has_more": len(rows) > limit})
         return httpx.Response(404, json={"error": {"code": "not_found", "message": path}})
 
 
 def talker(h, fake, **kw) -> CeoTalk:
-    client = NaiveClient("nk_test", transport=httpx.MockTransport(fake))
+    client = NaiveClient("nk_test", transport=httpx.MockTransport(strict(fake)))
     return CeoTalk(h.gw, client, sleep=lambda s: asyncio.sleep(0), **kw)
 
 

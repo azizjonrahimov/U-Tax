@@ -17,6 +17,8 @@ from app.naive import NaiveClient
 from app.naive.backoff import NaiveBackoff
 from app.naive_activity import ActivityRelay, _Session
 
+from ..naive_strict import strict
+
 ADMIN = "admin-" + "a" * 30
 THEATER = "theater-" + "b" * 30
 SID = "ses_1"
@@ -54,7 +56,7 @@ class Clock:
 
 def client_for(handler, backoff=None):
     return NaiveClient("nk_test", "https://api.vetta.sh",
-                       transport=httpx.MockTransport(handler), backoff=backoff)
+                       transport=httpx.MockTransport(strict(handler)), backoff=backoff)
 
 
 def streaming(events, seen=None):

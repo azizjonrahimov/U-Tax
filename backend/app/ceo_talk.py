@@ -32,6 +32,8 @@ POLL_SECONDS = 1.0
 STILL_WORKING = "Still working on it…"
 BUSY = "The assistant can't be reached right now. Stops still work: say stop."
 TEXT_MAX = 2000
+EVENTS_PAGE = 100  # task 49: Naive's max list limit
+EVENT_PAGES_MAX = 50
 
 
 class TalkRefused(Exception):
@@ -100,14 +102,21 @@ class CeoTalk:
             await self._sleep(self.poll)
 
     async def _last_message(self, conversation: dict) -> str:
-        page = await self.client.session_events(conversation["session_id"],
-                                                after_seq=conversation["after_seq"], limit=200)
+        """Task 49: Naive's limit is 1..100, so page (by after_seq) while has_more: the
+        latest message.completed is never missed. Bounded; stops if a page doesn't advance."""
         said = None
-        for event in page.data:
-            conversation["after_seq"] = max(conversation["after_seq"], int(event.get("seq") or 0))
-            data = event.get("data") or {}
-            if event.get("type") == "message.completed" and data.get("role") != "user":
-                said = str(data.get("content") or "").strip() or said
+        for _ in range(EVENT_PAGES_MAX):
+            before = conversation["after_seq"]
+            page = await self.client.session_events(conversation["session_id"],
+                                                    after_seq=before, limit=EVENTS_PAGE)
+            for event in page.data:
+                conversation["after_seq"] = max(conversation["after_seq"],
+                                                int(event.get("seq") or 0))
+                data = event.get("data") or {}
+                if event.get("type") == "message.completed" and data.get("role") != "user":
+                    said = str(data.get("content") or "").strip() or said
+            if not page.has_more or conversation["after_seq"] <= before:
+                break
         return said or "Done."
 
     # ------------------------------------------------------------------ the route

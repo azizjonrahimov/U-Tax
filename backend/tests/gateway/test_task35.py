@@ -14,6 +14,8 @@ from app.naive.backoff import NaiveBackoff
 from app.naive_confirm import AGENT_NAMES, POLL_SECONDS, NaiveConfirmer
 from app.naive_waker import NaiveWaker, WakeFailed
 
+from ..naive_strict import strict
+
 from .test_task19 import FakeNaive, tool_call, waiting
 
 
@@ -68,7 +70,8 @@ def test_a_429_stops_every_call_with_no_retry_and_one_warning(backoff, clock, ca
     fake = AtCapacity(lambda r: httpx.Response(200, json={"data": [], "has_more": False}))
 
     async def go():
-        client = NaiveClient("nk_test", transport=httpx.MockTransport(fake), backoff=backoff,
+        client = NaiveClient("nk_test", transport=httpx.MockTransport(strict(fake)),
+                             backoff=backoff,
                              sleep=lambda s: asyncio.sleep(0))
         try:
             with pytest.raises(NaiveError) as first:
@@ -96,7 +99,8 @@ def test_one_list_call_per_pass_and_none_while_backed_off(h, backoff, clock):
     fake = AtCapacity(inner)
 
     async def go():
-        client = NaiveClient("nk_test", transport=httpx.MockTransport(fake), backoff=backoff)
+        client = NaiveClient("nk_test", transport=httpx.MockTransport(strict(fake)),
+                             backoff=backoff)
         confirmer = NaiveConfirmer(h.gw, client)
         confirmer.agents = {f"agt_{name}": seat for name, seat in AGENT_NAMES.items()}
         try:
@@ -133,7 +137,7 @@ def test_a_wake_held_by_the_backoff_goes_once_it_clears(h, backoff, clock, monke
                                   json={"error": {"code": "rate_limited", "message": "x"}})
         return httpx.Response(201, json={"id": "ses_9", "status": "running"})
 
-    waker = NaiveWaker("nk_test", transport=httpx.MockTransport(naive), clock=clock,
+    waker = NaiveWaker("nk_test", transport=httpx.MockTransport(strict(naive)), clock=clock,
                        backoff=backoff)
     with pytest.raises(WakeFailed) as failed:
         waker("New case case_1")
