@@ -405,6 +405,7 @@ class Gateway:
             "list_candidates": self._list_candidates,
             "resolve_purchase": self._resolve_purchase,  # control: the CEO, not an agent
             "stripe_payment": self._stripe_payment,  # task 40b: /hooks/stripe only
+            "agent_activity": self._agent_activity,  # task 42: the activity relay only
             "firm_brief": self._firm_brief,
             # gateway / control actions (contract §5, §6a-c): never callable by an agent token
             "inject_email": self._inject_email,
@@ -597,11 +598,23 @@ class Gateway:
         case = self.state.cases.get(case_id) if case_id else None
         return case is not None and "possible_injection" in case.flags
 
-    def public_event(self, event: Event, *, admin: bool = False) -> dict[str, Any]:
+    ADMIN_ONLY_TYPES = frozenset({"agent.activity"})  # task 42: never on the theater
+    ADMIN_EXTRAS = ("sent", "cells")  # task 42: what was really sent / written, admin only
+
+    def public_event(self, event: Event, *, admin: bool = False) -> dict[str, Any] | None:
         """An event as theater readers see it (v1.7.1): once QA flags a case as a possible
         injection, every event of that case, earlier ones too, has its subject and body
-        replaced. The admin token still sees the originals."""
+        replaced. The admin token still sees the originals. Task 42: None for a type
+        theater readers never get (agent.activity); admin readers also get each artifact's
+        content as sent (`sent`: subject, body, to_masked) and a doc.step's `cells`."""
+        if not admin and event.type in self.ADMIN_ONLY_TYPES:
+            return None
         out = event.public()
+        if admin:
+            extras = {k: event.private[k] for k in self.ADMIN_EXTRAS
+                      if isinstance(event.private, dict) and k in event.private}
+            if extras:
+                out = {**out, "payload": {**out["payload"], **extras}}
         if not admin:
             out = self._without_ceo_words(event, out)
         if admin or not self.flagged_injection(event.case_id):
@@ -1429,11 +1442,11 @@ class Gateway:
             return "needs_approval"
         except Refused as err:  # denied, or email paused
             return err.code
+        welcome = self.templates.render("signup-welcome", {
+            "greeting_name": self._greeting(case)})
         try:
             sent = self._with_retry("welcome email", lambda: self.ports.mail.send(
-                OutMail(to=case.reply_to, subject=self.SIGNUP_SUBJECT,
-                        body=self.templates.render("signup-welcome", {
-                            "greeting_name": self._greeting(case)})), key))
+                OutMail(to=case.reply_to, subject=self.SIGNUP_SUBJECT, body=welcome), key))
         except ToolError as err:
             failures = self._welcome_failures.get(case_id, 0) + 1
             self._welcome_failures[case_id] = failures
@@ -1444,7 +1457,9 @@ class Gateway:
         self._emit([NewEvent(type="client.followed_up", actor="intake", case_id=case_id,
                              provider=self.ports.mail.provider,
                              payload={"kind": "signup_welcome"}, idempotency_key=key,
-                             private={"message_id": sent.message_id, "public": True})])
+                             private={"message_id": sent.message_id, "public": True,
+                                      "sent": self._sent(self.SIGNUP_SUBJECT, welcome,
+                                                         case.reply_to)})])
         return "sent"
 
     def retry_signup_welcomes(self) -> list[str]:
@@ -2150,7 +2165,9 @@ class Gateway:
         events = [NewEvent(type="client.asked", actor="intake", case_id=case.case_id,
                            provider=self.ports.mail.provider,
                            payload={"missing": missing, "body": body}, idempotency_key=key,
-                           private={"message_id": sent.message_id, "public": case.priority})]
+                           private={"message_id": sent.message_id, "public": case.priority,
+                                    "sent": self._sent(f"Re: {case.subject}".strip(), outgoing,
+                                                       case.reply_to)})]
         if stalled:  # the nudge went out: back to waiting (the sweep can stall it once more)
             events.append(NewEvent(type="case.status", actor="system", case_id=case.case_id,
                                    payload={"from": "STALLED", "to": "INTAKE_PENDING"}))
@@ -2806,6 +2823,44 @@ class Gateway:
 
     OFFER_LABEL = "U-Tax filing help: annual report worksheet + 20-minute call"
 
+    ACTIVITY_KINDS = ("thinking", "tool_started", "tool_done", "writing", "idle")
+
+    def _agent_activity(self, args: dict) -> dict:
+        """Task 42 (D37): one step of an agent's live Naive session (app.naive_activity).
+        The text is masked (ids, contacts, spoken addresses) and capped at 600 characters,
+        the latest ones. Keyed by session and seq, so a resumed stream never doubles it."""
+        from app.ceo_tools import mask_words
+        from app.naive_confirm import AGENT_NAMES
+
+        agent = _one_of(args, "agent", tuple(sorted(set(AGENT_NAMES.values()))))
+        session_id = _str(args, "session_id", max_len=80)
+        kind = _one_of(args, "kind", self.ACTIVITY_KINDS)
+        payload: dict[str, Any] = {"agent": agent, "session_id": session_id, "kind": kind}
+        tool = args.get("tool")
+        if isinstance(tool, str) and tool.strip():
+            payload["tool"] = tool.strip()[:120]
+        text = args.get("text")
+        if isinstance(text, str) and text.strip():
+            masked = mask_words(strip_contacts(text)).strip()
+            payload["text"] = masked if len(masked) <= 600 else "…" + masked[-599:]
+        order = args.get("order_id")
+        if isinstance(order, str) and re.fullmatch(r"order_[0-9]{1,12}", order):
+            payload["order_id"] = order
+        seq = args.get("seq")
+        key = (f"activity:{session_id}:{seq}:{kind}" if isinstance(seq, int)
+               and not isinstance(seq, bool) else None)
+        if key and self._done_from(key) is not None:
+            return {"duplicate": True}
+        self._emit([NewEvent(type="agent.activity",
+                             actor="ceo_assistant" if agent == "ceo" else agent,
+                             provider="naive", payload=payload, idempotency_key=key)])
+        return {"kind": kind}
+
+    @staticmethod
+    def _sent(subject: str, body: str, to: str | None) -> dict[str, str]:
+        """Task 42: an artifact as it actually left (admin readers only)."""
+        return {"subject": subject, "body": body, "to_masked": mask_email(to) if to else ""}
+
     def _payment_link(self, case: Case) -> str | None:
         """Task 40b: the case's $49 filing-help link (a worksheet + a 20-minute call; U-Tax
         files nothing), made once per case (the
@@ -2842,7 +2897,8 @@ class Gateway:
         done = self._done_from(key)
         if done is not None:  # a redelivery: only what didn't go out is retried
             known = self.state.cases.get(done.case_id or "")
-            follow = self._payment_followups(known, key, int(done.payload["amount_cents"])) \
+            follow = self._payment_followups(known, key, int(done.payload["amount_cents"]),
+                                             str(done.payload.get("currency") or "usd")) \
                 if known is not None else {}
             return {"case_id": done.case_id, "duplicate": True, **follow}
         case = None
@@ -2876,21 +2932,26 @@ class Gateway:
                              private={"session_id": session_id,
                                       "event_id": str(args.get("event_id") or "")[:255]})])
         return {"case_id": case.case_id, "amount_cents": amount, "currency": currency,
-                "books_row": row, **self._payment_followups(case, key, amount)}
+                "books_row": row, **self._payment_followups(case, key, amount, currency)}
 
     PAYMENT_RECEIPT_SUBJECT = "Your U-Tax call: pick a time"
 
-    def _payment_followups(self, case: Case, key: str, amount: int) -> dict:
+    def _payment_followups(self, case: Case, key: str, amount: int,
+                           currency: str = "usd") -> dict:
         """Task 40b: who fulfils the $49 (no agent does). The CEO gets one ceo.notified
         email ("Team #N paid $49: book their 20-minute call", reason "paid"), and the client
         ONE receipt in their memo thread (payment-receipt, HR_BOOKING_URL), logged as
         client.followed_up kind payment_receipt. Each step is keyed, so a Stripe redelivery
         only retries what didn't go out. receipt: "sent" | "failed" | "no_booking_url" |
-        "no_address"."""
+        "no_address" | "unexpected_amount" (not exactly FILING_PRICE_CENTS in usd: the
+        CEO checks it; the receipt's "$49" is always true)."""
         booking = self.settings.hr_booking_url
+        expected = amount == self.settings.filing_price_cents and currency == "usd"
         receipt_key = f"{key}:receipt"
         receipt = "sent" if self._done_from(receipt_key) is not None else None
-        if receipt is None and not case.reply_to:
+        if receipt is None and not expected:
+            receipt = "unexpected_amount"
+        elif receipt is None and not case.reply_to:
             receipt = "no_address"
         elif receipt is None and not booking:
             receipt = "no_booking_url"
@@ -2915,15 +2976,19 @@ class Gateway:
                 receipt = "sent"
         notice_key = f"ceo:paid:{key}"
         if self._done_from(notice_key) is None:
-            subject = f"{case.masked_name} paid {format_usd(amount)}: book their 20-minute call"
+            shown = format_usd(amount) if currency == "usd" else f"{amount} {currency} cents"
+            subject = (f"{case.masked_name} paid {shown}: book their 20-minute call"
+                       if expected else f"Payment of {shown} received: check it")
             lines = {"sent": "They got a receipt with the booking link"
                              + (f" ({booking})" if booking else "") + ".",
                      "failed": "Their receipt didn't go out yet (it retries); write to them.",
                      "no_booking_url": "No HR_BOOKING_URL is set, so no receipt went out: "
                                        "reply to them with a time.",
-                     "no_address": "The case has no reply address: no receipt went out."}
+                     "no_address": "The case has no reply address: no receipt went out.",
+                     "unexpected_amount": "It isn't the $49 filing-help price, so no "
+                                          "receipt went out: check it in Stripe."}
             self._notify_ceo("paid", subject, f"{case.masked_name} ({case.case_id}) paid "
-                             f"{format_usd(amount)} for filing help. {lines[receipt]}",
+                             f"{shown} for filing help. {lines[receipt]}",
                              key=notice_key)
         return {"receipt": receipt}
 
@@ -2998,7 +3063,9 @@ class Gateway:
                      payload={"to_masked": mask_email(case.reply_to), "subject": MEMO_SUBJECT,
                               "body": body, "message_id": sent.message_id,
                               "seconds_since_last_fact": seconds, "memo_ref": memo_ref},
-                     idempotency_key=key, private={"public": case.priority}),
+                     idempotency_key=key, private={
+                         "public": case.priority,
+                         "sent": self._sent(MEMO_SUBJECT, outgoing, case.reply_to)}),
             self._status(case, "SENT"),
             NewEvent(type="crm.sync_requested", actor="system", case_id=case.case_id,
                      payload={"object": "deal", "stage": "memo_sent"},
@@ -3079,12 +3146,14 @@ class Gateway:
         def stepper(doc: str):
             n = [0]
 
-            def step(detail: str) -> None:
+            def step(detail: str, cells: list | None = None) -> None:
                 n[0] += 1
                 self._emit([NewEvent(type="doc.step", actor="acct", case_id=case.case_id,
                                      payload={"doc": doc, "step": n[0], "detail": detail,
                                               "of": plan[doc]},
-                                     idempotency_key=f"{key}:{doc}:step{n[0]}")])
+                                     idempotency_key=f"{key}:{doc}:step{n[0]}",
+                                     # task 42: what this step wrote (admin readers only)
+                                     private={"cells": cells} if cells else None)])
             return step
 
         def created(doc: str, path: Path) -> None:
@@ -3103,7 +3172,8 @@ class Gateway:
             row = docs.append_books(books, case.case_id, self._now().date().isoformat(), label,
                                     figures)
             stepper("books")(f"Books: {label}, fee $0, tax saved "
-                             f"{format_usd(max(figures.auth_cents, figures.apv_cents) - figures.tax_cents)}")
+                             f"{format_usd(max(figures.auth_cents, figures.apv_cents) - figures.tax_cents)}",
+                             docs.row_cells(books, row))
             created("books", books)
             failed_by = {"workpaper": docs.verify_workpaper(folder / sheet, checks, truth),
                          "memo": docs.verify_memo(folder / memo, carry, truth),
@@ -3615,7 +3685,9 @@ class Gateway:
         self._emit([
             NewEvent(type="hr.outreach", actor="hr", provider=self.ports.mail.provider,
                      payload={"candidate_id": candidate_id, "label": label, "slot": start},
-                     idempotency_key=key),
+                     idempotency_key=key,
+                     private={"sent": self._sent("A paid 1-hour review gig?", body,
+                                                 cand["reply_to"])}),
         ])
         return {"candidate_id": candidate_id, "label": label, "slot": start,
                 "next": "the invite goes out when they reply"}
@@ -3720,7 +3792,9 @@ class Gateway:
                     in_reply_to=thread), key))
         self._emit([NewEvent(type="client.followed_up", actor="intake", case_id=case.case_id,
                              provider=self.ports.mail.provider, payload={"kind": kind},
-                             idempotency_key=key)])
+                             idempotency_key=key,
+                             private={"sent": self._sent(f"Re: {case.subject}".strip(), body,
+                                                         case.reply_to)})])
         return {"kind": kind}
 
     def _names_a_client(self, text: str) -> str | None:

@@ -70,6 +70,8 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "doc.created": ("doc", "file_name", "sha256", "pages_or_sheets"),
     "doc.verified": ("doc", "ok"),  # one per document (optional "failed": the checks)
     "client.followed_up": ("kind",),
+    # task 42 (D37): an agent's live Naive session, for admin/session readers only
+    "agent.activity": ("agent", "session_id", "kind"),
     # task 40b (D36): the $49 filing offer (the link's URL is private) and its payment
     "payment.link_created": ("link_id", "amount_cents", "currency"),
     "payment.received": ("case_id", "amount_cents", "currency"),
@@ -97,6 +99,7 @@ OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"}),
                          "call.booked": frozenset({"kind"}),  # v1.11.1: "candidate"
                          "email.received": frozenset({"source"}),  # v1.12: "signup"
                          "doc.step": frozenset({"of"}), "doc.verified": frozenset({"failed"}),
+                         "agent.activity": frozenset({"tool", "text", "order_id"}),
                          **{t: frozenset({"channel"})
                             for t in ("touch.training", "touch.operating", "touch.engineering")}}
 OPTIONAL_FACT_KEYS = ("gross_receipts_cents", "years_with_receipts")  # v1.1, R&D flag only

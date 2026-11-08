@@ -159,6 +159,11 @@ def create_app(gateway: Gateway | None = None, *, start_background: bool = True)
             confirmer = NaiveClient(gw.settings.naive_api_key, gw.settings.naive_api_base,
                                     backoff=SHARED)  # task 35: one gate with the waker
             resolver = NaiveConfirmer(gw, confirmer)
+            from app.naive_activity import ActivityRelay
+
+            relay = ActivityRelay(gw, confirmer)  # task 42 (D37): live agent activity
+            resolver.on_rows = relay.observe
+            state["activity"] = relay
             state["confirmer"] = resolver  # v1.14: /api/ceo/talk answers its confirms at once
             confirmer_task = asyncio.create_task(resolver.run())
             from app.ceo_talk import CeoTalk
