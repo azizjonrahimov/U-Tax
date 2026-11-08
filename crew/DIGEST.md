@@ -18,6 +18,6 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| backend | `backend/`, `contractors/` | D38 47a→47e (G1 tempo-or-local at 05:15; 47b+47c READY by 06:45) | 0m |
+| backend | `backend/`, `contractors/` | D38: G1 GO (tempo, a live testnet tx); 47b building; 47b+47c READY by 06:45 | 0m |
 | agents | `naive/` | D38 A41, READY held until backend 47b | 0m |
 | frontend | `frontend/` | F41 Market pane (fixtures) → F42a–f Night Lime landing | 0m |
