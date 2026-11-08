@@ -510,8 +510,7 @@ MUST_KEEP["chief-of-staff.md"].push("A case already SENT (or later) whose client
 }
 // A44 (rehearsal case_2): a real email with no numbers must get an ask, and FAST PATH never goes through the board
 MUST_KEEP["intake.md"].push("**A client email always gets an answer.**", "`asks_so_far` is 0, call `ask_client` for the missing facts **now**",
-  "Never treat a case with a client email as a website sign-up", "after
-`ask_client`, move the card to done with \"case_N: asked the client\"".replace(/\s+/g, " "), "\"Waiting on the client\" is allowed **only** after an ask went out (`asks_so_far` > 0), a not-eligible reply",
+  "Never treat a case with a client email as a website sign-up", "after `ask_client`, move the card to done with \"case_N: asked the client\"", "\"Waiting on the client\" is allowed **only** after an ask went out (`asks_so_far` > 0), a not-eligible reply",
   "If the client is eligible, facts are missing and `asks_so_far` is 0");
 MUST_KEEP["chief-of-staff.md"].push("**The intake step is always a board card** (a session started with `send_to_agent` can come up without the U-Tax tools)",
   "**tax → qa → accounting run as the direct chain**", "**Tools fallback, never a stop:**",
