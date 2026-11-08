@@ -104,6 +104,8 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "order.task_started": ("order_id", "task_no", "of", "text"),
     "order.task_done": ("order_id", "task_no", "of", "status", "summary", "by"),
     "order.done": ("order_id", "of", "done", "waiting_on_you", "other"),
+    # v1.20 §10.1 (D41 §E): a test-mode Stripe record of a Tempo contractor payment
+    "payment.recorded": ("job_id", "tx_hash", "stripe_id", "mode", "dashboard_url"),
 }
 ORDER_LINK_KEYS = frozenset({"order_id", "task_no"})  # any event may carry them (v1.11.1, v1.20)
 
