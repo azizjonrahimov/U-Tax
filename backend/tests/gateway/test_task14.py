@@ -74,7 +74,7 @@ def test_a_reopen_makes_a_pending_approval_stale_and_the_crew_asks_again(h):
     first = h.do("send_memo", case_id=case_id)
     h.ok("inject_email", **{"from": "founder@team7.dev", "subject": "re",
                             "body": "Wait, we have more assets than that."})
-    assert f"New case {case_id}" in wakes  # back to intake: the crew re-reads it
+    assert f"FAST PATH {case_id}" in wakes  # back to intake: the crew re-reads it (D42)
     stale = h.do("approve", approval_id=first.approval_id, decision="deny")
     assert stale.error["code"] == "superseded"
     assert stale.data["superseded_by"] is None  # nothing newer to decide yet

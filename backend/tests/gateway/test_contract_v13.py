@@ -55,7 +55,7 @@ def test_wake_messages_are_exact(h):
     wakes = []
     h.gw.on_wake(wakes.append)
     case_id = h.new_case()
-    assert wakes == [f"New case {case_id}"]
+    assert wakes == [f"FAST PATH {case_id}"]  # D42 M2: every email case runs the fast path
     h.to_qa_passed(case_id)
     pending = h.do("send_memo", case_id=case_id)
     h.ok("approve", approval_id=pending.approval_id, decision="allow")
@@ -71,7 +71,7 @@ def test_duplicate_mail_does_not_wake_again(h):
     args = {"from": "a@team3.dev", "subject": "hi", "body": "x", "message_id": "m-1"}
     h.ok("inject_email", **args)
     h.ok("inject_email", **args)
-    assert wakes == ["New case case_1"]
+    assert wakes == ["FAST PATH case_1"]  # D42 M2: every email case runs the fast path
 
 
 def test_a_failing_waker_never_breaks_the_action(h):
