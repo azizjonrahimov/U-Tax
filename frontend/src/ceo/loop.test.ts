@@ -159,3 +159,13 @@ describe("D33: v1.13 say, and a spoken stop", () => {
     for (const t of ["don't stop", "hire 2 people", "unpause posting"]) expect(isStopCommand(t)).toBe(false);
   });
 });
+
+describe("D34 review: which stops skip the turn queue", () => {
+  it("only the gateway's own stop grammar", async () => {
+    const { isGatewayStop, isBareStop } = await import("./voice");
+    for (const t of ["stop posting", "Pause emails.", "okay, stop everything", "please stop all", "stop invites please"]) expect(isGatewayStop(t)).toBe(true);
+    for (const t of ["stop hiring for the tax gig", "stop", "stop the firm from posting", "hold off on posting", "stop posting on linkedin"]) expect(isGatewayStop(t)).toBe(false);
+    for (const t of ["stop", "Wait!", "hold on", "okay stop"]) expect(isBareStop(t)).toBe(true);
+    expect(isBareStop("stop posting")).toBe(false);
+  });
+});

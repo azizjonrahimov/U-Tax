@@ -208,6 +208,36 @@ If either page can't hear you at all: check Chrome's site permission (the lock i
   - The login limiter can be used to lock out the CEO's sign-in: the per-key limit is IP plus email, and the global cap is 200.
   - The logout denylist is in memory only.
 
+## The CEO conversation (D34, contract v1.14 §5a-ter)
+
+- In `/ceo`, everything the CEO says or types goes to `/api/ceo/talk`. The assistant acts directly, with no confirm card, and says what it did. Each action shows as a chip with Undo.
+  - The console listens through the browser and speaks with TTS.
+  - Hands-free keeps the mic on.
+- **One turn at a time**, with "U-Tax is working on it…" on screen. Later words queue behind the current turn.
+- **Stops:**
+  - The gateway's own stop phrases jump the queue.
+  - A bare "stop" during a turn is STOP EVERYTHING.
+  - Words queued before a STOP are dropped.
+  - Actions that land after a STOP are shown with their Undo, and everything is paused again.
+- **Fallbacks:**
+  - A 503 before the gateway takes the words falls back to the command path and its card for one minute.
+  - A failure mid-turn never re-sends the words.
+  - A forgotten thread (404) restarts once.
+  - An undo the gateway lost shows "Undo not available".
+- **Decisions taken with the recommended option:**
+  - Conversation mode uses the browser ear and TTS. Realtime is used only when talk is down or the browser can't listen.
+  - Spoken replies are capped at whole sentences of about 300 characters.
+  - After a timeout, the console says so and never guesses.
+- **Backend asks (sent to the controller):**
+  - Run the stop grammar before the conversation lookup.
+  - Keep a per-turn action list.
+  - Fence assistant start tools that come from a turn begun before a STOP.
+  - Read `pending` under the lock in check().
+- **Known, not fixed:**
+  - After STOP, the console keeps following the old turn for up to 6.5 min, and new words wait behind it. Releasing them needs the backend fence first.
+  - The mock has no turn lock.
+  - Chips from before a STOP still offer Undo with no "STOP ran since" note.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
