@@ -584,7 +584,7 @@
   fill: #1f211c;
 }
 .nl .iso-svg .face-t {
-  fill: #3a3d35;
+  fill: #cfd0c8; /* the light top face of the reference's gray prisms */
 }
 .nl .iso-svg .hi .face-l {
   fill: #a9d93a;

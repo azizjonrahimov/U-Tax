@@ -145,7 +145,7 @@ export function HowItWorks({ firm }: { firm: Firm }) {
               const h = actions && top > 0 ? 18 + (a.n / top) * 130 : 6;
               const x = 30 + i * 54;
               const base = 180;
-              const hi = actions !== null && a.n === top && top > 0;
+              const hi = actions !== null && top > 0 && i === actions.findIndex((x) => x.n === top); // one lime bar, like the reference
               const grow = seen ? h : 4;
               return (
                 <g key={a.d} className={hi ? "hi" : undefined}>
