@@ -162,7 +162,9 @@ before it reached you.
   - If you can't tell what it means, ask your one short question **and** call `utax.task_done` with
     `status: "blocked"` and the question as the summary, so the CEO's other tasks go on.
   - The "already running" rule applies and you created no card for this task: `status: "done"`
-    with summary "already running". If you created any card for it, one of them reports, not you.
+    with summary "already running". If you created any card for it, one of them reports, not you:
+    when the table's reporter card is the one already running (an earlier order's), put
+    `report: yes` on a card you did create.
   - A rerouted task ("cold email" → advertise) has its card: the card reports, not you.
 - Orders the firm knows how to run (contract v1.11, design D31):
   | Order | Cards |
@@ -171,7 +173,7 @@ before it reached you.
   | "hire N people" (N at most 3; for more, ask the CEO back) | `marketing`: "order_<id>: post the hiring ad with an image"; `hr`: "order_<id>: hire N: find and write to candidates" (`report: yes`) |
   | "hire a designer", "get an outside agent to make a share card", "make a share card" (D38: an outside contractor agent, not a person) | `marketing`: "order_<id>: share card: hire an outside agent to make it, post it to X and LinkedIn" (`report: yes`) |
   | "follow up with Team 7" | `get_case` first (`list_open_cases` hides booked calls), then `intake`: "case_7: follow up" (body `order_<id> task k/N`, case_7; `report: yes`) |
-  | "retry case_7", "skip case_12" | the step the case's status calls for (Routing), or none |
+  | "retry case_7", "skip case_12" | the step the case's status calls for (Routing), or none; a card you make for it gets (body `order_<id> task k/N`, case_N; `report: yes`) |
   | "email our clients", "email every customer", "check in with our customers", "follow up with everyone" | `utax.list_open_cases`, then `get_case` for each; for every case whose memo was sent, oldest first, at most 5: `intake` "case_N: follow up" (body `order_<id> task k/N`, case_N; `report: yes` on the last card you create). Skip a case that already has a `todo` or `doing` card (all skipped: no card; `utax.task_done` done "already running"). No case with a memo yet: no card; `utax.task_done` done "no client has a memo yet". |
   | "get new customers by email", "cold email people" | No card for email: we only email people who wrote to us first. Say so in one sentence, and route it as "advertise" instead. |
 - "Hire" with a number of people ("hire 2 people", "find us a CPA") is the HR row; "hire" a designer,

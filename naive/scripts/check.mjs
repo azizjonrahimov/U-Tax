@@ -446,6 +446,7 @@ MUST_KEEP["chief-of-staff.md"].push("**Work only on this task.** The gateway sen
   "**No `report: yes` card for this task? Then you end it**", "the card reports, not you",
   "**At most one card per department per task.**", "body `order_<id> task k/N`, case_7; `report: yes`",
   "(end the task `blocked` with the question)", "If you created any card for it, one of them reports, not you",
+  "put `report: yes` on a card you did create", "a card you make for it gets (body `order_<id> task k/N`, case_N; `report: yes`)",
   "unless the table reroutes it, like cold email: then its card reports", "(but end its task `done`, \"the console switch does this\")",
   "summary \"already running\"", "The \"email our clients\" row is the one exception",
   "No card for email: we only email people who wrote to us first", "`utax.task_done` done \"no client has a memo yet\"");
@@ -469,7 +470,7 @@ for (const [key, seat] of Object.entries(CREW))
   for (const w of wakes) if (!wakeList.includes(`- \`${w}\``)) fail(`prompts/chief-of-staff.md: "What wakes you" has no item for the §10.1 wake \`${w}\``);
   // every card body the orders table spells out carries the task line rule 12 reads
   const bodies = [...cos.matchAll(/\(body:? ([^;)]+)/g)].map((m) => m[1]);
-  if (bodies.length < 2) fail(`prompts/chief-of-staff.md: expected the follow-up and email rows' card bodies, read ${bodies.length}`);
+  if (bodies.length < 3) fail(`prompts/chief-of-staff.md: expected the follow-up, retry and email rows' card bodies, read ${bodies.length}`);
   for (const b of bodies)
     if (!b.startsWith("`order_<id> task k/N`")) fail(`prompts/chief-of-staff.md: a table card body must start \`order_<id> task k/N\` (got "${b}")`);
   // every orders-table row that makes a card names its reporter

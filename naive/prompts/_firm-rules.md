@@ -55,4 +55,4 @@
     (waiting on someone) or `failed`. Take `order_id` and `task_no` from the body's first line
     `order_<id> task k/N`, and write a one-line summary. Call it exactly once. Without `report: yes`,
     don't call it. Whenever you stop work on that card (done, `blocked`, or a `refused` you report),
-    that call still comes last. An answer that says `duplicate` or `not_running` needs nothing more.
+    that call still comes last. An answer that says `duplicate`, `not_running` or `not_yours` needs nothing more: stop.
