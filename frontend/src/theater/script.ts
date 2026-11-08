@@ -193,6 +193,9 @@ const PANE_OF: ReadonlyMap<string, Pane> = new Map<string, Pane>([
   ["ceo.cancelled", "rail"],
   // v1.9 §6b-bis: the gateway answered a Naïve tool confirm by itself (no human click).
   ["naive.confirm", "rail"],
+  // v1.12 §5a: every MCP tool call (no args, no data). The office workspaces animate it; the
+  // theater only lights the seat's desk (no cursor, so a busy agent never slows the projector).
+  ["tool.called", "rail"],
 ]);
 
 /** Seat → the name the projector uses (Theater's cursor labels). */
@@ -847,6 +850,15 @@ function mapEvent(state: ScriptState, ev: UTaxEvent, pane: Pane): { state: Scrip
       });
       // D31: the Chief of Staff handing an order to a department is the order's first step.
       if (seat === "cos" && tool === "send_to_agent") orderLine(decision === "allow" ? "Chief of Staff handed it to the team" : "Chief of Staff was stopped handing it on", "cos", "handoff");
+      break;
+    }
+    case "tool.called": {
+      const tool = toolLabel(str(p, "tool"));
+      const raw = str(p, "status");
+      // done | needs_approval | refused | error; a new value still shows, as "done" would hide a failure.
+      const status = raw === "done" || raw === "needs_approval" || raw === "refused" || raw === "error" ? raw : "other";
+      const order = orderRef(p);
+      push({ target: "rail.tool", agent: null, action: "status", text: tool, meta: { seat: ev.actor, tool, status, ...(order !== null ? { order_id: order } : {}) } });
       break;
     }
     case "brief.generated": {

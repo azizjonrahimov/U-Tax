@@ -270,7 +270,7 @@ export function applyStep(prev: ScreenState, step: CursorStep): ScreenState {
   const key = rest.join(".");
 
   // D31: a desk lights up whenever its agent acts (a Naïve check names the seat in meta).
-  const seat = step.agent ?? (step.target === "rail.naive" ? str(meta.agent) : undefined);
+  const seat = step.agent ?? (step.target === "rail.naive" ? str(meta.agent) : step.target === "rail.tool" ? str(meta.seat) : undefined);
   if (seat && seat !== "ceo" && step.action !== "focus" && step.action !== "switch") s.desks = { ...s.desks, [seat]: step.key };
 
   // D31: a CEO order opens a card; later steps carrying an order line fill it.

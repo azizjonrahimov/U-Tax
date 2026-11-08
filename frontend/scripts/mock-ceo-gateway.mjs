@@ -12,6 +12,9 @@
 // D31 (v1.11.1): a confirmed CEO order (or POST /api/dev/order {text}) emits the CEO's voice.command, then
 // plays each named department's steps with order_id ("advertise" → Marketing, "hire" → HR, "follow up" →
 // Intake), MOCK_PACE ms apart (default 1600). The ad image is served at GET /assets/ad_<n>.svg.
+// D32 (v1.12): every department action is preceded by tool.called {tool, status}; POST /api/signup
+// {name, company, email, request_id?} (public) opens a case like an inbound email and plays the case
+// flow (Intake, Tax, QA, Accounting) with tool calls.
 
 import { createServer } from "node:http";
 
@@ -191,8 +194,11 @@ function order(text, via) {
   const at = (fn) => steps.push(fn);
   const handoff = (seat, tool) => {
     at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: "cos", tool: "send_to_agent", decision: "allow", read_people: false }));
+    at(() => emit("tool.called", { tool: "send_to_agent", status: "done", order_id: ref }, { actor: "cos" }));
     at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: seat, tool, decision: "allow", read_people: false }));
+    at(() => emit("tool.called", { tool, status: "done", order_id: ref }, { actor: seat }));
   };
+  const call = (seat, tool, status = "done") => at(() => emit("tool.called", { tool, status, order_id: ref }, { actor: seat }));
   const w = words(text);
   if (/advertis|\bads?\b|post|linkedin|market/.test(w)) {
     handoff("mkt", "make_ad");
@@ -201,6 +207,7 @@ function order(text, via) {
       emit("ad.created", { kind: "client", headline: "Your Delaware franchise tax, done right", image_url: `http://127.0.0.1:${PORT}/assets/ad_${n}.svg`, order_id: ref }, { actor: "mkt" });
     });
     for (const channel of ["x", "linkedin"]) {
+      call("mkt", "post_social");
       at(() =>
         emit("post.published", { channel, text: "Delaware sent you an $85,165 franchise tax bill? Most startups owe $450. U-Tax checks yours free.", url: `https://${channel}.com/utax/status/${events.length}`, image_url: `http://127.0.0.1:${PORT}/assets/ad_${ads}.svg`, order_id: ref }, { actor: "mkt" }),
       );
@@ -211,10 +218,12 @@ function order(text, via) {
     handoff("hr", "source_candidates");
     at(() => emit("tool.bought", { tool: "monid.search", provider: "monid", order_id: ref }, { actor: "hr", cost_usd: "0.05" }));
     at(() => emit("hr.sourced", { count: 3, source: "monid", order_id: ref }, { actor: "hr" }));
+    call("hr", "list_candidates");
     for (let i = 0; i < want; i++) {
       const label = `Candidate ${String.fromCharCode(65 + (candidates++ % 26))}`;
       const id = `cand_${candidates}`;
       const start = new Date(Date.now() + 86400000 + i * 3600000).toISOString();
+      call("hr", "hr_outreach");
       at(() => emit("hr.outreach", { candidate_id: id, label, slot: start, order_id: ref }, { actor: "hr" }));
       at(() => emit("call.booked", { start, minutes: 20, invitee_masked: label, kind: "candidate", order_id: ref }, { actor: "hr" }));
     }
@@ -225,6 +234,37 @@ function order(text, via) {
   }
   steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
   return o.id;
+}
+
+let signups = 0;
+/** §5a POST /api/signup: a case opened like an inbound email, then the crew works it, step by step. */
+function signup(name, company, email) {
+  const n = 40 + ++signups;
+  const caseId = `case_${n}`;
+  const masked = `Team #${n}`;
+  const [user, host] = email.split("@");
+  const from = `${user.slice(0, 1)}***@${host}`;
+  cases.push({ case_id: caseId, masked_name: masked, status: "INTAKE_PENDING", flagged: false });
+  emit("email.received", { masked_name: masked, from_masked: from, subject: "Free checkup sign-up", body: "(sign-up form: the welcome email asks for the numbers)", source: "signup" }, { actor: "intake", case_id: caseId });
+  const steps = [];
+  const at = (fn) => steps.push(fn);
+  const call = (seat, tool, status = "done") => at(() => emit("tool.called", { tool, status }, { actor: seat, case_id: caseId }));
+  call("cos", "list_open_cases");
+  at(() => emit("naive.confirm", { session_id: `ses_${events.length}`, agent: "cos", tool: "send_to_agent", decision: "allow", read_people: false }));
+  call("cos", "send_to_agent");
+  call("intake", "get_case");
+  call("intake", "extract_facts");
+  at(() => emit("facts.extracted", { facts: { incorporated_delaware: true, authorized_shares: 10000000, issued_shares: 8000000, stated_par: "0.00001", gross_assets_cents: 50000000, foreign_owner_25: false }, quotes: {}, assumed: [] }, { actor: "intake", case_id: caseId }));
+  call("tax", "law_search");
+  at(() => emit("law.searched", { query: "Delaware franchise tax assumed par value capital method", results: [{ cite: "8 Del. C. § 503", snippet: "assumed par value capital method" }] }, { actor: "tax", case_id: caseId }));
+  call("tax", "compute_tax");
+  at(() => emit("tax.computed", { authorized_method_cents: 8516500, assumed_par_method_cents: 40000, chosen: "assumed_par", annual_report_fee_cents: 5000, fee_source: "snapshot", total_cents: 45000, due_date: "2027-03-01", form5472_flag: false, rnd_flag: false, engine_version: "mock" }, { actor: "tax", case_id: caseId }));
+  call("qa", "qa_check");
+  at(() => emit("qa.passed", { checks: [{ field: "total", ok: true, note: "engine re-run matches" }, { field: "assumed_par_method", ok: true, note: "matches" }] }, { actor: "qa", case_id: caseId }));
+  call("acct", "send_memo", "needs_approval");
+  at(() => requestApproval(`memo for ${masked}`, caseId));
+  steps.forEach((fn, i) => setTimeout(fn, PACE * (i + 1)));
+  return { case_id: caseId, masked_name: masked };
 }
 
 /** The ad as the gateway would render it (an SVG stand-in for its PNG): firm name, headline, the real example. */
@@ -292,6 +332,15 @@ const server = createServer(async (req, res) => {
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
   const ad = req.method === "GET" && /^\/assets\/ad_([0-9]{1,6})\.svg$/.exec(url.pathname);
   if (ad) return res.writeHead(200, { ...cors, "Content-Type": "image/svg+xml", "Cache-Control": "no-store" }).end(adSvg(ad[1]));
+  // §5a: the client sign-up is public (the /talk per-IP limits apply on the real gateway).
+  if (req.method === "POST" && url.pathname === "/api/signup") {
+    const f = (k) => (body && typeof body[k] === "string" ? body[k].trim().slice(0, 200) : "");
+    const name = f("name"), company = f("company"), email = f("email");
+    if (!name || !company || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return out(400, { error: { code: "bad_input", message: "name, company and a valid email are required" } });
+    if (process.env.MOCK_SIGNUP === "429") return out(429, { error: { code: "at_capacity", message: "U-Tax is at capacity today. Email checkup@u-tax.app and we'll get to you tomorrow." } });
+    signup(name, company, email);
+    return out(200, { ok: true }); // v1.12.2: never says who is already a client
+  }
   // The customer mint (/talk) is public, like the gateway's; with no voice provider it is 503 (D30).
   if (req.method === "POST" && url.pathname === "/api/voice/session" && (!body || body.mode !== "ceo")) {
     return out(503, { error: { code: "voice_unavailable", message: "no Realtime provider" } });

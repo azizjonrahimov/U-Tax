@@ -99,7 +99,11 @@ function parkedAt(size: string): Record<string, Pos> {
   // Desks sit just above the footer, whose height scales with the projector size.
   const footerTop = document.querySelector(".theater footer")?.getBoundingClientRect().top ?? H - 74;
   const y0 = Math.max(0, footerTop - 46);
-  return Object.fromEntries(AGENTS.map(([id], i) => [id, { x: W * 0.06 + i * W * 0.1, y: y0 + (i % 2) * 14 }]));
+  // D32: inside the office shell the theater doesn't start at the window's left edge.
+  const box = document.querySelector(".theater")?.getBoundingClientRect();
+  const left = box?.left ?? 0;
+  const width = box && box.width > 0 ? box.width : W;
+  return Object.fromEntries(AGENTS.map(([id], i) => [id, { x: left + width * 0.06 + i * width * 0.1, y: y0 + (i % 2) * 14 }]));
 }
 
 const subscribeResize = (cb: () => void) => {

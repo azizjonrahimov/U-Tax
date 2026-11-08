@@ -1,0 +1,380 @@
+"use client";
+
+// D32 /office: the firm's app shell. A sidebar lists every department in the firm's order; each
+// opens a live workspace (a browser window an agent drives, its step list and its KPIs), all drawn
+// from the event log. Auto-follow opens whichever department acted last; any click takes over.
+
+import Link from "next/link";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { Theater } from "@/components/theater/Theater";
+import { formatCents, formatClock } from "@/theater/format";
+import type { FirmNumbers } from "@/theater/rail";
+import { useFirmFeed, type FeedStatus } from "@/office/feed";
+import { SEAT_NAME, SEAT_ROLE, SEATS, type Seat, type Workspace, type WsStep } from "@/office/workspace";
+import "./office.css";
+
+type View = "overview" | Seat;
+/** Auto-follow stays on a department at least this long before moving to the next one that acted. */
+const DWELL_MS = 6000;
+/** A desk counts as working while its last step is this recent (wall clock, live feed). */
+const WORKING_MS = 20_000;
+
+const seatColor = (seat: Seat) => `var(--seat-${seat})`;
+
+function viewFromUrl(): View {
+  if (typeof window === "undefined") return "overview";
+  const d = new URLSearchParams(window.location.search).get("d");
+  return d && (SEATS as readonly string[]).includes(d) ? (d as Seat) : "overview";
+}
+
+export function Office() {
+  const { office, numbers, status } = useFirmFeed();
+  const [view, setView] = useState<View>("overview");
+  const [follow, setFollow] = useState(true);
+  const lastSwitch = useRef(0);
+  /** Wall clock for the "working" dots, refreshed every few seconds (render stays pure). */
+  const [now, setNow] = useState(0);
+
+  useEffect(() => {
+    // After hydration (the server renders the overview): a shared link to a department opens it and stays there.
+    const t = setTimeout(() => {
+      setNow(Date.now());
+      const v = viewFromUrl();
+      if (v !== "overview") {
+        setView(v);
+        setFollow(false);
+      }
+    }, 0);
+    const tick = setInterval(() => setNow(Date.now()), 4000);
+    return () => {
+      clearTimeout(t);
+      clearInterval(tick);
+    };
+  }, []);
+
+  // Auto-follow: open the department that just acted, no faster than one every DWELL_MS.
+  useEffect(() => {
+    if (!follow || !office.lastSeat) return;
+    const target = office.lastSeat;
+    const wait = Math.max(0, lastSwitch.current + DWELL_MS - Date.now());
+    const t = setTimeout(() => {
+      setView((v) => {
+        if (v === target) return v;
+        lastSwitch.current = Date.now();
+        return target;
+      });
+    }, wait);
+    return () => clearTimeout(t);
+  }, [follow, office.lastKey, office.lastSeat]);
+
+  const open = useCallback((v: View) => {
+    setFollow(false);
+    setView(v);
+    const url = new URL(window.location.href);
+    if (v === "overview") url.searchParams.delete("d");
+    else url.searchParams.set("d", v);
+    window.history.replaceState(null, "", url);
+  }, []);
+
+  // A desk is working while its newest step is recent (the step's own log time).
+  const working = (seat: Seat) => {
+    const ts = office.desks[seat].steps[0]?.ts;
+    const at = ts ? Date.parse(ts) : NaN;
+    return Number.isFinite(at) && now - at < WORKING_MS && now - at > -WORKING_MS;
+  };
+
+  return (
+    <div className="office" style={SEAT_VARS}>
+      <nav className="side" aria-label="Departments">
+        <Link href="/" className="side-brand" aria-label="U-Tax home">
+          <span className="mark" aria-hidden>
+            U
+          </span>
+          <span>
+            U-Tax <small>office</small>
+          </span>
+        </Link>
+        <ul>
+          <li>
+            <button className={`side-item${view === "overview" ? " on" : ""}`} aria-current={view === "overview" ? "page" : undefined} onClick={() => open("overview")}>
+              <span className="dot all" aria-hidden />
+              <span className="side-name">Overview</span>
+              <span className="side-meta">theater</span>
+            </button>
+          </li>
+          {SEATS.map((seat) => {
+            const desk = office.desks[seat];
+            const busy = working(seat);
+            return (
+              <li key={seat}>
+                <button
+                  className={`side-item${view === seat ? " on" : ""}${busy ? " busy" : ""}`}
+                  aria-current={view === seat ? "page" : undefined}
+                  onClick={() => open(seat)}
+                  style={{ "--c": seatColor(seat) } as CSSProperties}
+                >
+                  {/* key: a new step re-runs the one-time pulse */}
+                  <span key={desk.steps[0]?.key ?? "idle"} className={`dot${busy ? " pulse" : ""}`} aria-hidden />
+                  <span className="side-name">{SEAT_NAME[seat]}</span>
+                  <span className="side-meta">{busy ? "working" : desk.steps.length ? `${desk.steps.length} steps` : "idle"}</span>
+                </button>
+              </li>
+            );
+          })}
+          <li className="side-sep">
+            <Link href="/ceo" className="side-item">
+              <span className="dot ceo" aria-hidden />
+              <span className="side-name">CEO console</span>
+              <span className="side-meta">↗</span>
+            </Link>
+          </li>
+        </ul>
+        <div className="side-foot">
+          <FeedDot status={status} />
+          <button className={`follow${follow ? " on" : ""}`} aria-pressed={follow} onClick={() => setFollow((f) => !f)}>
+            {follow ? "Following live" : "Follow live"}
+          </button>
+        </div>
+      </nav>
+
+      <main className="office-main">
+        {view === "overview" ? (
+          <div className="overview">
+            <Theater />
+          </div>
+        ) : (
+          <Department key={view} desk={office.desks[view]} numbers={numbers} working={working(view)} following={follow} />
+        )}
+      </main>
+    </div>
+  );
+}
+
+const SEAT_VARS = {
+  "--seat-cos": "#ff4d3d",
+  "--seat-intake": "#4da3ff",
+  "--seat-tax": "#ffb547",
+  "--seat-qa": "#3ddc84",
+  "--seat-acct": "#c77dff",
+  "--seat-mkt": "#ff6fb5",
+  "--seat-hr": "#2ee6d6",
+} as CSSProperties;
+
+function FeedDot({ status }: { status: FeedStatus }) {
+  const label = { connecting: "Connecting…", live: "Live", reconnecting: "Reconnecting…", offline: "No gateway" }[status];
+  return (
+    <span className={`feed ${status}`} role="status">
+      <span className="dot" aria-hidden />
+      {label}
+    </span>
+  );
+}
+
+// ------------------------------------------------------------------ one department
+
+function Department({ desk, numbers, working, following }: { desk: Workspace; numbers: FirmNumbers | null; working: boolean; following: boolean }) {
+  const seat = desk.seat;
+  const step = desk.steps[0];
+  return (
+    <div className="dept" style={{ "--c": seatColor(seat) } as CSSProperties}>
+      <header className="dept-head">
+        <div>
+          <h1>
+            <span className="dot" aria-hidden /> {SEAT_NAME[seat]}
+          </h1>
+          <p>{SEAT_ROLE[seat]}</p>
+        </div>
+        <span className={`dept-state${working ? " on" : ""}`}>{working ? "Working now" : step ? `Last step ${formatClock(step.ts)}` : "No steps yet"}</span>
+        {following && <span className="dept-follow">Auto-following the firm</span>}
+      </header>
+      <div className="dept-grid">
+        <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} />
+        <aside className="dept-side">
+          <Kpis desk={desk} numbers={numbers} />
+          <section className="steps" aria-label={`${SEAT_NAME[seat]} steps`}>
+            <h2>Steps</h2>
+            {desk.steps.length === 0 ? (
+              <p className="empty">Nothing yet. Each step this department takes shows here as it happens.</p>
+            ) : (
+              <ol>
+                {desk.steps.slice(0, 14).map((s, i) => (
+                  <li key={s.key} className={`${i === 0 ? "now " : ""}${s.kind} ${s.status}`}>
+                    <span className="st" aria-hidden>
+                      {STATUS_ICON[s.status]}
+                    </span>
+                    <span className="tx">{s.text}</span>
+                    <time className="mono">{formatClock(s.ts, true)}</time>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </section>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+const STATUS_ICON: Readonly<Record<WsStep["status"], string>> = { done: "✓", needs_approval: "⏳", refused: "⛔", error: "✕", other: "•" };
+
+/** The department's browser: tabs, address bar, the page, and the agent's cursor driving it. */
+function Window({ seat, step, tabs, trail }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[] }) {
+  const body = useRef<HTMLDivElement>(null);
+  const [cursor, setCursor] = useState<{ x: number; y: number; press: number }>({ x: 24, y: 24, press: 0 });
+  const [typed, setTyped] = useState<number>(Infinity);
+  const reduce = useRef(false);
+
+  useEffect(() => {
+    reduce.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }, []);
+
+  // A new step: the cursor travels to the field it touched, presses, and types the value in.
+  useLayoutEffect(() => {
+    if (!step || !body.current) return;
+    const target = body.current.querySelector<HTMLElement>('[data-focus="1"]');
+    const box = body.current.getBoundingClientRect();
+    const r = target?.getBoundingClientRect();
+    const x = r ? r.left - box.left + Math.min(r.width - 8, 140) : 24;
+    const y = r ? r.top - box.top + r.height / 2 : 24;
+    const full = step.fields[step.focus]?.value.length ?? 0;
+    if (reduce.current) {
+      setCursor((c) => ({ x, y, press: c.press + 1 }));
+      setTyped(Infinity);
+      return;
+    }
+    setTyped(0);
+    setCursor((c) => ({ ...c, x, y }));
+    const press = setTimeout(() => setCursor((c) => ({ ...c, press: c.press + 1 })), 620);
+    let shown = 0;
+    let typing: ReturnType<typeof setInterval> | undefined;
+    const start = setTimeout(() => {
+      typing = setInterval(() => {
+        shown += Math.max(1, Math.ceil(full / 40));
+        setTyped(shown);
+        if (shown >= full) clearInterval(typing);
+      }, 28);
+    }, 760);
+    return () => {
+      clearTimeout(press);
+      clearTimeout(start);
+      clearInterval(typing);
+    };
+  }, [step]);
+
+  const site = step?.site ?? "about:blank";
+  return (
+    <section className="win" aria-label={`${SEAT_NAME[seat]}'s workspace`}>
+      <div className="win-bar">
+        <span className="lights" aria-hidden>
+          <i />
+          <i />
+          <i />
+        </span>
+        <div className="tabs" role="tablist" aria-label="Open tools">
+          {(tabs.length ? tabs : ["New tab"]).map((t) => (
+            <span key={t} role="tab" aria-selected={t === site} className={`tab${t === site ? " on" : ""}`}>
+              {t}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="win-addr">
+        <span className="lock" aria-hidden>
+          ⌁
+        </span>
+        <span className="mono addr">{site}</span>
+        {step && <span className={`badge ${step.status}`}>{STATUS_WORD[step.status]}</span>}
+      </div>
+      {/* the page loads (a short bar) whenever a new step arrives */}
+      <div key={step?.key ?? "none"} className="win-load" aria-hidden />
+      <div className="win-body" ref={body}>
+        {!step ? (
+          <div className="win-empty">
+            <p>Waiting for {SEAT_NAME[seat]}&rsquo;s next step.</p>
+            <p className="faint">Every step here comes from the firm&rsquo;s log as it happens. Nothing is staged.</p>
+          </div>
+        ) : (
+          <div key={step.key} className="page">
+            <h2>{step.text}</h2>
+            <dl>
+              {step.fields.map((f, i) => (
+                <div key={f.label} className={`row${i === step.focus ? " focus" : ""}`} data-focus={i === step.focus ? "1" : undefined}>
+                  <dt>{f.label}</dt>
+                  <dd className={i === step.focus ? "mono typing" : "mono"}>{i === step.focus && Number.isFinite(typed) ? f.value.slice(0, typed) : f.value}</dd>
+                </div>
+              ))}
+            </dl>
+            {step.image && (
+              // eslint-disable-next-line @next/next/no-img-element -- the gateway's own ad image, checked by the feed
+              <img className="shot" src={step.image} alt="The image this step produced" referrerPolicy="no-referrer" onError={(e) => (e.currentTarget.hidden = true)} />
+            )}
+          </div>
+        )}
+        {trail.length > 0 && (
+          // The tab's history: the pages this department went through just before, newest first.
+          <ol className="trail" aria-label="Earlier in this workspace">
+            {trail.map((t) => (
+              <li key={t.key} className={t.status}>
+                <span className="mono">{t.site}</span>
+                <span>{t.text}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+        {step && (
+          <div className="agent" style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }} aria-hidden>
+            <svg width="18" height="20" viewBox="0 0 18 20">
+              <path d="M1 1 L16 9 L9 11 L6 18 Z" />
+            </svg>
+            <span key={cursor.press} className="ring" />
+            <span className="who">{SEAT_NAME[seat]}</span>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const STATUS_WORD: Readonly<Record<WsStep["status"], string>> = {
+  done: "Done",
+  needs_approval: "Needs your OK",
+  refused: "Refused",
+  error: "Failed",
+  other: "Reported",
+};
+
+function Kpis({ desk, numbers }: { desk: Workspace; numbers: FirmNumbers | null }) {
+  const c = (k: string) => desk.counts[k] ?? 0;
+  const tiles: [string, string][] = (() => {
+    switch (desk.seat) {
+      case "cos":
+        return [["Clients", numbers ? String(numbers.firm.clients) : "—"], ["Waiting on the CEO", numbers ? String(numbers.queue.waiting) : "—"], ["Briefs", String(c("briefs"))]];
+      case "intake":
+        return [["Emails", String(c("emails"))], ["Facts pulled", String(c("facts"))], ["Follow-ups", String(c("follow-ups"))]];
+      case "tax":
+        return [["Estimates", String(c("estimates"))], ["Law searches", String(c("searches"))], ["Tax saved", numbers ? formatCents(numbers.money.tax_saved_cents) : "—"]];
+      case "qa":
+        return [["Passed", String(c("passed"))], ["Stopped", String(c("failed"))], ["Flagged", String(c("flags"))]];
+      case "acct":
+        return [["Memos sent", String(c("memos"))], ["Clients", numbers ? String(numbers.firm.clients) : "—"], ["Tax saved", numbers ? formatCents(numbers.money.tax_saved_cents) : "—"]];
+      case "mkt":
+        return [["Posts", String(c("posts"))], ["Ads made", String(c("ads"))], ["Spent (firm)", numbers ? `$${numbers.money.spent_usd}` : "—"]];
+      case "hr":
+        return [["Leads found", String(c("leads"))], ["Emailed", String(c("contacted"))], ["Applicants", numbers ? String(numbers.hiring.applicants) : "—"]];
+    }
+  })();
+  return (
+    <section className="kpis" aria-label="Key numbers">
+      {tiles.map(([label, value]) => (
+        <div key={label} className="kpi">
+          <b className="mono">{value}</b>
+          <span>{label}</span>
+        </div>
+      ))}
+      <div className="kpi">
+        <b className="mono">{c("tools")}</b>
+        <span>Tool calls</span>
+      </div>
+    </section>
+  );
+}
