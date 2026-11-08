@@ -1,4 +1,4 @@
-# API contract (v1.14): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.15): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -498,6 +498,17 @@ v1.11.1, event payloads (the frontend's proposal, adopted):
   - The theater groups steps by `order_id`, and falls back to matching by department when it's
     absent.
 
+**v1.15 (design D35, documents):**
+
+| Tool | Agent | Input | Effect |
+|---|---|---|---|
+| `prepare_documents` | acct | `{case_id, order_id?}` | Refused unless `QA_PASSED`. The gateway builds the workpaper .xlsx, the memo .docx and a books entry from the engine's result and the extracted facts only. It verifies each file (it re-opens it and checks every figure against the engine) and stores them under `UTAX_DATA_DIR/docs/<case_id>/`. Events: one `doc.step` per build step `{doc: "workpaper"\|"memo"\|"books", step, detail}` (for example "Authorized Shares Method: 10,000,000 shares → $85,165"); then `doc.created {doc, file_name, sha256, pages_or_sheets}`, and `doc.verified {doc, ok}`. It's idempotent per case and memo version. |
+
+`send_memo` (v1.15) attaches the case's verified workpaper and memo (AgentMail attachments), and is refused
+(`docs_missing`) when `prepare_documents` hasn't run for the current memo version. The theater gets
+`doc.*` payloads with no client names (masked labels only). The files are never served publicly;
+`GET /api/docs/<case_id>/<file_name>` is admin or session only (the CEO can open them in `/office`).
+
 Fact names: `incorporated_delaware`, `authorized_shares`, `issued_shares`, `stated_par`,
 `gross_assets`, `foreign_owner_25`. Optional (never required to finish a case, asked once
 at most): `gross_receipts` (cents) and `years_with_receipts` (int), used only for the R&D
@@ -682,6 +693,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.15 (2026-11-07, design D35): prepare_documents (xlsx workpaper, docx memo, books entry), doc.step/created/verified events, memo attachments, /api/docs.
 
 - v1.14 (2026-11-07, design D34): /api/ceo/talk conversation, MCP seat ceo (direct actions, no confirm), undo.
 
