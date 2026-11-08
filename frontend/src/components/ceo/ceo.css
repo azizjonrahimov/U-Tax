@@ -123,8 +123,7 @@
   .ceo *, .ceo *::before, .ceo *::after { transition-duration: 0s !important; animation: none !important; }
 }
 
-/* D33: the ear's state and what it heard last */
-.ceo .heard { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; font-size: 14px; color: var(--dim, #a3a2ba); }
-.ceo .heard q { color: var(--text, #ecebf5); font-weight: 600; overflow-wrap: anywhere; }
-.ceo .heard .ear-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint, #85849f); flex-shrink: 0; }
-.ceo .heard .ear-dot.on { background: #3ddc84; }
+/* D33: what the ear heard last: one line under the controls, the transcript at body size */
+.ceo .heard { margin: 6px 0 0; font-size: 15px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ceo .heard q { color: var(--text); font-size: 17px; font-weight: 600; }
+.ceo .heard .note { color: var(--amber); }

@@ -171,31 +171,112 @@ export type ToolResult =
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
 
+/** Words as heard: lower case, no punctuation, single spaces. */
+const plainWords = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+
 /** Words compared as heard: case, punctuation and spacing don't make a line "new". */
-export const sameWords = (a: string, b: string) => {
-  const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
-  return norm(a) === norm(b);
-};
+export const sameWords = (a: string, b: string) => plainWords(a) === plainWords(b);
 
 /**
  * D33 voice loop guard: the browser's recognizer can deliver one utterance twice (Chrome's
- * continuous mode around a restart). A final identical to the last one within this window is the
+ * continuous mode, and across a restart). A final identical to the last utterance within this
+ * window (counted from the later of that utterance and the ear's current session start) is the
  * same utterance, never a second order. A person repeating themselves takes longer than this.
  */
 export const REPEAT_HEARD_MS = 2000;
-/** A line identical to one that started this recently is not said again (a double end/restart). */
+/** A reply to the same command, identical and this recent after it finished, is not said again. */
 export const REPEAT_SAID_MS = 3000;
+/** A final that repeats words the console said this recently is the room's echo of it. */
+export const ECHO_WINDOW_MS = 8000;
+
+/** Fillers and address words before a command ("okay, stop everything", "U-Tax, pause everything"). */
+const STOP_FILLER = String.raw`(?:(?:ok|okay|hey|so|um|uh|please|u\s*tax)\s+)*`;
+const STOP_EVERYTHING_RE = new RegExp(String.raw`^${STOP_FILLER}(?:stop|pause|halt)\s+(?:everything|all(?:\s+of\s+it)?|the\s+firm)(?:\s+(?:now|please|right\s+now))?$`, "u");
+const STOP_COMMAND_RE = new RegExp(String.raw`^${STOP_FILLER}(?:stop|pause|halt)\b`, "u");
 
 /**
- * "Stop everything" / "pause everything" said or typed: the console's STOP button path, never a
- * command (v1.13 answers anything but confirm/cancel with "say" while a card is open).
+ * The whole utterance is "stop everything" (fillers allowed): the console's STOP button path,
+ * never a command. "Stop all posts" or "pause everything except payroll" are not this.
  */
-export const isStopEverything = (text: string) =>
-  /^\s*(?:please\s+)?(?:stop|pause|halt)\s+(?:everything|all(?:\s+of\s+it)?|the\s+firm)\b/iu.test(text.replace(/[^\p{L}\p{N}\s]/gu, " "));
+export const isStopEverything = (text: string) => STOP_EVERYTHING_RE.test(plainWords(text));
+/** A stop-kind command ("stop posting", "pause emails"): v1.13.1 runs it at once and it cancels the open card. */
+export const isStopCommand = (text: string) => STOP_COMMAND_RE.test(plainWords(text));
 
 /** Whether `text` (heard or to be said at `now`) is a new line after `last`. */
 export function isFresh(last: { text: string; at: number } | null, text: string, now: number, windowMs: number): boolean {
   return !last || now - last.at > windowMs || !sameWords(last.text, text);
+}
+
+/** What the ear remembers across recognizer sessions: the last utterance and the console's recent lines. */
+export interface EarMemory {
+  last: { text: string; at: number } | null;
+  said: { text: string; at: number }[];
+}
+/** One recognizer session: when it started, and the transcript handled at each result index. */
+export interface EarSession {
+  start: number;
+  handled: Map<number, string>;
+}
+export const newEarMemory = (): EarMemory => ({ last: null, said: [] });
+export const newEarSession = (now: number): EarSession => ({ start: now, handled: new Map() });
+
+/** Remember a line the console started saying (for the self-echo check); keeps the last few. */
+export function rememberSaid(memory: EarMemory, text: string, now: number) {
+  memory.said = [...memory.said.filter((l) => now - l.at <= ECHO_WINDOW_MS), { text, at: now }].slice(-6);
+}
+
+export type EarDrop = "repeat" | "echo";
+
+/**
+ * Which finals of one recognizer result event are new utterances. A final is dropped when it is:
+ * - the same transcript at an index this session already handled (a re-delivery);
+ * - the last utterance again within REPEAT_HEARD_MS of the later of that utterance and this
+ *   session's start (a re-delivery across a restart);
+ * - the console's own recent line (its words, at least three, run inside a line said in the last
+ *   ECHO_WINDOW_MS, or match a short line whole).
+ * Mutates `session` and `memory`; returns what to act on and what was dropped.
+ */
+export function earFinals(
+  results: readonly { index: number; text: string; isFinal: boolean }[],
+  session: EarSession,
+  memory: EarMemory,
+  now: number,
+): { take: string[]; dropped: { text: string; why: EarDrop }[] } {
+  const take: string[] = [];
+  const dropped: { text: string; why: EarDrop }[] = [];
+  for (const r of results) {
+    const text = r.text.trim();
+    if (!r.isFinal || !text) continue;
+    if (session.handled.get(r.index) === plainWords(text)) continue;
+    session.handled.set(r.index, plainWords(text));
+    const last = memory.last;
+    if (last && sameWords(last.text, text) && now - Math.max(last.at, session.start) <= REPEAT_HEARD_MS) {
+      dropped.push({ text, why: "repeat" });
+      continue;
+    }
+    const heard = plainWords(text);
+    const echo = memory.said.some((l) => {
+      if (now - l.at > ECHO_WINDOW_MS) return false;
+      const said = plainWords(l.text);
+      return heard === said || (heard.split(" ").length >= 3 && ` ${said} `.includes(` ${heard} `));
+    });
+    if (echo) {
+      dropped.push({ text, why: "echo" });
+      continue;
+    }
+    memory.last = { text, at: now };
+    take.push(text);
+  }
+  return { take, dropped };
+}
+
+/**
+ * The reply-line guard: a reply to the same command (same key), identical, within REPEAT_SAID_MS
+ * of the last one finishing, is not said again. Lines without a key (readbacks, alerts, notices)
+ * are always said: two alerts can share words, and a readback must really play to arm a confirm.
+ */
+export function shouldSay(last: { key: string; text: string; at: number } | null, key: string | undefined, text: string, now: number): boolean {
+  return !key || !last || last.key !== key || !sameWords(last.text, text) || now - last.at > REPEAT_SAID_MS;
 }
 
 /** A proposal's lifetime (contract: 60 s), and the fallback when the wire's expiry can't be used. */
@@ -225,7 +306,7 @@ export function parseToolResult(raw: unknown, now: number): ToolResult | null {
     case "unknown":
       return { kind: "unknown", say: str(raw.say) || "I didn't catch a command." };
     case "say":
-      return { kind: "say", say: str(raw.say) || "Say confirm or cancel." };
+      return { kind: "say", say: str(raw.say) || "I'm listening." };
     case "proposal": {
       const id = str(raw.proposal_id);
       const readback = str(raw.readback);
