@@ -90,7 +90,7 @@ function Mail({ art }: { art: Extract<Artifact, { kind: "mail" }> }) {
         </div>
       )}
       <div className="art-foot">
-        <span className={`send${art.state === "done" && !typing ? " sent" : ""}`}>{art.state === "done" && !typing ? "Sent ✓" : "Send"}</span>
+        <span className={`send${art.state === "done" && !typing ? " sent" : art.state === "failed" ? " failed" : ""}`}>{art.state === "failed" ? "Not sent" : art.state === "done" && !typing ? "Sent ✓" : "Send"}</span>
       </div>
     </div>
   );
@@ -120,7 +120,7 @@ function Post({ art }: { art: Extract<Artifact, { kind: "post" }> }) {
         <img className="post-img" src={art.image} alt="The post's image" referrerPolicy="no-referrer" onError={(e) => (e.currentTarget.hidden = true)} />
       )}
       <div className="art-foot">
-        <span className={`send${art.state === "done" && !typing ? " sent" : ""}`}>{art.state === "done" && !typing ? `Posted${on ? ` on ${on}` : ""} ✓` : "Post"}</span>
+        <span className={`send${art.state === "done" && !typing ? " sent" : art.state === "failed" ? " failed" : ""}`}>{art.state === "failed" ? "Not posted" : art.state === "done" && !typing ? `Posted${on ? ` on ${on}` : ""} ✓` : "Post"}</span>
       </div>
     </div>
   );
@@ -128,15 +128,19 @@ function Post({ art }: { art: Extract<Artifact, { kind: "post" }> }) {
 
 const DOC_LABEL = { workpaper: "Workpaper", memo: "Memo", books: "Books" } as const;
 const MAX_GRID_ROWS = 24;
-const MAX_GRID_COLS = 5;
+const MAX_GRID_COLS = 9;
+/** A value that is a number (money, a count, a percentage): right-aligned (labels like "1. Total gross assets" aren't). */
+const NUMERIC = /^[-($]?[\d,]+(\.\d+)?\)?%?$/;
 
 /** The case's documents, played back in the order they were built: cells, then sections, then the books row. */
 function Docs({ art }: { art: Extract<Artifact, { kind: "docs" }> }) {
   const n = useReveal(art.units.length, cellsTick, 140);
   const shown = art.units.slice(0, n);
-  const at = shown[shown.length - 1] ?? art.units[0];
-  const doc = at?.doc ?? "workpaper";
   const done = n >= art.units.length;
+  const lastWork = [...shown].reverse().find((u) => u.doc === "workpaper");
+  // Played through: rest on the workpaper's computation (the books row is one line of the firm's ledger).
+  const at = done && lastWork ? lastWork : (shown[shown.length - 1] ?? art.units[0]);
+  const doc = at?.doc ?? "workpaper";
   const present = (["workpaper", "memo", "books"] as const).filter((d) => art[d]);
   return (
     <div className="art docs">
@@ -170,7 +174,7 @@ function Docs({ art }: { art: Extract<Artifact, { kind: "docs" }> }) {
 
 const colIndex = (letters: string) => [...letters].reduce((a, ch) => a * 26 + ch.charCodeAt(0) - 64, 0) - 1;
 
-function Grid({ book, sheet, revealed, last }: { book: Book | null; sheet: string | undefined; revealed: { sheet?: string; cell?: string }[]; last: { cell?: string } | undefined }) {
+function Grid({ book, sheet, revealed, last: lastCell }: { book: Book | null; sheet: string | undefined; revealed: { sheet?: string; cell?: string }[]; last: { cell?: string } | undefined }) {
   if (!book) return null;
   const tab = sheet ?? book.sheets[0] ?? "Sheet1";
   const cells = book.cells[tab];
@@ -203,15 +207,20 @@ function Grid({ book, sheet, revealed, last }: { book: Book | null; sheet: strin
     );
   }
   const shown = new Set(revealed.filter((u) => u.sheet === tab && u.cell).map((u) => u.cell as string));
+  let minRow = Infinity;
   let maxRow = 1;
   let maxCol = 1;
   for (const ref of Object.keys(cells)) {
     const m = /^([A-Z]{1,2})([0-9]+)$/.exec(ref);
     if (!m) continue;
+    minRow = Math.min(minRow, Number(m[2]));
     maxRow = Math.max(maxRow, Number(m[2]));
     maxCol = Math.max(maxCol, colIndex(m[1]) + 1);
   }
-  const rows = Math.min(maxRow, MAX_GRID_ROWS);
+  // The rows written, up to MAX_GRID_ROWS ending at the newest one (a ledger row can be row 400).
+  const last = Math.min(maxRow, Math.max(minRow === Infinity ? 1 : minRow, maxRow));
+  const first = Math.max(minRow === Infinity ? 1 : Math.min(minRow, last), last - MAX_GRID_ROWS + 1);
+  const rowNums = Array.from({ length: last - first + 1 }, (_, i) => first + i);
   const cols = Math.min(maxCol, MAX_GRID_COLS);
   const letters = Array.from({ length: cols }, (_, i) => String.fromCharCode(65 + i));
   return (
@@ -226,14 +235,14 @@ function Grid({ book, sheet, revealed, last }: { book: Book | null; sheet: strin
           </tr>
         </thead>
         <tbody>
-          {Array.from({ length: rows }, (_, r) => (
-            <tr key={r}>
-              <th className="mono">{r + 1}</th>
-              {letters.map((l) => {
-                const ref = `${l}${r + 1}`;
+          {rowNums.map((row) => (
+            <tr key={row}>
+              <th className="mono">{row}</th>
+              {letters.map((l, ci) => {
+                const ref = `${l}${row}`;
                 const v = shown.has(ref) ? (cells[ref] ?? "") : "";
                 return (
-                  <td key={ref} className={`${/^[$\d(-]/.test(v) ? "mono num" : ""}${last?.cell === ref ? " fresh" : ""}`}>
+                  <td key={ref} className={`${ci > 0 && NUMERIC.test(v) ? "mono num" : ""}${lastCell?.cell === ref ? " fresh" : ""}`}>
                     {v}
                   </td>
                 );

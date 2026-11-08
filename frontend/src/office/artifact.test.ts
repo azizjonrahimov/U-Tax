@@ -143,3 +143,31 @@ describe("D37 live artifacts", () => {
     expect(STUDIO_ONLY.has("agent.activity")).toBe(true);
   });
 });
+
+describe("D37 red team: the real gateway's orderings and failures", () => {
+  it("a tool that produced nothing closes its composer on tool_done; a late tool_started never wipes what it just finished", () => {
+    let st = fold([act("mkt", "tool_started", { tool: "utax.post_social" }), act("mkt", "tool_done", { tool: "utax.post_social" })]);
+    expect(st.desks.mkt.art).toBeNull();
+    st = fold([
+      ev("memo.sent", { sent: { subject: "Your estimate", body: "Dear Team #7", to_masked: "f***@t.dev" } }, { actor: "acct", case_id: "c7" }),
+      act("acct", "tool_started", { tool: "utax.send_memo" }), // logged after the tool's own result
+    ]);
+    expect(st.desks.acct.art).toMatchObject({ kind: "mail", state: "done", subject: "Your estimate" });
+    expect(st.lastSeat).toBeNull();
+  });
+
+  it("a post the gateway logged as failed is never 'Posted'", () => {
+    const st = fold([ev("post.published", { channel: "x", text: "Hello", url: null, image_url: null }, { actor: "mkt", status: "failed" })]);
+    expect(st.desks.mkt.art).toMatchObject({ kind: "post", state: "failed" });
+  });
+
+  it("a new build (v2) starts fresh documents and un-verifies until its own checks pass", () => {
+    const step1 = (n: number) => ev("doc.step", { doc: "workpaper", step: 1, of: 5, detail: `Inputs: v${n}`, cells: [{ sheet: "Inputs", cell: "A1", value: `v${n}` }] }, { actor: "acct", case_id: "c7" });
+    let st = fold([step1(1), ev("doc.verified", { doc: "workpaper", ok: true }, { actor: "acct", case_id: "c7" })]);
+    const v1 = st.desks.acct.art?.key;
+    st = fold([step1(2)], st);
+    const art = st.desks.acct.art;
+    expect(art?.key).not.toBe(v1);
+    expect(art?.kind === "docs" ? [art.workpaper?.verified, art.state, art.workpaper?.cells.Inputs.A1] : []).toEqual([null, "drafting", "v2"]);
+  });
+});

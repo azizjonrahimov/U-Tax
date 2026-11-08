@@ -211,3 +211,4 @@
 .office .of-dept .doc-tabs span.on { color: var(--text); border-color: var(--c); }
 .office .of-dept .sheet td.fresh { background: color-mix(in srgb, var(--c) 22%, transparent); }
 .office .of-dept .sheet { overflow: auto; }
+.office .of-dept .art .send.failed { background: transparent; color: var(--red); border: 1px solid var(--red); }

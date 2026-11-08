@@ -14,7 +14,8 @@ import { formatCents } from "@/theater/format";
 import type { UTaxEvent } from "@/theater/events";
 import { SEATS, type Seat } from "./workspace";
 
-export type ArtifactState = "drafting" | "done";
+/** "failed": the gateway logged it as failed (a post that didn't go out): never shown as done. */
+export type ArtifactState = "drafting" | "done" | "failed";
 
 export interface MailArt {
   kind: "mail";
@@ -183,6 +184,23 @@ function put(st: Studio, seat: Seat, desk: Partial<Desk>, live?: string): Studio
 
 const emptyBook = (file: string): Book => ({ file, cells: {}, sheets: [], lines: [], verified: null });
 
+/** An artifact a tool opened that never got any content (the tool needed approval, was refused or failed). */
+export function empty(a: Artifact | null): boolean {
+  if (!a || a.state !== "drafting") return false;
+  switch (a.kind) {
+    case "mail":
+      return !a.body;
+    case "post":
+      return !a.text;
+    case "docs":
+      return a.units.length === 0;
+    case "calc":
+      return a.lines.length === 0;
+    case "invite":
+      return !a.with;
+  }
+}
+
 /** Fold one event into the studio. Unknown or malformed events change nothing. */
 export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
   const p: P = isObj(ev.payload) ? ev.payload : {};
@@ -198,7 +216,11 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
     const tool = bareTool(line(str(p, "tool"), 60)).slice(0, 40) || null;
     if (kind === "thinking") return put(st, seat, { act: { ts: ev.ts, kind: "thinking", tool: null } });
     if (kind === "tool_started" && tool) {
-      const art = artFor(tool, base);
+      let art = artFor(tool, base);
+      // The relay can log tool_started after the tool's own results (a stream opened late, or the
+      // gateway lock): a finished artifact of that kind from just now stays, and nothing moves.
+      const prior = desk.art;
+      if (art && prior && prior.kind === art.kind && prior.state !== "drafting" && Date.parse(ev.ts) - Date.parse(prior.ts) < 15_000) art = null;
       // Only a tool that makes something moves auto-follow (board reads and chatter don't).
       return put(st, seat, { act: { ts: ev.ts, kind: "tool", tool }, ...(art ? { art } : {}) }, art ? key : undefined);
     }
@@ -207,11 +229,10 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
       const notes = text && !ctx.seatFlagged(seat) ? { text, ts: ev.ts } : desk.notes;
       return put(st, seat, { act: { ts: ev.ts, kind: "writing", tool: null }, notes });
     }
-    if (kind === "tool_done") return put(st, seat, { act: { ts: ev.ts, kind: "thinking", tool: null } });
+    if (kind === "tool_done") return put(st, seat, { act: { ts: ev.ts, kind: "thinking", tool: null }, art: empty(desk.art) ? null : desk.art });
     if (kind === "idle") {
-      // A composer that never got anything closes; a finished artifact stays.
-      const art = desk.art && desk.art.state === "drafting" && desk.art.kind !== "docs" ? null : desk.art;
-      return put(st, seat, { act: null, art });
+      // A composer that never got anything closes; a finished artifact (or documents still building) stays.
+      return put(st, seat, { act: null, art: empty(desk.art) || (desk.art?.state === "drafting" && desk.art.kind !== "docs") ? null : desk.art });
     }
     return st;
   }
@@ -260,7 +281,7 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
         subject: hide ? "Hidden" : subject || fallbackSubject,
         body: hide ? HIDDEN : body,
         attachments: hide ? [] : attachments,
-        state: "done",
+        state: ev.status === "ok" ? "done" : "failed",
       };
       return put(st, seat, { art, act });
     }
@@ -268,7 +289,8 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
       const text = block(str(p, "text"), 600);
       if (!text) return st;
       const k = prev?.kind === "post" && prev.state === "drafting" ? prev.key : key;
-      return put(st, seat, { art: { ...base, key: k, kind: "post", channel: line(str(p, "channel"), 20).toLowerCase(), text, image: ctx.image(p.image_url) ?? null, state: "done" }, act });
+      const state = ev.status === "ok" ? "done" : "failed";
+      return put(st, seat, { art: { ...base, key: k, kind: "post", channel: line(str(p, "channel"), 20).toLowerCase(), text, image: ctx.image(p.image_url) ?? null, state }, act });
     }
     case "tax.computed": {
       const auth = num(p, "authorized_method_cents");
@@ -299,14 +321,15 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
       const doc = str(p, "doc");
       if (doc !== "workpaper" && doc !== "memo" && doc !== "books") return st;
       const detail = line(str(p, "detail"), 200);
-      const cur: Artifact & DocsArt =
-        prev?.kind === "docs" && prev.caseId === ev.case_id ? prev : { ...base, kind: "docs", workpaper: null, memo: null, books: null, units: [], state: "drafting" };
+      const fresh = doc === "workpaper" && num(p, "step") === 1;
+      const reuse = prev?.kind === "docs" && (prev.caseId === ev.case_id || (prev.caseId === null && prev.units.length === 0)) && !(fresh && prev.units.length > 0);
+      const cur: Artifact & DocsArt = reuse && prev?.kind === "docs" ? { ...prev, caseId: ev.case_id } : { ...base, kind: "docs", workpaper: null, memo: null, books: null, units: [], state: "drafting" };
       const units = [...cur.units];
       let next: Artifact & DocsArt = { ...cur, ts: ev.ts };
       if (doc === "memo") {
         const m = cur.memo ?? { file: "Memo.docx", sections: [], verified: null };
         const title = detail.replace(/^Memo:\s*/i, "") || `Part ${num(p, "step") ?? m.sections.length + 1}`;
-        next = { ...next, memo: { ...m, sections: [...m.sections, title].slice(-12) } };
+        next = { ...next, memo: { ...m, sections: [...m.sections, title].slice(-12), verified: null } };
         units.push({ doc });
       } else {
         const b = cur[doc] ?? emptyBook(doc === "books" ? "U-Tax_Books.xlsx" : "Workpaper.xlsx");
@@ -325,15 +348,15 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
             all[sheet] = { ...(all[sheet] ?? {}), [ref]: value };
             if (had !== value) units.push({ doc, sheet, cell: ref });
           }
-          next = { ...next, [doc]: { ...b, cells: all, sheets } };
+          next = { ...next, [doc]: { ...b, cells: all, sheets, verified: null } };
         } else {
           const tab = doc === "books" ? "Books" : detail.split(":")[0].trim() || "Workpaper";
           const sheets = b.sheets.includes(tab) ? b.sheets : [...b.sheets, tab];
-          next = { ...next, [doc]: { ...b, sheets, lines: [...b.lines, { tab, text: detail.split(":").slice(1).join(":").trim() || detail }].slice(-40) } };
+          next = { ...next, [doc]: { ...b, sheets, verified: null, lines: [...b.lines, { tab, text: detail.split(":").slice(1).join(":").trim() || detail }].slice(-40) } };
           units.push({ doc, sheet: tab });
         }
       }
-      next = { ...next, units: units.slice(-MAX_UNITS) };
+      next = { ...next, units: units.slice(-MAX_UNITS), state: "drafting" };
       return put(st, seat, { art: next, act });
     }
     case "doc.created": {

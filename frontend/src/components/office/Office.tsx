@@ -237,10 +237,10 @@ function showsArtifact(studio: Desk, step: WsStep | undefined, now: number): boo
   if (!art) return false;
   const a = Date.parse(art.ts);
   if (!Number.isFinite(a)) return false;
-  if (now && now - a > (art.state === "drafting" && art.kind !== "docs" ? DRAFT_MS : ARTIFACT_MS)) return false;
+  if (now && now - a > (art.state === "drafting" && (art.kind !== "docs" || art.units.length === 0) ? DRAFT_MS : ARTIFACT_MS)) return false;
   if (!step) return true;
   const s = Date.parse(step.ts);
-  return !Number.isFinite(s) || step.kind === "tool" || a >= s - 2000;
+  return !Number.isFinite(s) || (step.kind === "tool" && step.status === "done") || a >= s - 2000;
 }
 
 function Window({ seat, step, tabs, trail, studio, now }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[]; studio: Desk; now: number }) {
@@ -255,11 +255,15 @@ function Window({ seat, step, tabs, trail, studio, now }: { seat: Seat; step: Ws
 
   const art = showsArtifact(studio, step, now) ? studio.art : null;
   const pageStep = art ? undefined : step;
+  /** The last step the cursor played: the same step coming back on screen isn't replayed as new. */
+  const played = useRef<string | null>(null);
 
   // A new step: the cursor travels to the field it touched, presses, and types the value in.
   useLayoutEffect(() => {
     const step = pageStep;
     if (!step || !body.current) return;
+    if (played.current === step.key) return;
+    played.current = step.key;
     const target = body.current.querySelector<HTMLElement>('[data-focus="1"]');
     const box = body.current.getBoundingClientRect();
     const r = target?.getBoundingClientRect();
