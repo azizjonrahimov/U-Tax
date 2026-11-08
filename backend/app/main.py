@@ -37,6 +37,7 @@ def tick(gw: Gateway) -> None:
                 gw.retry_signup_welcomes, gw.retry_candidate_invites,
                 gw.retry_decision_mails, gw.advance_phone_jobs, gw.refresh_fee,
                 gw.advance_market_jobs,  # D38: pays verified jobs (off: does nothing)
+                gw.advance_orders,  # D41: the next CEO order task starts (or one times out)
                 lambda: gw.perform("stall_sweep", {}),
                 lambda: gw.perform("ceo_digest", {})):
         try:

@@ -25,7 +25,9 @@ from app.gateway.projections import TRUST_TYPES  # one list for the registry and
 
 FLAGGED = "flagged by QA, content hidden"
 PROPOSAL_TTL = timedelta(seconds=60)
-ORDER_MAX = 500
+ORDER_MAX = 1500  # D41: several tasks in one order (was 500)
+ORDER_TASKS_HINT = ("An order for the Chief of Staff. When the CEO names several tasks, pass "
+                    "ALL of them in `tasks`, in the order said, in ONE call.")
 ACTIVITY_DEFAULT, ACTIVITY_MAX = 60, 720
 ACTIVITY_ITEMS = 40
 ACTIVITY_SCAN = 500  # events looked back over, at most (a busy log shortens the window)
@@ -84,6 +86,15 @@ class CeoTool:
                 raise ToolRefused("bad_args", f"{name} must be a string")
             if kind == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
                 raise ToolRefused("bad_args", f"{name} must be a whole number")
+            if kind == "array":  # D41: the order's tasks (strings only)
+                items = spec.get("items") or {}
+                if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+                    raise ToolRefused("bad_args", f"{name} must be a list of strings")
+                if len(value) > spec.get("maxItems", 6):
+                    raise ToolRefused("bad_args", f"{name}: at most {spec.get('maxItems', 6)}")
+                if any(len(v) > items.get("maxLength", 200) for v in value):
+                    raise ToolRefused("bad_args", f"{name}: an item is too long")
+                continue
             if "enum" in spec and value not in spec["enum"]:
                 raise ToolRefused("bad_args", f"{name} must be one of {spec['enum']}")
             if kind == "string" and len(value) > spec.get("maxLength", 200):
@@ -163,6 +174,80 @@ def mask_words(text: str) -> str:
 
     text, _ = redact_ids(text)
     return mask_text(mask_spoken_emails(text), masked_name="", company=None)
+
+
+# ------------------------------------------------------------------ D41: one order, several tasks
+# Copied from docs/designs/fixes/reference/split_tasks.py (tested in tests/test_split_tasks.py).
+# A segment starts a NEW task only if, after filler words are stripped, it begins with an order
+# verb and does not lean on the previous task ("post it", "check they got it").
+
+TASKS_MAX = 6
+TASK_MIN_CHARS, TASK_MAX_CHARS = 3, 300
+
+# verb stems that open an order ("advertise", "hiring", "e-mail", "follow up", ...)
+_VERB = (r"(?:advertis|post|shar|hir|find|recruit|e-?mail|send|writ|follow|check|call|ring|"
+         r"schedul|book|mak|creat|design|get|buy|run|prepar|fil|comput|review|publish|pay|updat|"
+         r"brief|retr|skip|ping|nudg|reach|contact|invit|draft|announc|tell|ask|remind|open|stop|"
+         r"pause|resum)\w*")
+_TASK_FILLER = (r"(?:so|ok(?:ay)?|and|also|then|please|um+|uh+|now|next|plus|first(?:ly)?|second(?:ly)?|"
+           r"third(?:ly)?|fourth|finally|lastly|after that|i want you to|i'd like you to|i need you to|"
+           r"i want to|can you|could you|would you|let's|let us|we need to|go ahead and|you should)")
+_FILLER_RE = re.compile(rf"^(?:{_TASK_FILLER})\b[\s,:-]*", re.I)
+_LEANS_ON_PREVIOUS = re.compile(r"\b(?:it|them|those|they|their|him|her)\b", re.I)
+_STARTS_WITH_VERB = re.compile(rf"^{_VERB}\b", re.I)
+
+# where a new task may begin
+_CUT = re.compile(
+    r"\s*(?:\n+|;|(?<=[.!?])\s+|(?:^|(?<=\s))\(?\d[.)](?=\s)"
+    r"|\b(?:and then|after that|then|also|plus|next|finally|lastly|secondly|thirdly)\b,?"
+    rf"|,?\s+and\s+(?={_VERB}\b)|,\s+(?={_VERB}\b))\s*",
+    re.I,
+)
+
+
+def _clean(seg: str) -> str:
+    seg = seg.strip()
+    while True:
+        new = _FILLER_RE.sub("", seg).strip()
+        if new == seg:
+            break
+        seg = new
+    return seg.strip(" .,;:!-").strip()
+
+
+def split_tasks(text: str) -> list[str]:
+    """Ordered tasks, at most TASKS_MAX. Always at least one item for non-empty text."""
+    flat = re.sub(r"[ \t]+", " ", (text or "").strip())
+    if not flat:
+        return []
+    tasks: list[str] = []
+    for raw in _CUT.split(flat):
+        seg = _clean(raw or "")
+        if not seg:
+            continue
+        first3 = " ".join(seg.split()[:3])
+        new_task = (not tasks) or (_STARTS_WITH_VERB.match(seg) and not _LEANS_ON_PREVIOUS.search(first3))
+        if new_task:
+            tasks.append(seg)
+        else:
+            if _STARTS_WITH_VERB.match(seg):  # "Make it ..." glued on reads "..., make it ..."
+                seg = seg[0].lower() + seg[1:]
+            tasks[-1] = f"{tasks[-1]}, {seg}"
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tasks:
+        t = t[:TASK_MAX_CHARS].strip()
+        key = t.lower()
+        if len(t) >= TASK_MIN_CHARS and key not in seen:
+            seen.add(key)
+            out.append(t[0].upper() + t[1:])
+    return out[:TASKS_MAX] or [flat[:TASK_MAX_CHARS]]
+
+
+def starts_order(text: str) -> bool:
+    """D41: the words open with an order verb (filler stripped): a second utterance like
+    "Hire two people." joins an open order proposal; "yes do that" never does."""
+    return bool(_STARTS_WITH_VERB.match(_clean(text or "")))
 
 
 # ------------------------------------------------------------------ read tools
@@ -266,6 +351,8 @@ def carry_pause(gw: Any, args: dict) -> str:
     types = gw.trust_types() if target == "everything" else (target,)  # D38: + contractor_pay
     for action_type in types:
         gw._set_trust({"action_type": action_type, "state": "PAUSED"})
+    if target == "everything":  # D41: every running and queued order task ends cancelled
+        gw._cancel_orders()
     label = "everything" if target == "everything" else trust_label(target)
     return f"Paused {label}."
 
@@ -448,17 +535,32 @@ def carry_candidate(gw: Any, pinned: dict) -> str:
 
 
 def pin_order(gw: Any, args: dict) -> tuple[dict, str]:
-    text = mask_words(" ".join(str(args["text"]).split()))  # read back what is sent
-    if not text:
-        raise ToolRefused("bad_args", "order needs text")
-    # the whole order is read back: confirm never sends words the CEO didn't hear
-    return {"text": text}, f'Tell the Chief of Staff: "{text}". Say confirm.'
+    """D41: an order is 1-6 tasks, split in code (`tasks`, else `text`), masked and read
+    back whole: confirm never sends words the CEO didn't hear."""
+    raw = args.get("tasks") if isinstance(args.get("tasks"), list) else [args.get("text") or ""]
+    tasks: list[str] = []
+    for item in raw:
+        for t in split_tasks(" ".join(str(item).split())):
+            t = mask_words(t)  # read back what is sent
+            if t and t.lower() not in {x.lower() for x in tasks}:
+                tasks.append(t)
+    tasks = tasks[:TASKS_MAX]
+    if not tasks:
+        raise ToolRefused("bad_args", "say the order again")
+    if len(tasks) == 1 and len(raw) == 1:  # one task: the CEO's words as said (the rehearsed
+        tasks = [mask_words(" ".join(str(raw[0]).split()))]  # read-back and wake, exactly)
+    if len(tasks) == 1:
+        return ({"text": tasks[0], "tasks": tasks},
+                f'Tell the Chief of Staff: "{tasks[0]}". Say confirm.')
+    lines = "; ".join(f"{i}) {t}" for i, t in enumerate(tasks, 1))
+    return ({"text": " · ".join(tasks), "tasks": tasks},
+            f"{len(tasks)} tasks for the Chief of Staff, one by one: {lines}. Say confirm.")
 
 
 def carry_order(gw: Any, pinned: dict) -> str:
     channel = "voice" if gw._touch_channel == "voice" else "typed"
-    gw._voice({"speaker": "ceo", "text": pinned["text"], "channel": channel})
-    return "Sent to the Chief of Staff."
+    tasks = pinned.get("tasks") if isinstance(pinned.get("tasks"), list) else None
+    return gw._ceo_order(tasks or [pinned["text"]], channel)
 
 
 # ------------------------------------------------------------------ the registry
@@ -504,9 +606,10 @@ REGISTRY: dict[str, CeoTool] = {t.name: t for t in (
              "decision": {"type": "string", "enum": ["hire", "decline"]}},
             ("candidate", "decision"), pin=pin_candidate, carry=carry_candidate,
             stale=stale_candidate),
-    CeoTool("order", "start", "Propose an order for the Chief of Staff.",
-            {"text": {"type": "string", "maxLength": ORDER_MAX}}, ("text",), pin=pin_order,
-            carry=carry_order),
+    CeoTool("order", "start", ORDER_TASKS_HINT,  # D41: text or tasks, either is enough
+            {"text": {"type": "string", "maxLength": ORDER_MAX},
+             "tasks": {"type": "array", "items": {"type": "string", "maxLength": 300},
+                       "maxItems": TASKS_MAX}}, (), pin=pin_order, carry=carry_order),
 )}
 
 
@@ -590,7 +693,7 @@ _PURE_WORDS = frozenset(
     .split())
 _QUESTION_START = re.compile(
     r"(?:what|what's|whats|why|how|who|whose|when|where|which|is|are|am|do|does|did)\b", re.I)
-FREE_ORDER_MIN, FREE_ORDER_MAX = 3, 300
+FREE_ORDER_MIN, FREE_ORDER_MAX = 3, 1200  # D41: several tasks said at once (was 300)
 # v1.13: a greeting or a mic check is never an order (live: "hey can you hear me" was one)
 _GREETING_WORDS = frozenset("hey hi hello test testing okay".split())
 _MIC_CHECKS = ("can you hear me", "are you there", "is this working")
@@ -608,7 +711,7 @@ def is_greeting(text: str) -> bool:
 
 def free_order(text: str) -> str | None:
     """v1.12.3: text the grammar can't parse, said as an order ("advertise our firm"), of
-    3-300 characters: the order text. None for pure confirm/cancel words or a question."""
+    3-1200 characters: the order text. None for pure confirm/cancel words or a question."""
     order = " ".join((text or "").split())
     if not FREE_ORDER_MIN <= len(order) <= FREE_ORDER_MAX:
         return None

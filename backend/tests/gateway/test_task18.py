@@ -381,7 +381,8 @@ def test_the_ceo_voice_session(make_harness, tmp_path):
         assert mint().status_code == 429
         assert client.post("/api/voice/session", json={"mode": "x"}).status_code == 400
     instructions, tools = voice.calls[0]
-    assert instructions == "You are the CEO's console."
+    # D41: the order tool's several-tasks rule rides every CEO session
+    assert instructions == "You are the CEO's console.\n\n" + ceo_tools.ORDER_TASKS_HINT
     assert [t["name"] for t in tools] == list(ceo_tools.REGISTRY)
     models = [e.payload["model"] for e in h.events("cost.booked")]
     assert models == ["realtime:ceo/gpt-realtime"] * 10
@@ -933,7 +934,7 @@ def test_the_ceos_words_stay_in_the_private_part(make_harness):
     assert "issued shares" not in blob and "nope" not in blob
     [proposed] = h.events("ceo.proposed")
     assert proposed.payload["args"] == {"text_len": len(order)}
-    assert proposed.private["args"] == {"text": order}
+    assert proposed.private["args"] == {"text": order, "tasks": [order]}  # D41: + tasks
     cancelled = h.events("ceo.cancelled")[-1]
     assert cancelled.payload["heard_len"] == len("nope, not now") and "heard" not in cancelled.payload
     assert cancelled.private == {"heard": "nope, not now"}

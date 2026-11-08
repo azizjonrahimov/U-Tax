@@ -31,6 +31,7 @@ from app.gateway.events import Event, iso_ts
 from app.gateway.perform import Gateway, ToolResult
 from app.gateway.ports import NotConfigured, PortError
 
+_LATIN = re.compile(r"[A-Za-z\u00C0-\u024F]")  # D41: a Latin letter
 log = logging.getLogger("utax.api")
 
 HEARTBEAT_SECONDS = 15.0
@@ -477,7 +478,11 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
             if ceo:
                 from app.ceo_tools import realtime_tools
 
-                session = voice.create_session(instructions, tools=realtime_tools())
+                from app.ceo_tools import ORDER_TASKS_HINT
+
+                # D41: several tasks go in ONE order call (the prompt file may predate it)
+                session = voice.create_session(f"{instructions}\n\n{ORDER_TASKS_HINT}",
+                                               tools=realtime_tools())
             else:
                 session = voice.create_session(instructions)
         except NotConfigured as exc:
@@ -804,6 +809,8 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
                                                      "browser's") from exc
         gw().settle_stt(purpose, held, round(heard.seconds) if heard.seconds else None,
                         heard.model, ok=True)
+        if not _LATIN.search(heard.text or ""):  # D41: noise heard as another script
+            return {"text": ""}  # the console treats it as nothing heard
         return {"text": heard.text}
 
     @router.get("/api/ceo/brief")

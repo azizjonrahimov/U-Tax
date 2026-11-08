@@ -148,11 +148,16 @@ def test_first_boot_generates_and_saves_the_session_secret(make_harness, monkeyp
 def test_while_a_proposal_is_open_only_confirm_or_cancel(h):
     first = h.gw.perform("ceo_command", {"text": "advertise our firm"}).data
     assert first["kind"] == "proposal"
-    for said in ("hire 2 people", "trust", "what's pending"):
+    for said in ("trust", "what's pending", "yes do that", "hello"):
         assert h.gw.perform("ceo_command", {"text": said}).data == {
             "kind": "say", "say": "Say confirm or cancel."}, said
     assert len(h.events("ceo.proposed")) == 1  # no second order
-    assert h.gw.perform("ceo_command", {"text": "yes"}).data["kind"] == "confirm"
+    # D41: another order said after a pause joins the open one (one proposal, 2 tasks)
+    second = h.gw.perform("ceo_command", {"text": "hire 2 people"}).data
+    assert second["kind"] == "proposal" and second["readback"].startswith("2 tasks")
+    assert h.events("ceo.cancelled")[-1].payload["reason"] == "merged"
+    confirm = h.gw.perform("ceo_command", {"text": "yes"}).data
+    assert confirm["kind"] == "confirm" and confirm["proposal_id"] == second["proposal_id"]
 
 
 @pytest.mark.parametrize("said", ["hey", "hi", "hello", "test", "testing", "okay",

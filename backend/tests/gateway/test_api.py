@@ -87,6 +87,8 @@ def test_sse_replays_then_streams_live_and_pings(api):
         await asyncio.to_thread(h.gw.perform, "voice", {"text": "hi", "speaker": "ceo"})
         frames.append(await live)
         frames.append(await gen.__anext__())  # second event of that batch
+        frames.append(await gen.__anext__())  # D41: order.queued
+        frames.append(await gen.__anext__())  # D41: order.task_started
         frames.append(await gen.__anext__())  # heartbeat
         stop.set()
         await gen.aclose()
@@ -96,7 +98,8 @@ def test_sse_replays_then_streams_live_and_pings(api):
     assert frames[0].startswith("id: 2\ndata: ")
     assert json.loads(frames[0].split("data: ", 1)[1])["type"] == "case.status"
     assert frames[1].startswith("id: 3\n") and frames[2].startswith("id: 4\n")
-    assert frames[3] == ": ping\n\n"
+    assert frames[3].startswith("id: 5\n") and frames[4].startswith("id: 6\n")  # D41
+    assert frames[5] == ": ping\n\n"
     assert h.gw._listeners == []  # unsubscribed on close
 
 

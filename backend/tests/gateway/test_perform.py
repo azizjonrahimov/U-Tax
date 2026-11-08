@@ -387,7 +387,9 @@ def test_ceo_order_is_an_operating_touch_and_wakes_cos(h):
     wakes = []
     h.gw.on_wake(wakes.append)
     h.ok("voice", text="open the firm", channel="typed", speaker="ceo")
-    assert h.types() == ["voice.command", "touch.operating"]
+    # D41: a one-task order is queued and started at once (the wake is unchanged)
+    assert h.types() == ["voice.command", "touch.operating", "order.queued",
+                         "order.task_started"]
     assert h.events("voice.command")[0].payload == {"text": "open the firm", "channel": "typed",
                                                     "speaker": "ceo", "case_id": None}
     assert h.events("touch.operating")[0].payload["note"] == 'order: "open the firm"'

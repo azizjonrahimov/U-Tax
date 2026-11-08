@@ -172,7 +172,8 @@ class OpenAISTT:
         if not api_key:
             raise NotConfigured("stt_unavailable: no OPENAI_API_KEY")
         self.model = os.environ.get("OPENAI_STT_MODEL", "gpt-4o-transcribe")
-        self.language = os.environ.get("OPENAI_STT_LANGUAGE", "en")  # "" = auto-detect
+        # D41: always a language (auto-detect wrote Urdu, Amharic, Korean from room noise)
+        self.language = os.environ.get("OPENAI_STT_LANGUAGE") or "en"
         self._http = httpx.Client(base_url=API, timeout=httpx.Timeout(timeout, connect=5.0),
                                   transport=transport,
                                   headers={"Authorization": f"Bearer {api_key}"})

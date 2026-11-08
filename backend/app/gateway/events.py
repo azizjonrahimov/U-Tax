@@ -99,12 +99,18 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "ceo.said": ("conversation_id", "text_len"),  # v1.14: the text is private
     "ceo.replied": ("conversation_id", "actions"),
     "ceo.cancelled": ("proposal_id", "via", "heard_len", "reason"),
+    # v1.20 §10 (D41): an order is 1-6 tasks, run one at a time across the firm
+    "order.queued": ("order_id", "of", "tasks"),
+    "order.task_started": ("order_id", "task_no", "of", "text"),
+    "order.task_done": ("order_id", "task_no", "of", "status", "summary", "by"),
+    "order.done": ("order_id", "of", "done", "waiting_on_you", "other"),
 }
+ORDER_LINK_KEYS = frozenset({"order_id", "task_no"})  # any event may carry them (v1.11.1, v1.20)
 
 FACT_KEYS = ("incorporated_delaware", "authorized_shares", "issued_shares", "stated_par",
              "gross_assets_cents", "foreign_owner_25")
 # keys a payload may leave out: v1.6.4 masked_name is set on customer voice.command only
-OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name"}),
+OPTIONAL_PAYLOAD_KEYS = {"voice.command": frozenset({"masked_name", "tasks"}),  # tasks: D41
                          "call.booked": frozenset({"kind"}),  # v1.11.1: "candidate"
                          "email.received": frozenset({"source"}),  # v1.12: "signup"
                          "doc.step": frozenset({"of"}), "doc.verified": frozenset({"failed"}),
@@ -134,8 +140,10 @@ def validate(type_: str, actor: str, provider: str | None, status: str, payload:
     if status not in STATUSES:
         raise ValueError(f"unknown status {status!r}")
     expected = set(PAYLOAD_KEYS[type_])
-    # v1.11.1: any event of an agent's tool call may carry the CEO order it serves
-    optional = OPTIONAL_PAYLOAD_KEYS.get(type_, frozenset()) | {"order_id"}
+    # v1.11.1: any event of an agent's tool call may carry the CEO order it serves; v1.20:
+    # and its task (a type that lists either key requires it)
+    optional = OPTIONAL_PAYLOAD_KEYS.get(type_, frozenset()) | (
+        ORDER_LINK_KEYS - set(PAYLOAD_KEYS[type_]))
     expected = set(expected) | optional  # an optional key is allowed, never required
     if not (expected - optional <= set(payload) <= expected):
         raise ValueError(

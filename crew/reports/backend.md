@@ -254,3 +254,14 @@ call waits on. Unit tests on realistic text never show this. The fix that held u
 asking "is this regex correct?" and run every pattern on 50 kB of repeated filler, spaces and
 unclosed tags, with a time limit in the test. The same habit, applied to money ("what happens
 if the write fails right after the charge?"), found the worst bug of task 10.
+
+## B51 (D41): multi-task orders
+
+- One order is 1-6 tasks (the reference splitter, copied). An order said after a pause joins the
+  open order proposal (`ceo.cancelled` reason `merged`). Tasks run one at a time across all
+  orders; `utax.task_done` (cos, or a seat that called any tool for the task) ends one.
+  STOP everything and an undo cancel them.
+- A single order keeps the rehearsed read-back and wake byte for byte: the CEO's words, not the
+  splitter's re-cased copy.
+- Deviations: the `task_done` MCP schema drops `additionalProperties` (MCP schemas use plain
+  types since task 7). The undo's cancel note wakes the CoS at once (it is not queued).

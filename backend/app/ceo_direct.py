@@ -200,8 +200,10 @@ def cancel_order(gw: Any, args: dict, *, actor: str = ASSISTANT) -> dict:
         return {"kind": "done", "summary": f"{order} was already cancelled.", "duplicate": True}
     gw._cancelled_orders.add(order)  # tools carrying it are refused from now on
     with acting_as(gw, actor), gw._channel("voice"):
-        gw._voice({"speaker": "ceo", "channel": "voice",
-                   "text": f"Cancel {order}: close its open cards and stop its work."})
+        gw._cancel_orders(order)  # D41: its running and queued tasks end cancelled
+        # the note wakes the Chief of Staff at once (never queued behind other orders)
+        gw._ceo_order([f"Cancel {order}: close its open cards and stop its work."], "voice",
+                      queue=False)
     return {"kind": "done", "summary": f"Cancelled {order}; the Chief of Staff closes its "
                                        "cards."}
 
