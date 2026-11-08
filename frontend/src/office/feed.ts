@@ -12,6 +12,7 @@ import { assetAllowed, eventsUrl, numbersFromState, originOf, parseAssetHosts, r
 import type { FirmNumbers } from "@/theater/rail";
 import { appendEvents, startScript, type ScriptCursor } from "@/theater/script";
 import { writeSession } from "@/ceo/session";
+import { applyStudio, emptyStudio, STUDIO_ONLY, type Studio } from "./artifact";
 import { applyEvent, emptyOffice, type Office, type Seat, type StepCtx } from "./workspace";
 
 const GATEWAY: Endpoints = { base: API_URL, token: process.env.NEXT_PUBLIC_THEATER_TOKEN ?? "" };
@@ -29,8 +30,13 @@ export interface Feed {
   office: Office;
   numbers: FirmNumbers | null;
   status: FeedStatus;
-  /** The desk a live stream event last moved (never the log folded on open): what auto-follow follows. */
-  live: { seat: Seat; key: string } | null;
+  /** D37: what each desk is making right now (agent.activity and the artifact events). */
+  studio: Studio;
+  /**
+   * The desk a live stream event last moved (never the log folded on open): what auto-follow follows.
+   * `activity`: an agent.activity or artifact event (it has no step; `ts` is its log time).
+   */
+  live: { seat: Seat; key: string; ts?: string; activity?: true } | null;
 }
 
 /** The gateway refused the CEO session: it was revoked, or the gateway's secret changed. */
@@ -77,6 +83,8 @@ export function useFirmFeed(session: string | null = null): Feed {
   const [status, setStatus] = useState<FeedStatus>(HAS_GATEWAY ? "connecting" : "offline");
   const [live, setLive] = useState<Feed["live"]>(null);
   const officeRef = useRef(office);
+  const [studio, setStudio] = useState<Studio>(emptyStudio);
+  const studioRef = useRef(studio);
 
   useEffect(() => {
     if (!HAS_GATEWAY) return;
@@ -95,18 +103,42 @@ export function useFirmFeed(session: string | null = null): Feed {
       flagged: (id) => id !== null && flagged.has(id),
       image: (url) => (typeof url === "string" && assetAllowed(url, HOSTS, GATEWAY_ORIGIN) ? url : undefined),
     };
+    // D37: events the theater's script doesn't know (agent.activity, doc.*) go to the studio
+    // directly, once each (a reconnect can deliver them again).
+    const studioSeen = new Set<number>();
+    const wellFormed = (e: unknown): e is UTaxEvent => {
+      const v = e as Partial<UTaxEvent> | null;
+      return !!v && typeof v.id === "number" && typeof v.type === "string" && typeof v.ts === "string" && typeof v.actor === "string" && typeof v.payload === "object" && v.payload !== null;
+    };
     const fold = (events: UTaxEvent[], live = false) => {
-      const res = appendEvents(cursor, events, quiet);
+      const own = events.filter((e) => wellFormed(e) && STUDIO_ONLY.has(e.type) && !studioSeen.has(e.id));
+      const res = appendEvents(cursor, events.filter((e) => !(wellFormed(e) && STUDIO_ONLY.has(e.type))), quiet);
       cursor = res.cursor;
-      if (!res.accepted.length) return;
+      let st = studioRef.current;
+      for (const ev of own) {
+        studioSeen.add(ev.id);
+        if (studioSeen.size > 5000) studioSeen.delete(studioSeen.values().next().value as number);
+        st = applyStudio(st, ev, ctx);
+      }
       let o = officeRef.current;
       for (const ev of res.accepted) {
         if (ev.type === "case.flagged" && ev.case_id && (ev.payload as { kind?: unknown })?.kind === "possible_injection") flagged.add(ev.case_id);
         o = applyEvent(o, ev, ctx);
+        st = applyStudio(st, ev, ctx);
       }
       if (live && o.lastSeat && o.lastKey !== officeRef.current.lastKey) setLive({ seat: o.lastSeat, key: o.lastKey });
-      officeRef.current = o;
-      setOffice(o);
+      else if (live && st.lastSeat && st.lastKey !== studioRef.current.lastKey) {
+        const act = st.desks[st.lastSeat].act;
+        setLive({ seat: st.lastSeat, key: st.lastKey, ts: act?.ts, activity: true });
+      }
+      if (st !== studioRef.current) {
+        studioRef.current = st;
+        setStudio(st);
+      }
+      if (o !== officeRef.current) {
+        officeRef.current = o;
+        setOffice(o);
+      }
     };
 
     /** The session is dead at the gateway: sign this tab out (the effect re-runs with the theater token). */
@@ -187,6 +219,8 @@ export function useFirmFeed(session: string | null = null): Feed {
       // nothing from the old connection may arm auto-follow.
       officeRef.current = emptyOffice();
       setOffice(officeRef.current);
+      studioRef.current = emptyStudio();
+      setStudio(studioRef.current);
       setLive(null);
       const last = seed.lastId ?? 0;
       if (last > 0) {
@@ -212,5 +246,5 @@ export function useFirmFeed(session: string | null = null): Feed {
     };
   }, [session]);
 
-  return { office, numbers, status, live };
+  return { office, numbers, status, live, studio };
 }

@@ -145,3 +145,61 @@
   .office .of-dept .row { grid-template-columns: 1fr; gap: 2px; }
   .office .overview { height: 100vh; }
 }
+
+/* ---------------------------------------------------------------- D37: the artifact being made */
+.office .of-dept .act { margin-left: auto; padding: 2px 10px; border-radius: 4px; border: 1px solid var(--c); color: var(--c); font: 500 13px var(--font-inter), sans-serif; white-space: nowrap; }
+.office .of-dept .act.writing::after, .office .of-dept .act.thinking::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--c); animation: of-blink 1s steps(2) infinite; vertical-align: middle; }
+.office .of-dept .art { display: flex; flex-direction: column; gap: 12px; min-height: 0; flex: 1; animation: of-page .35s ease-out; }
+.office .of-dept .art .caret { display: inline-block; width: 2px; height: 1.1em; margin-left: 1px; background: var(--c); vertical-align: text-bottom; animation: of-blink 1s steps(2) infinite; }
+.office .of-dept .art .faint { color: var(--faint); }
+.office .of-dept .art-foot { display: flex; justify-content: flex-end; }
+.office .of-dept .art .send { padding: 8px 18px; border-radius: 4px; background: var(--c); color: var(--ink); font: 600 14px var(--font-inter), sans-serif; }
+.office .of-dept .art .send.sent { background: transparent; color: var(--green); border: 1px solid var(--green); }
+
+.office .of-dept .mail-head { display: grid; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); font-size: 15px; }
+.office .of-dept .mail-head .k { display: inline-block; width: 64px; color: var(--dim); }
+.office .of-dept .mail-head .v { color: var(--text); }
+.office .of-dept .mail-body { flex: 1; min-height: 120px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.55; color: var(--text); }
+.office .of-dept .attach { display: flex; flex-wrap: wrap; gap: 8px; }
+.office .of-dept .attach .file { padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel2); font-size: 13px; }
+
+.office .of-dept .post-tabs { display: flex; gap: 4px; }
+.office .of-dept .post-tabs span { padding: 4px 12px; border-radius: 4px; color: var(--dim); font-size: 13px; border: 1px solid transparent; }
+.office .of-dept .post-tabs span.on { color: var(--text); border-color: var(--c); }
+.office .of-dept .post-box { min-height: 110px; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 16px; line-height: 1.5; }
+.office .of-dept .post-img { max-height: 180px; width: auto; align-self: flex-start; border-radius: 6px; border: 1px solid var(--line); }
+
+.office .of-dept .sheet-file { color: var(--dim); font-size: 13px; }
+.office .of-dept .sheet table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.office .of-dept .sheet th, .office .of-dept .sheet td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; }
+.office .of-dept .sheet thead th, .office .of-dept .sheet tbody th { background: var(--panel2); color: var(--faint); font-weight: 500; width: 36px; text-align: center; }
+.office .of-dept .sheet td.num { text-align: right; }
+.office .of-dept .sheet tr.fresh td { background: color-mix(in srgb, var(--c) 18%, transparent); transition: background-color 1.2s; }
+.office .of-dept .sheet tr.empty-row td { height: 30px; }
+.office .of-dept .sheet-tabs { display: flex; gap: 2px; border-top: 1px solid var(--line); }
+.office .of-dept .sheet-tabs span { padding: 4px 12px; font-size: 13px; color: var(--dim); }
+.office .of-dept .sheet-tabs span.on { color: var(--text); border-bottom: 2px solid var(--c); }
+
+.office .of-dept .page-doc { flex: 1; overflow: auto; padding: 20px 24px; border-radius: 4px; background: #fbfaf6; color: #1d1d1f; font-size: 15px; line-height: 1.55; }
+.office .of-dept .page-doc h3 { margin: 0 0 4px; font: 600 16px var(--font-display), sans-serif; }
+.office .of-dept .page-doc section { margin-bottom: 14px; }
+.office .of-dept .page-doc section.fresh { animation: of-page .5s ease-out; }
+.office .of-dept .page-doc p { margin: 0; }
+.office .of-dept .page-doc .caret { background: #1d1d1f; }
+.office .of-dept .stamp { align-self: flex-end; padding: 4px 12px; border: 2px solid var(--green); border-radius: 4px; color: var(--green); font: 700 15px var(--font-display), sans-serif; transform: rotate(-3deg); }
+.office .of-dept .stamp.bad { border-color: var(--red); color: var(--red); }
+
+.office .of-dept .calc dl { margin: 0; display: grid; gap: 8px; }
+.office .of-dept .calc dl div { display: flex; justify-content: space-between; gap: 16px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 4px; animation: of-page .4s ease-out; }
+.office .of-dept .calc dl div.chosen { border-color: var(--c); }
+.office .of-dept .calc dt { color: var(--dim); }
+.office .of-dept .calc dd { margin: 0; color: var(--text); font-size: 16px; }
+
+.office .of-dept .cal { display: flex; gap: 14px; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel2); }
+.office .of-dept .cal-day { font-size: 28px; }
+.office .of-dept .cal p { margin: 4px 0 0; color: var(--dim); }
+
+@keyframes of-blink { 50% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .office .of-dept .art, .office .of-dept .art .caret, .office .of-dept .act::after, .office .of-dept .page-doc section.fresh, .office .of-dept .calc dl div { animation: none; }
+}

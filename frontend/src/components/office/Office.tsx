@@ -12,6 +12,8 @@ import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
 import { logout, useSessionToken } from "@/ceo/session";
 import { followDelay, followTarget, initialView, type View } from "@/office/follow";
+import type { Desk } from "@/office/artifact";
+import { ActivityPill, ArtifactView } from "./Artifact";
 import { SEAT_NAME, SEAT_ROLE, SEATS, type Seat, type Workspace, type WsStep } from "@/office/workspace";
 import "./office.css";
 
@@ -23,7 +25,7 @@ const seatColor = (seat: Seat) => `var(--seat-${seat})`;
 
 export function Office() {
   const session = useSessionToken();
-  const { office, numbers, status, live } = useFirmFeed(session);
+  const { office, numbers, status, live, studio } = useFirmFeed(session);
   const [view, setView] = useState<View>("overview");
   const [follow, setFollow] = useState(true);
   const lastSwitch = useRef(0);
@@ -149,7 +151,7 @@ export function Office() {
             <Theater />
           </div>
         ) : (
-          <Department key={view} desk={office.desks[view]} numbers={numbers} working={working(view)} following={follow} />
+          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || studio.desks[view].act !== null} following={follow} />
         )}
       </div>
     </div>
@@ -178,7 +180,7 @@ function FeedDot({ status }: { status: FeedStatus }) {
 
 // ------------------------------------------------------------------ one department
 
-function Department({ desk, numbers, working, following }: { desk: Workspace; numbers: FirmNumbers | null; working: boolean; following: boolean }) {
+function Department({ desk, studio, numbers, working, following }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean }) {
   const seat = desk.seat;
   const step = desk.steps[0];
   return (
@@ -194,7 +196,7 @@ function Department({ desk, numbers, working, following }: { desk: Workspace; nu
         {following && <span className="dept-follow">Auto-following the firm</span>}
       </header>
       <div className="dept-grid">
-        <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} />
+        <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} studio={studio} />
         <aside className="dept-side">
           <Kpis desk={desk} numbers={numbers} />
           <section className="steps" aria-label={`${SEAT_NAME[seat]} steps`}>
@@ -224,7 +226,17 @@ function Department({ desk, numbers, working, following }: { desk: Workspace; nu
 const STATUS_ICON: Readonly<Record<WsStep["status"], string>> = { done: "✓", needs_approval: "⏳", refused: "⛔", error: "✕", other: "•" };
 
 /** The department's browser: tabs, address bar, the page, and the agent's cursor driving it. */
-function Window({ seat, step, tabs, trail }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[] }) {
+/** D37: the artifact is what the window shows while it is the desk's latest work (or close to it). */
+const ART_WINDOW_MS = 60_000;
+function showsArtifact(studio: Desk, step: WsStep | undefined): boolean {
+  if (!studio.art) return false;
+  if (!step) return true;
+  const a = Date.parse(studio.art.ts);
+  const s = Date.parse(step.ts);
+  return !Number.isFinite(s) || !Number.isFinite(a) || a >= s - ART_WINDOW_MS;
+}
+
+function Window({ seat, step, tabs, trail, studio }: { seat: Seat; step: WsStep | undefined; tabs: string[]; trail: WsStep[]; studio: Desk }) {
   const body = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState<{ x: number; y: number; press: number }>({ x: 24, y: 24, press: 0 });
   const [typed, setTyped] = useState<number>(Infinity);
@@ -267,7 +279,8 @@ function Window({ seat, step, tabs, trail }: { seat: Seat; step: WsStep | undefi
     };
   }, [step]);
 
-  const site = step?.site ?? "about:blank";
+  const art = showsArtifact(studio, step) ? studio.art : null;
+  const site = art ? ART_SITE[art.kind] : (step?.site ?? "about:blank");
   return (
     <section className="win" aria-label={`${SEAT_NAME[seat]}'s workspace`}>
       <div className="win-bar">
@@ -290,12 +303,15 @@ function Window({ seat, step, tabs, trail }: { seat: Seat; step: WsStep | undefi
           ⌁
         </span>
         <span className="mono addr">{site}</span>
-        {step && <span className={`badge ${step.status}`}>{STATUS_WORD[step.status]}</span>}
+        <ActivityPill act={studio.act} />
+        {!art && step && <span className={`badge ${step.status}`}>{STATUS_WORD[step.status]}</span>}
       </div>
       {/* the page loads (a short bar) whenever a new step arrives */}
-      <div key={step?.key ?? "none"} className="win-load" aria-hidden />
+      <div key={art?.key ?? step?.key ?? "none"} className="win-load" aria-hidden />
       <div className="win-body" ref={body}>
-        {!step ? (
+        {art ? (
+          <ArtifactView key={art.key} art={art} />
+        ) : !step ? (
           <div className="win-empty">
             <p>Waiting for {SEAT_NAME[seat]}&rsquo;s next step.</p>
             <p className="faint">Every step here comes from the firm&rsquo;s log as it happens. Nothing is staged.</p>
@@ -328,7 +344,7 @@ function Window({ seat, step, tabs, trail }: { seat: Seat; step: WsStep | undefi
             ))}
           </ol>
         )}
-        {step && (
+        {step && !art && (
           <div className="agent" style={{ transform: `translate(${cursor.x}px, ${cursor.y}px)` }} aria-hidden>
             <svg width="18" height="20" viewBox="0 0 18 20">
               <path d="M1 1 L16 9 L9 11 L6 18 Z" />
@@ -341,6 +357,15 @@ function Window({ seat, step, tabs, trail }: { seat: Seat; step: WsStep | undefi
     </section>
   );
 }
+
+const ART_SITE: Readonly<Record<NonNullable<Desk["art"]>["kind"], string>> = {
+  mail: "AgentMail · compose",
+  post: "Social · compose",
+  sheet: "Excel · workpaper",
+  doc: "Word · memo",
+  calc: "utax · compute_tax",
+  invite: "Calendar · invite",
+};
 
 const STATUS_WORD: Readonly<Record<WsStep["status"], string>> = {
   done: "Done",
