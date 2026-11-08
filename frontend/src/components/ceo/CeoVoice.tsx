@@ -42,6 +42,10 @@ import {
   type FunctionCall,
   type Proposal,
   type ToolResult,
+  isFresh,
+  isStopEverything,
+  REPEAT_HEARD_MS,
+  REPEAT_SAID_MS,
   type VoiceEffect,
   type VoiceState,
 } from "@/ceo/voice";
@@ -154,6 +158,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   const [link, setLink] = useState<Link>("off");
   const [flow, setFlow] = useState<Flow>("idle");
   const [micOn, setMicOn] = useState(false);
+  /** D33: what the browser's ear understood last, shown so the CEO can see it. */
+  const [heard, setHeard] = useState<string | null>(null);
   const [handsFree, setHandsFree] = useState(false);
   const [card, setCard] = useState<Card | null>(null);
   const [now, setNow] = useState(0);
@@ -293,6 +299,13 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         onDone?.(false); // the console is gone: nothing more is said
         return;
       }
+      // D33: the same line twice in a row (a double end, a re-run) is said once.
+      const at = Date.now();
+      if (!isFresh(lastSaid.current, text, at, REPEAT_SAID_MS)) {
+        onDone?.(true);
+        return;
+      }
+      lastSaid.current = { text, at };
       if (speaking.current === 0) vs.current = agentAudio(vs.current, "browser", true, Date.now());
       speaking.current += 1;
       applyMic();
@@ -324,6 +337,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
   /** The browser can't listen (no recognition, mic blocked, or it keeps failing): hands-free still reads alerts. */
   const deaf = useRef(false);
   const earErrors = useRef(0);
+  /** D33: the last final the ear passed on, and the last line said (the loop guard). */
+  const lastHeard = useRef<{ text: string; at: number } | null>(null);
+  const lastSaid = useRef<{ text: string; at: number } | null>(null);
+  /** Spoken "stop everything" takes the STOP button's path (set once stopEverything exists). */
+  const voiceStopRef = useRef<() => Promise<void>>(async () => {});
   const goDeaf = useCallback((why: string | null) => {
     deaf.current = true;
     setCanListen(false);
@@ -340,11 +358,21 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     r.lang = "en-US";
     r.continuous = handsRef.current;
     r.interimResults = false;
+    // D33 loop guard: each final result of this session is handled once, and an identical final
+    // right after the last one (a re-delivery across a restart) is the same utterance.
+    const handled = new Set<number>();
     r.onresult = (e) => {
       earErrors.current = 0;
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const res = e.results[i];
-        if (res.isFinal && res[0]?.transcript.trim()) spokenRef.current(res[0].transcript);
+        const text = res.isFinal ? (res[0]?.transcript ?? "").trim() : "";
+        if (!text || handled.has(i)) continue;
+        handled.add(i);
+        const now = Date.now();
+        if (!isFresh(lastHeard.current, text, now, REPEAT_HEARD_MS)) continue;
+        lastHeard.current = { text, at: now };
+        setHeard(text);
+        spokenRef.current(text);
       }
     };
     let failed = false;
@@ -567,7 +595,8 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
         const p = { proposalId: r.proposalId, readback: r.readback || "The open proposal.", expiresAt: localExpiry(null, Date.now()), tool: isApproveIt(said) ? "approve" : null };
         return openLocalCard(p, `${p.readback} Confirm again to go ahead.`);
       }
-      const text = r.kind === "read" ? describeRead(r.data) : r.kind === "done" ? r.summary : r.kind === "unknown" ? r.say : "";
+      // v1.13 "say": a line and nothing else; an open card stays as it is.
+      const text = r.kind === "read" ? describeRead(r.data) : r.kind === "done" ? r.summary : r.kind === "unknown" || r.kind === "say" ? r.say : "";
       addLine("firm", text);
       speak(text);
     },
@@ -622,6 +651,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       const t = text.trim();
       if (!t) return;
       addLine("you", t);
+      if (isStopEverything(t)) {
+        // The STOP button's own path: it cancels an open card and pauses, whatever is on screen.
+        void voiceStopRef.current();
+        return;
+      }
       const d = decideTyped(vs.current, t, Date.now(), via === "voice");
       if (d?.type === "ignored") {
         setOutcome({ ok: false, text: IGNORED });
@@ -969,6 +1003,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
       if (!signedOut && alive.current) refresh();
     }
   }, [closeCard, hush, post, refresh, send, speak, tellModel, token, unauthorized]);
+  useEffect(() => {
+    voiceStopRef.current = stopEverything;
+  }, [stopEverything]);
 
   // Esc is STOP EVERYTHING, anywhere on the console (not while an input method is composing).
   const stopRef = useRef(stopEverything);
@@ -1128,6 +1165,19 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged }: V
     <>
       {/* Docked at the top while the console scrolls: the controls, STOP's result and the open card only. */}
       <div className="voice-dock" role="region" aria-label="Voice control">
+      {/* D33: what the ear is doing and what it understood, so the CEO can see it. */}
+      {link === "fallback" && (canListen || heard) && (
+        <p className="heard" role="status">
+          <span className={`ear-dot${listening ? " on" : ""}`} aria-hidden />
+          {listening ? "Listening…" : "Not listening"}
+          {heard && (
+            <>
+              {" · Heard: "}
+              <q>{heard}</q>
+            </>
+          )}
+        </p>
+      )}
       <div className="vbar">
         <button className="stop" onClick={() => void stopEverything()} aria-keyshortcuts="Escape">
           STOP EVERYTHING <kbd>Esc</kbd>

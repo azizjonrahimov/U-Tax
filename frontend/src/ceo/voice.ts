@@ -163,11 +163,40 @@ export type ToolResult =
   | { kind: "done"; summary: string }
   | ({ kind: "proposal" } & Proposal)
   | { kind: "unknown"; say: string }
+  /** v1.13: a line to say and nothing else (a greeting, or anything but confirm/cancel while a card is open). */
+  | { kind: "say"; say: string }
   /** /api/ceo/command matched a confirm or cancel word to the gateway's newest open proposal. */
   | { kind: "pending"; decision: "confirm" | "cancel"; proposalId: string; readback: string };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 const str = (v: unknown) => (typeof v === "string" ? v : "");
+
+/** Words compared as heard: case, punctuation and spacing don't make a line "new". */
+export const sameWords = (a: string, b: string) => {
+  const norm = (t: string) => t.toLowerCase().replace(/[^\p{L}\p{N}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  return norm(a) === norm(b);
+};
+
+/**
+ * D33 voice loop guard: the browser's recognizer can deliver one utterance twice (Chrome's
+ * continuous mode around a restart). A final identical to the last one within this window is the
+ * same utterance, never a second order. A person repeating themselves takes longer than this.
+ */
+export const REPEAT_HEARD_MS = 2000;
+/** A line identical to one that started this recently is not said again (a double end/restart). */
+export const REPEAT_SAID_MS = 3000;
+
+/**
+ * "Stop everything" / "pause everything" said or typed: the console's STOP button path, never a
+ * command (v1.13 answers anything but confirm/cancel with "say" while a card is open).
+ */
+export const isStopEverything = (text: string) =>
+  /^\s*(?:please\s+)?(?:stop|pause|halt)\s+(?:everything|all(?:\s+of\s+it)?|the\s+firm)\b/iu.test(text.replace(/[^\p{L}\p{N}\s]/gu, " "));
+
+/** Whether `text` (heard or to be said at `now`) is a new line after `last`. */
+export function isFresh(last: { text: string; at: number } | null, text: string, now: number, windowMs: number): boolean {
+  return !last || now - last.at > windowMs || !sameWords(last.text, text);
+}
 
 /** A proposal's lifetime (contract: 60 s), and the fallback when the wire's expiry can't be used. */
 export const PROPOSAL_TTL_MS = 60_000;
@@ -195,6 +224,8 @@ export function parseToolResult(raw: unknown, now: number): ToolResult | null {
       return { kind: "done", summary: str(raw.summary) || "Done." };
     case "unknown":
       return { kind: "unknown", say: str(raw.say) || "I didn't catch a command." };
+    case "say":
+      return { kind: "say", say: str(raw.say) || "Say confirm or cancel." };
     case "proposal": {
       const id = str(raw.proposal_id);
       const readback = str(raw.readback);
@@ -225,6 +256,7 @@ export function toolOutput(r: ToolResult | { kind: "error"; code: string; messag
         status: "NOT DONE. Read the proposal aloud exactly. It runs only if the CEO says confirm or clicks Confirm; never say it is done.",
       });
     case "unknown":
+    case "say":
       return clipJson({ ok: false, say: r.say });
     case "pending":
       return clipJson({ ok: false, say: "The CEO must confirm on the console." });
