@@ -35,16 +35,6 @@ for (const [k, v] of Object.entries(DUMMY)) process.env[k] ??= v;
 const failures = [];
 const fail = (msg) => failures.push(msg);
 
-/**
- * Naïve redacts any text equal to a configured header value from everything the agent sees, so
- * an "X-UTax-Actor: tax" header blanked "tax" out of cases, cards and tool results. No seat needs a
- * header (the vault's bearer names the seat; secrets belong in a vault credential), so every MCP
- * header is refused, whatever its value.
- */
-function headerValueProblem(value) {
-  return `is set (${JSON.stringify(value)}); Naïve redacts header values from everything the agent reads, and no seat needs a header`;
-}
-
 const loaded = await loadConfig(ROOT);
 if (!loaded.ok) {
   console.error(`config ${loaded.reason}: ${loaded.message}`);
@@ -117,11 +107,6 @@ for (const [key, seat] of Object.entries(CREW)) {
     fail(`${seat.name}: its identity's vault must hold exactly one static_bearer from ${seat.tokenEnv}`);
   else if (creds[0].mcp_server_url !== agent.mcp_servers?.[0]?.url) fail(`${seat.name}: vault credential URL != its MCP server URL`);
   if (!agent.mcp_servers?.[0]?.url?.endsWith(`/mcp/${seat.actor}`)) fail(`${seat.name}: MCP URL must be its own seat, <base>/mcp/${seat.actor} (contract v1.4 §6)`);
-  for (const s of agent.mcp_servers ?? [])
-    for (const [header, value] of Object.entries(s.headers ?? {})) {
-      const problem = headerValueProblem(value);
-      if (problem) fail(`${seat.name}: MCP header ${header} ${problem}`);
-    }
 
   // 4. prompt names exactly its tools
   const prompt = readFileSync(join(ROOT, "prompts", seat.prompt), "utf8");
@@ -133,6 +118,14 @@ for (const [key, seat] of Object.entries(CREW)) {
   if (!agent.system?.includes("SSN")) fail(`${seat.name}: system prompt never mentions SSNs`);
   if (!/educational estimate,? (—|-)? ?not tax advice/i.test(agent.system ?? "")) fail(`${seat.name}: no disclaimer`);
 }
+
+// No MCP headers on any agent. Naïve redacts any text equal to a configured header value from
+// everything the agent reads ("X-UTax-Actor: tax" blanked "tax" out of every case), and no seat
+// needs one: the vault's bearer names the seat, and secrets belong in a vault credential.
+for (const a of config.agents)
+  for (const server of a.mcp_servers ?? [])
+    for (const [header, value] of Object.entries(server.headers ?? {}))
+      fail(`${a.name}: MCP header ${header} is set (${JSON.stringify(value)}); Naïve redacts header values from everything the agent reads, and no seat needs a header`);
 
 const cos = config.agents.find((a) => a.name === CREW.cos.name);
 const members = Object.entries(CREW).filter(([k]) => k !== "cos").map(([, s]) => s.name).sort();

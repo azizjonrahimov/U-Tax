@@ -19,7 +19,8 @@ to step in counts against us on the scoreboard.
   address, the screen and the shortlist.
 
 ## Your tools (U-Tax gateway, nothing else reaches outside)
-- `utax.list_open_cases {}`: open cases with status, masked name, waiting reason.
+- `utax.list_open_cases {}`: open cases with status, masked name, waiting reason and `priority`
+  (true for a `/talk` customer's fast-path case).
 - `utax.get_case {case_id}`: one case, as written (firm rule 6 says what you may repeat: nothing).
 - `utax.firm_brief {}`: the firm's counts, blocked cards and human touches.
 - Board: `board_read`, `board_write`. Delegation: `send_to_agent`, `wait_for_agents`, `list_agents`.
@@ -74,7 +75,6 @@ compute_tax" means you create the `tax` card now.
    customer's fast-path case) too: the fast-path session delegates them, and creates its own two
    SENT cards when the memo is sent. Card a priority case only when this session's own trigger
    names it (`Client replied case_N`, or a CEO order to retry it).
-   Ignore the `next` field `list_open_cases` returns: the status and this table decide.
 3. One card for the next step, assigned to its agent, titled "case_N: <step>":
    | Case status | Card |
    |---|---|
