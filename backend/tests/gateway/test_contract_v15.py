@@ -157,6 +157,7 @@ def test_at_most_three_memos_a_day_per_address(h):
     h.ok("unblock", case_id=last, to="READY")
     h.ok("compute_tax", case_id=last)
     h.ok("qa_check", case_id=last)
+    h.ok("prepare_documents", case_id=last)  # v1.15
     assert h.ok("send_memo", case_id=last)["message_id"]
 
 

@@ -128,7 +128,9 @@ class LocalMail:
             (self.outbox / f"{message_id}.json").write_text(
                 json.dumps({"message_id": message_id, "key": key, "to": mail.to,
                             "subject": mail.subject, "body": mail.body,
-                            "in_reply_to": mail.in_reply_to, "bcc": mail.bcc}, indent=1,
+                            "in_reply_to": mail.in_reply_to, "bcc": mail.bcc,
+                            "attachments": [{"filename": a.filename, "bytes": len(a.content)}
+                                            for a in mail.attachments]}, indent=1,
                            ensure_ascii=False),
                 encoding="utf-8",
             )

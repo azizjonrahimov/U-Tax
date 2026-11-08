@@ -21,6 +21,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 
 from app.engine import (
@@ -95,6 +96,7 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "list_open_cases": ("cos",), "get_case": AGENTS, "extract_facts": ("intake",),
     "ask_client": ("intake",), "mark_not_eligible": ("intake",), "law_search": ("tax",),
     "compute_tax": ("tax",), "qa_check": ("qa",), "send_memo": ("acct",),
+    "prepare_documents": ("acct",),  # v1.15 (D35)
     "book_call": ("intake",), "phone_check": ("qa",), "post_social": ("mkt",),
     "draft_dm": ("mkt",), "hr_record": ("hr",), "firm_brief": ("cos",),
     "get_candidate": ("hr",), "flag_case": ("qa",),  # v1.4
@@ -358,6 +360,7 @@ class Gateway:
             "compute_tax": self._compute_tax,
             "qa_check": self._qa_check,
             "send_memo": self._send_memo,
+            "prepare_documents": self._prepare_documents,
             "book_call": self._book_call,
             "phone_check": self._phone_check,
             "post_social": self._post_social,
@@ -2614,7 +2617,7 @@ class Gateway:
                                  provider="local", payload={"checks": checks},
                                  idempotency_key=key),
                         self._status(case, "QA_PASSED")])
-            return {"passed": True, "checks": checks, "next": "send_memo"}
+            return {"passed": True, "checks": checks, "next": "prepare_documents"}
         events = [NewEvent(type="qa.failed", actor="qa", case_id=case.case_id, provider="local",
                            payload={"checks": checks}, idempotency_key=key),
                   NewEvent(type="case.status", actor="system", case_id=case.case_id,
@@ -2700,6 +2703,7 @@ class Gateway:
             raise Refused("qa_gate", "QA ran on older facts; run compute_tax and qa_check again")
         if not case.reply_to:
             raise Refused("no_reply_address", f"{case.case_id} has no reply address")
+        attachments = self._memo_attachments(case)  # v1.15: docs_missing until prepared
         day_ago = self._now() - timedelta(days=1)
         recent = [ts for ts in self.state.memo_log.get(mail_identity(case.reply_to), [])
                   if parse_ts(ts) > day_ago]
@@ -2719,7 +2723,7 @@ class Gateway:
         try:
             sent = self._with_retry("memo email", lambda: self.ports.mail.send(
                 OutMail(to=case.reply_to, subject=MEMO_SUBJECT, body=outgoing,
-                        bcc=self.settings.mail_qa_bcc or None), key))
+                        bcc=self.settings.mail_qa_bcc or None, attachments=attachments), key))
         except ToolError as err:
             self._block(case, f"memo email failed: {err.code}")
             raise
@@ -2741,6 +2745,126 @@ class Gateway:
         ])
         return {"message_id": sent.message_id, "seconds_since_last_fact": seconds,
                 "memo_ref": memo_ref, "next": "book_call"}
+
+    # ------------------------------------------------------------------ v1.15 (D35)
+
+    DOC_TYPES = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml"
+                          ".document"}
+
+    def docs_dir(self, case_id: str) -> Path:
+        return self.settings.data_dir / "docs" / case_id
+
+    def _docs_key(self, case: Case) -> str:
+        return f"docs:{case.case_id}:v{case.facts_version}r{case.reopens}"
+
+    def doc_file(self, case_id: str, file_name: str) -> Path | None:
+        """GET /api/docs: a verified document of this case, by its exact file name."""
+        with self._lock:
+            case = self.state.cases.get(case_id)
+            files = (case.docs or {}).get("files", []) if case else []
+        if file_name not in files:
+            return None
+        path = self.docs_dir(case_id) / file_name
+        return path if path.is_file() else None
+
+    def _memo_attachments(self, case: Case) -> tuple:
+        from app.gateway.ports import Attachment
+
+        docs = case.docs or {}
+        if docs.get("key") != self._docs_key(case):
+            raise Refused("docs_missing", "run prepare_documents first: the workpaper and memo "
+                                          "for these facts aren't built and checked yet")
+        out = []
+        for name in docs["files"]:
+            path = self.docs_dir(case.case_id) / name
+            if path.suffix not in self.DOC_TYPES:
+                continue  # the books stay in the firm
+            try:
+                out.append(Attachment(filename=name, content_type=self.DOC_TYPES[path.suffix],
+                                      content=path.read_bytes()))
+            except OSError as err:
+                raise Refused("docs_missing", f"{name} is gone from disk; run "
+                                              "prepare_documents again") from err
+        return tuple(out)
+
+    def _prepare_documents(self, args: dict) -> dict:
+        """v1.15 (D35): the workpaper, the memo and a books entry, from the engine's stored
+        result and the extracted facts only; each file re-opened and checked against a fresh
+        engine run before it can go out. A mismatch blocks the case."""
+        from app.gateway import documents as docs
+
+        case = self._case(args)
+        key = self._docs_key(case)
+        if (case.docs or {}).get("key") == key:  # this memo version is built: same files
+            return {"ok": True, "files": list(case.docs["files"]), "duplicate": True,
+                    "next": "send_memo"}
+        self._require_status(case, "QA_PASSED", code="qa_gate")
+        if case.qa_version != case.facts_version or case.result_version != case.facts_version \
+                or not case.result or not case.facts:
+            raise Refused("qa_gate", "QA ran on older facts; run compute_tax and qa_check again")
+        figures = docs.figures(case.facts, case.result)
+        truth = docs.engine_figures(case.facts, figures.fee_cents)
+        folder = self.docs_dir(case.case_id)
+        label = case.masked_name
+        # the memo version is in the name: a v2 builds new files and never touches v1's
+        version = f"v{case.facts_version}" + (f"r{case.reopens}" if case.reopens else "")
+        sheet = f"Delaware_Franchise_Tax_Workpaper_{case.case_id}_{version}.xlsx"
+        memo = f"Franchise_Tax_Memo_{case.case_id}_{version}.docx"
+        books = self.settings.data_dir / "docs" / "U-Tax_Books.xlsx"
+        plan = {"workpaper": 5, "memo": 3, "books": 1}
+
+        def stepper(doc: str):
+            n = [0]
+
+            def step(detail: str) -> None:
+                n[0] += 1
+                self._emit([NewEvent(type="doc.step", actor="acct", case_id=case.case_id,
+                                     payload={"doc": doc, "step": n[0], "detail": detail,
+                                              "of": plan[doc]},
+                                     idempotency_key=f"{key}:{doc}:step{n[0]}")])
+            return step
+
+        def created(doc: str, path: Path) -> None:
+            self._emit([NewEvent(type="doc.created", actor="acct", case_id=case.case_id,
+                                 payload={"doc": doc, "file_name": path.name,
+                                          "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                          "pages_or_sheets": docs.shape(path)},
+                                 idempotency_key=f"{key}:{doc}:created")])
+
+        try:
+            checks = docs.build_workpaper(folder / sheet, label, case.facts, case.quotes,
+                                          figures, stepper("workpaper"))
+            created("workpaper", folder / sheet)
+            carry = docs.build_memo(folder / memo, label, figures, stepper("memo"))
+            created("memo", folder / memo)
+            row = docs.append_books(books, case.case_id, self._now().date().isoformat(), label,
+                                    figures)
+            stepper("books")(f"Books: {label}, fee $0, tax saved "
+                             f"{format_usd(max(figures.auth_cents, figures.apv_cents) - figures.tax_cents)}")
+            created("books", books)
+            failed_by = {"workpaper": docs.verify_workpaper(folder / sheet, checks, truth),
+                         "memo": docs.verify_memo(folder / memo, carry, truth),
+                         "books": docs.verify_books(books, row, figures, truth)}
+        except OSError as err:  # a file in use (the books open in Excel), a full disk: retry
+            log.warning("documents for %s not written: %s", case.case_id, err)
+            raise Refused("docs_unavailable", "a document couldn't be written (is "
+                                              "U-Tax_Books.xlsx open?); try again") from err
+        except (KeyError, ValueError, TypeError) as err:
+            log.warning("documents for %s failed: %s", case.case_id, err)
+            failed_by = {"workpaper": [f"build: {type(err).__name__}"], "memo": [], "books": []}
+        # one doc.verified per document; the case's documents are ready once all three pass
+        self._emit([NewEvent(type="doc.verified", actor="acct", case_id=case.case_id,
+                             payload={"doc": doc, "ok": not bad, **({"failed": bad} if bad else {})},
+                             idempotency_key=f"{key}:{doc}:{'verified' if not bad else 'mismatch'}")
+                    for doc, bad in failed_by.items()])
+        failed = [f"{doc}.{check}" for doc, bad in failed_by.items() for check in bad]
+        if failed:
+            self._block(case, "documents don't match the engine: " + ", ".join(failed))
+            raise Refused("docs_mismatch", "a figure in the documents doesn't match the "
+                                           "engine; the case is BLOCKED for the CEO",
+                          {"failed": failed})
+        return {"ok": True, "files": [sheet, memo], "next": "send_memo"}
 
     def _phone_check(self, args: dict) -> dict:
         """v1.7: starts a phone run for the latest memo and returns {pending: true}; the

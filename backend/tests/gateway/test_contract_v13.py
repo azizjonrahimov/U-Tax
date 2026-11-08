@@ -42,7 +42,8 @@ def test_every_tool_has_an_owner_and_book_cost_is_gone():
         "post_social", "draft_dm", "hr_record", "firm_brief", "get_candidate", "flag_case",
         "buy_tool",  # v1.7.3
         "make_ad", "source_candidates", "hr_outreach", "follow_up",  # v1.11
-        "list_candidates"}  # v1.11.2
+        "list_candidates",  # v1.11.2
+        "prepare_documents"}  # v1.15 (D35)
 
 
 # ---------------------------------------------------------------- wake-ups (§6b)

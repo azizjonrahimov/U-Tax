@@ -210,6 +210,7 @@ def test_memo_ref_is_the_last_line_once_per_memo_version(h):
          incorporated_delaware=True, foreign_owner_25=False)
     h.ok("compute_tax", case_id=case_id)
     h.ok("qa_check", case_id=case_id)
+    h.ok("prepare_documents", case_id=case_id)  # v1.15
     h.ok("send_memo", case_id=case_id)
     refs = [e.payload["memo_ref"] for e in h.events("memo.sent")]
     assert len(set(refs)) == 2
