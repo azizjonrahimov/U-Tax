@@ -217,8 +217,8 @@ def test_doc_steps_carry_their_cells_for_admin_readers(h):
     steps = h.events("doc.step")
     sheet = next(e for e in steps if e.payload["detail"].startswith("Comparison"))
     cells = h.gw.public_event(sheet, admin=True)["payload"]["cells"]
-    assert {"sheet": "Comparison", "cell": "A4", "value": "Tax owed: the lower of the two"} \
-        in cells
+    assert {"sheet": "Comparison", "cell": "A4", "value": "Tax owed: the lower of the two",
+            "fmt": "text"} in cells
     assert "cells" not in h.gw.public_event(sheet)["payload"]
     books = next(e for e in steps if e.payload["doc"] == "books")
     assert any(c["value"] == "case_1" for c in

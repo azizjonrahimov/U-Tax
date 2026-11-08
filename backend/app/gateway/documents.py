@@ -305,25 +305,52 @@ def append_books(path: Path, entry: str, date: str, label: str, f: Figures) -> i
 CELLS_MAX_ROWS = 40
 
 
-def _shown(value) -> str:
-    if value is None:
-        return ""
+def _number(value) -> int | float:
+    """A JSON number, exact: 85165, 400.5, 1e-05 (never a formatted "85,165")."""
+    if isinstance(value, Decimal):
+        value = float(value) if value != value.to_integral_value() else int(value)
+    if isinstance(value, float) and value.is_integer() and abs(value) < 1e15:
+        return int(value)
+    return value
+
+
+def cell_dict(ws, cell) -> dict:
+    """Task 43: {sheet, cell, value, fmt}. fmt: "usd" (money: the dollars, to the cent),
+    "par" (a par value per share: full precision, $0.00001 stays 1e-05), "int" (a count)
+    or "text". Numbers are JSON numbers."""
+    value = cell.value
+    label = str(ws.cell(cell.row, 1).value or "").lower()
+    par = cell.column > 1 and "par" in label and "capital" not in label
     if isinstance(value, bool):
-        return "yes" if value else "no"
-    if isinstance(value, (Decimal, float)):
-        return f"{value:,.2f}" if isinstance(value, Decimal) else f"{value:,.4f}".rstrip("0").rstrip(".")
-    return str(value)
+        return {"sheet": ws.title, "cell": cell.coordinate,
+                "value": "yes" if value else "no", "fmt": "text"}
+    if isinstance(value, str) and par:
+        try:
+            value = Decimal(value.strip().lstrip("$"))
+        except ArithmeticError:
+            pass
+    if isinstance(value, (int, float, Decimal)):
+        if cell.number_format == MONEY:
+            fmt, value = "usd", _number(round(Decimal(str(value)), 2))
+        elif par:
+            fmt, value = "par", _number(value)
+        elif isinstance(value, int) or (isinstance(value, Decimal)
+                                        and value == value.to_integral_value()):
+            fmt, value = "int", _number(value)
+        else:  # dollars that aren't cents-formatted (the assumed par value capital)
+            fmt, value = "usd", _number(value)
+        return {"sheet": ws.title, "cell": cell.coordinate, "value": value, "fmt": fmt}
+    return {"sheet": ws.title, "cell": cell.coordinate, "value": str(value), "fmt": "text"}
 
 
 def sheet_cells(ws) -> list[dict]:
-    """Task 42: a sheet's written cells as {sheet, cell, value} (admin readers watch the
-    workbook fill), at most CELLS_MAX_ROWS rows."""
+    """Task 42/43: a sheet's written cells as {sheet, cell, value, fmt} (admin readers
+    watch the workbook fill), at most CELLS_MAX_ROWS rows."""
     out = []
     for row in ws.iter_rows(max_row=CELLS_MAX_ROWS):
         for cell in row:
             if cell.value is not None and cell.value != "":
-                out.append({"sheet": ws.title, "cell": cell.coordinate,
-                            "value": _shown(cell.value)})
+                out.append(cell_dict(ws, cell))
     return out
 
 
@@ -332,8 +359,7 @@ def row_cells(path: Path, row: int) -> list[dict]:
     wb = load_workbook(path)
     try:
         ws = wb.active
-        return [{"sheet": ws.title, "cell": cell.coordinate, "value": _shown(cell.value)}
-                for cell in ws[row] if cell.value is not None]
+        return [cell_dict(ws, cell) for cell in ws[row] if cell.value is not None]
     finally:
         wb.close()
 
