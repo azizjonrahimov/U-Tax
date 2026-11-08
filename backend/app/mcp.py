@@ -186,11 +186,30 @@ TOOLS: dict[str, dict[str, Any]] = {
                                                  "call_reminder"]}}, ["case_id", "kind"])},
 }
 
+# v1.20 §10 (D41): any seat ends the CEO order task its card was made for
+TOOLS["task_done"] = {
+    "description": "D41: the last call of a card made for a CEO order task. Ends that task so "
+                   "the next one starts. Call it once, whatever the outcome.",
+    # the runbook's schema, less additionalProperties (MCP schemas use plain types: task 7)
+    "inputSchema": {"type": "object", "required": ["order_id", "task_no", "status"],
+                    "properties": {"order_id": {"type": "string",
+                                                "pattern": "^order_[0-9]{1,12}$"},
+                                   "task_no": {"type": "integer", "minimum": 1, "maximum": 6},
+                                   "status": {"type": "string",
+                                              "enum": ["done", "blocked", "failed"]},
+                                   "summary": {"type": "string", "maxLength": 200}}}}
+
 # v1.11.1: every tool takes the CEO order it serves (from the card); the gateway checks it
-for _spec in TOOLS.values():
+for _name, _spec in TOOLS.items():
+    if _name == "task_done":  # its order_id is required and is the subject (schema above)
+        continue
     _spec["inputSchema"]["properties"]["order_id"] = {
         "type": "string", "pattern": "^order_[0-9]+$",
         "description": "optional: the order_<id> from the card, when it serves a CEO order"}
+    # v1.20 §10.2: and the card's task (`order_<id> task k/N`); an explicit task wins
+    _spec["inputSchema"]["properties"]["task_no"] = {
+        "type": "integer", "minimum": 1, "maximum": 6,
+        "description": "optional: k from the card's `order_<id> task k/N` line"}
 assert set(TOOLS) == set(TOOL_ACTORS), "every §6 tool needs a schema"
 
 
@@ -378,7 +397,8 @@ async def _handle(gw: Gateway, actor: str, message: Any, request: Request) -> di
         result = await asyncio.to_thread(gw.perform, name, args, actor=actor)
         # v1.12 §5a: tool.called, written off the reply's path (the agent never waits)
         task = asyncio.create_task(asyncio.to_thread(
-            gw.record_tool_call, actor, name, result.status, args.get("order_id")))
+            gw.record_tool_call, actor, name, result.status, args.get("order_id"),
+            args.get("task_no")))
         _background.add(task)
         task.add_done_callback(_background.discard)
         body = result.as_dict()

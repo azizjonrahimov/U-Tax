@@ -34,7 +34,7 @@ def test_a_confirmed_free_order_wakes_the_chief_of_staff(h):
 
 @pytest.mark.parametrize("said", ["ok", "hm", "yes please", "no, cancel", "never mind",
                                   "what is pending in the queue?", "how much did we make",
-                                  "is anything blocked", "x" * 301])
+                                  "is anything blocked", "x" * 1201])  # D41: 1200 max
 def test_confirm_cancel_questions_and_odd_lengths_stay_unknown(h, said):
     r = command(h, said)
     assert r.data["kind"] in ("unknown", "confirm", "cancel"), (said, r.data)

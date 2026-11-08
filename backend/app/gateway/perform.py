@@ -16,6 +16,7 @@ import logging
 import re
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -35,6 +36,7 @@ from app.engine import (
 from app.gateway import intake
 from app.gateway.adapters.local import DELAWARE_FEE_URL
 from app.gateway.events import PROVIDERS, Event, NewEvent, iso_ts, parse_ts
+from app.gateway.order_queue import ENDED, Order, OrderQueue, Task
 from app.gateway.masking import (
     company_label,
     has_email,
@@ -105,6 +107,7 @@ TOOL_ACTORS: dict[str, tuple[str, ...]] = {
     "make_ad": ("mkt",), "source_candidates": ("hr",), "hr_outreach": ("hr",),
     "hire_contractor": ("mkt",), "get_job": ("mkt",),  # v1.19 §9.2 (D38)
     "follow_up": ("intake",), "list_candidates": ("hr",),  # v1.11.2
+    "task_done": AGENTS,  # v1.20 §10 (D41): ends a CEO order's task (any seat)
 }
 POST_MAX_CHARS = 255
 X_MAX_CHARS = 280
@@ -383,7 +386,11 @@ class Gateway:
         self._outbox_paused_until = 0.0  # a CRM rate limit pauses the whole outbox
         self._outbox_limited: dict[str, int] = {}  # rate limits per job (then it backs off)
         self._fee_tried_at = 0.0
+        # D41: the CEO's order tasks, one at a time (rebuilt from the log below)
+        self.wall: Callable[[], float] = time.time  # the queue's clock (tests freeze it)
+        self._orders = OrderQueue()
         self.state: State = rebuild(store.since(0))
+        self._replay_orders()
         if settings.market_enabled:  # D38: contractor_pay joins the trust types (ASK first)
             from app.gateway.projections import MARKET_TRUST_TYPES
 
@@ -424,6 +431,8 @@ class Gateway:
             "stripe_payment": self._stripe_payment,  # task 40b: /hooks/stripe only
             "agent_activity": self._agent_activity,  # task 42: the activity relay only
             "firm_brief": self._firm_brief,
+            "task_done": self._task_done,  # v1.20 §10 (D41)
+            "advance_orders": self._advance_orders_action,  # D41: the tick (control only)
             # gateway / control actions (contract §5, §6a-c): never callable by an agent token
             "inject_email": self._inject_email,
             "receive_email": self._receive_email,
@@ -871,17 +880,26 @@ class Gateway:
                                                 "message": f"{actor} may not call {name}"})
         args = dict(args or {})
         for private in ("_actor", "_prefetch", "_law_reserved", "_buy_reserved",
-                        "_order_id"):
+                        "_order_id", "_task_no"):
             args.pop(private, None)  # never caller-supplied
-        if actor is not None:
+        if actor is not None and name == "task_done":
+            args["_actor"] = actor  # D41: its order_id is the subject, not a link
+        elif actor is not None:
             args["_actor"] = actor
             order = self._valid_order(args.pop("order_id", None))  # v1.11.1, else ignored
+            task_no = args.pop("task_no", None)  # v1.20 §10.2: the card's own task, if any
             if order and order in self._cancelled_orders:  # v1.14: the CEO cancelled it
                 return ToolResult("refused", error={
                     "code": "order_cancelled",
                     "message": f"the CEO cancelled {order}; close its card, don't work it"})
             if order:
                 args["_order_id"] = order
+                if isinstance(task_no, int) and not isinstance(task_no, bool) \
+                        and 1 <= task_no <= 6:
+                    args["_task_no"] = task_no
+                with self._lock:  # D41: any call for the task (a read too) is this seat
+                    self._orders.touch(order, args.get("_task_no")  # working on it
+                                       or self._orders.task_no_for(order), actor, self.wall())
         slow = self._slow_reads.get(name)
         if slow is not None:
             try:
@@ -898,11 +916,14 @@ class Gateway:
                 return ToolResult("error", error={"code": "internal_error",
                                                   "message": f"{name} failed unexpectedly"})
         prev_order = getattr(self._order_ctx, "value", None)
+        prev_task = getattr(self._order_ctx, "task_no", None)
         self._order_ctx.value = args.get("_order_id") or prev_order
+        self._order_ctx.task_no = args.get("_task_no") if args.get("_order_id") else prev_task
         try:
             result, wakes = self._perform_locked(name, handler, args)
         finally:
             self._order_ctx.value = prev_order
+            self._order_ctx.task_no = prev_task
             self._release(args)
         if name == "phone_check" and result.status == "done" and result.data.get("pending"):
             try:
@@ -951,6 +972,8 @@ class Gateway:
                 log.exception("%s failed unexpectedly", name)
                 result = ToolResult("error", error={"code": "internal_error",
                                                     "message": f"{type(err).__name__} in {name}"})
+            if name not in self.READ_ONLY and not self._is_read(name, args):
+                self._advance_orders()  # D41: a task waiting, ended or due moves on (never raises)
             wakes, self._pending_wakes = self._pending_wakes, []
             return result, wakes
 
@@ -972,6 +995,14 @@ class Gateway:
         if order:  # v1.11.1: the theater groups a CEO order's steps by it
             events = [e if "order_id" in e.payload
                       else replace(e, payload={**e.payload, "order_id": order}) for e in events]
+            task_no = getattr(self._order_ctx, "task_no", None)
+            if task_no:  # v1.20 §10.2: the task the card named (checked in _with_task_no)
+                events = [replace(e, payload={**e.payload, "task_no": task_no})
+                          if e.payload.get("order_id") == order and "task_no" not in e.payload
+                          and not e.type.startswith("order.") else e for e in events]
+        orders = getattr(self, "_orders", None)
+        if orders is not None:  # v1.20 (D41): and by the task it serves
+            events = [self._with_task_no(e) for e in events]
         base = self._now()
         last = self.store.since(self.state.last_event_id - 1) if self.state.last_event_id else ()
         last_ts = max((parse_ts(e.ts) for e in last), default=None)
@@ -987,12 +1018,207 @@ class Gateway:
             # reply we never saw (a commit that reported failure): project it now.
             if not item.duplicate or item.event.id > self.state.last_event_id:
                 self.state.apply(item.event)
+                if orders is not None:  # D41: the queue follows the log (as on boot)
+                    self._order_apply(item.event)
                 for listener in list(self._listeners):
                     try:
                         listener(item.event)
                     except Exception:  # noqa: BLE001 - a bad listener never blocks the firm
                         log.exception("event listener failed")
         return out
+
+    # ------------------------------------------------------------ v1.20 §10 (D41) order tasks
+
+    def _with_task_no(self, e: NewEvent) -> NewEvent:
+        """An order-linked event carries the task it serves (the running one, else the last
+        started). The queue's own order.* events say theirs."""
+        oid = e.payload.get("order_id")
+        if not oid or e.type.startswith("order."):
+            return e
+        given = e.payload.get("task_no")
+        o = self._orders.get(oid)
+        if given is not None and o is not None and isinstance(given, int) \
+                and not isinstance(given, bool) and 1 <= given <= o.of:
+            return e  # v1.20 §10.2: an explicit task that names a task of the order wins
+        no = self._orders.task_no_for(oid)
+        payload = {k: v for k, v in e.payload.items() if k != "task_no"}
+        if no:
+            payload["task_no"] = no
+        return replace(e, payload=payload) if payload != e.payload else e
+
+    def _order_apply(self, event: Event) -> None:
+        """Never raises: the queue is a view of the log, not a gate on writing it."""
+        try:
+            self._orders.apply(event.type, event.payload, self.wall(), event.actor)
+        except Exception:  # noqa: BLE001 - a bad payload never blocks the firm
+            log.exception("order queue: event %s not applied", event.id)
+
+    def _replay_orders(self) -> None:
+        """Boot: rebuild the queue from the log. A task still running restarts its clock; no
+        task_started or wake is written again."""
+        try:
+            for e in self.store.since(0):
+                if e.type.startswith("order.") or e.payload.get("task_no"):
+                    self._order_apply(e)
+        except Exception:  # noqa: BLE001 - a store hiccup never stops the boot
+            log.exception("order queue not rebuilt at boot")
+
+    def _mask_ceo(self, text: str) -> str:
+        """The CEO's words as voice.command keeps them (the same chain as _voice)."""
+        text, _ = redact_ids(text)
+        return mask_text(mask_spoken_emails(text), masked_name="", company=None)
+
+    def _ceo_order(self, texts: list[str], channel: str, *, premasked: bool = False,
+                   queue: bool = True) -> str:
+        """D41: a CEO order of 1-6 tasks, under the lock: its voice.command (the order id),
+        order.queued, then the queue starts task 1 when nothing else runs. `queue=False`: a
+        gateway note to the Chief of Staff (an undo's cancel), woken at once, never queued."""
+        masked = [t for t in (texts if premasked else [self._mask_ceo(t) for t in texts]) if t]
+        if not masked:
+            raise Refused("bad_input", "say the order again")
+        text = masked[0] if len(masked) == 1 else " · ".join(
+            f"{i}) {t}" for i, t in enumerate(masked, 1))
+        payload = {"text": text, "channel": channel, "speaker": "ceo", "case_id": None}
+        if len(masked) > 1:
+            payload["tasks"] = masked
+        written = self._emit([
+            NewEvent(type="voice.command", actor="ceo", provider="local", payload=payload),
+            NewEvent(type="touch.operating", actor="ceo",
+                     payload={"note": f'order: "{clip(text, 120)}"', "approval_id": None,
+                              "channel": self._touch_channel or channel}),
+        ])
+        order_id = f"order_{written[0].id}"
+        if not queue:
+            self._wake(f"CEO {order_id}: {text}")  # v1.11.1: the order's id rides the wake
+            return "Sent to the Chief of Staff."
+        ahead = self._orders.active() or self._orders.next_to_start()
+        self._emit([NewEvent(type="order.queued", actor="system", provider="local",
+                             payload={"order_id": order_id, "of": len(masked),
+                                      "tasks": [{"no": i, "text": t}
+                                                for i, t in enumerate(masked, 1)]},
+                             idempotency_key=f"order_queued:{order_id}")])
+        self._orders.add(order_id, masked)
+        self._advance_orders()  # may start task 1 and wake the Chief of Staff
+        n = len(masked)
+        if ahead:
+            return f"Queued {n} task{'s' if n > 1 else ''} after the task that is running now."
+        if n == 1:
+            return "Sent to the Chief of Staff."
+        return f"Queued {n} tasks. Starting 1 of {n}: {masked[0]}."
+
+    def _advance_orders(self) -> None:
+        """Under the lock, after every write and from the tick. Never raises."""
+        try:
+            self._advance_orders_once()
+        except EventWriteError as err:  # the log is down: the next write or tick retries
+            log.warning("order queue did not advance: %s", err)
+        except Exception:  # noqa: BLE001 - the queue never fails the call that moved it
+            log.exception("order queue did not advance")
+
+    def _advance_orders_once(self) -> None:
+        now = self.wall()
+        a = self._orders.active()
+        if a:
+            o, t = a
+            if t.waiting:  # an approval.requested while it ran (the emit hook)
+                self._finish_task(o, t, "waiting_on_you", "waiting on your approval in the console")
+            elif self._orders.due_timeout(now):
+                self._finish_task(o, t, "timeout", "no word from the department; moved on")
+        for o in self._orders.orders:  # order.done once per finished order
+            if o.finished and not o.done_sent:
+                counts = Counter(t.status for t in o.tasks)
+                self._emit([NewEvent(type="order.done", actor="system", provider="local",
+                                     payload={"order_id": o.order_id, "of": o.of,
+                                              "done": counts["done"],
+                                              "waiting_on_you": counts["waiting_on_you"],
+                                              "other": o.of - counts["done"]
+                                              - counts["waiting_on_you"]},
+                                     idempotency_key=f"order_done:{o.order_id}")])
+                o.done_sent = True
+        nxt = self._orders.next_to_start()
+        if nxt:
+            o, t = nxt
+            self._emit([NewEvent(type="order.task_started", actor="system", provider="local",
+                                 payload={"order_id": o.order_id, "task_no": t.no, "of": o.of,
+                                          "text": t.text},
+                                 idempotency_key=f"task_started:{o.order_id}:{t.no}")])
+            self._orders.start(o.order_id, t.no, now)
+            n = o.order_id.removeprefix("order_")
+            # a single order keeps the rehearsed wake exactly (v1.11.1)
+            self._wake(f"CEO order_{n}: {t.text}" if o.of == 1
+                       else f"CEO order_{n} task {t.no}/{o.of}: {t.text}")
+
+    def _finish_task(self, o: Order, t: Task, status: str, summary: str,
+                     by: str = "system") -> bool:
+        """End one task: order.task_done first, then the queue (once; False if it had ended)."""
+        if t.status in ENDED:
+            return False
+        self._emit([NewEvent(type="order.task_done", actor=by, provider="local",
+                             payload={"order_id": o.order_id, "task_no": t.no, "of": o.of,
+                                      "status": status, "summary": summary, "by": by},
+                             idempotency_key=f"task_done:{o.order_id}:{t.no}")])
+        self._orders.finish(o.order_id, t.no, status, self.wall())
+        return True
+
+    def _cancel_orders(self, order_id: str | None = None) -> int:
+        """STOP everything (every order) or an undo (one): each running or queued task ends
+        cancelled, in one write; order.done follows. No wake."""
+        orders = [o for o in self._orders.orders if order_id is None or o.order_id == order_id]
+        todo = [(o, t) for o in orders for t in o.tasks if t.status not in ENDED]
+        if not todo:
+            return 0
+        self._emit([NewEvent(type="order.task_done", actor="system", provider="local",
+                             payload={"order_id": o.order_id, "task_no": t.no, "of": o.of,
+                                      "status": "cancelled", "summary": "cancelled by the CEO",
+                                      "by": "system"},
+                             idempotency_key=f"task_done:{o.order_id}:{t.no}")
+                    for o, t in todo])
+        now = self.wall()
+        for o, t in todo:
+            self._orders.finish(o.order_id, t.no, "cancelled", now)
+        self._advance_orders()
+        return len(todo)
+
+    def _advance_orders_action(self, args: dict) -> dict:
+        return {}  # perform() runs _advance_orders after it, under the lock
+
+    def advance_orders(self) -> None:
+        """main.tick: a waiting or timed-out task moves on, the next one starts (wakes sent)."""
+        self.perform("advance_orders", {})
+
+    def _task_done(self, args: dict) -> dict:
+        """MCP utax.task_done (any seat): the last call of a card made for an order task."""
+        from app.ceo_tools import mask_words
+
+        order_id = self._valid_order(args.get("order_id"))
+        if order_id is None:
+            raise Refused("not_found", f"no CEO order {args.get('order_id')!r}")
+        no = _int(args, "task_no")
+        if no is None or not 1 <= no <= 6:
+            raise Refused("bad_input", "task_no must be 1..6")
+        status = _one_of(args, "status", ("done", "blocked", "failed"))
+        summary = clip(mask_words(_str(args, "summary", required=False, max_len=200) or ""),
+                       200)
+        o = self._orders.get(order_id)
+        if o is None or no > o.of:
+            raise Refused("not_found", f"{order_id} has no task {no}")
+        t = o.tasks[no - 1]
+        if t.status in ENDED:
+            return {"ok": True, "duplicate": True}
+        if t.status == "queued":
+            raise Refused("not_running", f"task {no} has not started; the gateway starts it")
+        actor = args.get("_actor")
+        if actor is not None and actor != "cos" and actor not in t.seats:
+            # v1.20 §10.2: only the Chief of Staff, or a department that worked this task
+            raise Refused("not_yours", f"{actor} has not worked task {no} of {order_id}; "
+                                       "the Chief of Staff ends it")
+        by = actor if actor in AGENTS else "system"
+        self._finish_task(o, t, status, summary, by=by)
+        self._advance_orders()
+        a = self._orders.active()
+        if a and a[0].order_id == order_id:
+            return {"ok": True, "next": f"task {a[1].no}/{o.of} starts now"}
+        return {"ok": True, "next": "that was the last task"}
 
     def _case(self, args: dict) -> Case:
         case_id = _str(args, "case_id", max_len=64)
@@ -1497,14 +1723,19 @@ class Gateway:
                     and self._mail_may_go(f"signup-welcome:{cid}")]
             return [cid for cid in todo if self._send_signup_welcome(cid) == "sent"]
 
-    def record_tool_call(self, actor: str, tool: str, status: str, order_id: Any) -> None:
+    def record_tool_call(self, actor: str, tool: str, status: str, order_id: Any,
+                         task_no: Any = None) -> None:
         """v1.12 §5a: tool.called for every MCP tool call (reads too): the seat, the tool,
-        the outcome, the CEO order it served. No args or data. Never raises."""
+        the outcome, the CEO order it served (v1.20: and the card's task, checked in
+        _with_task_no). No args or data. Never raises."""
         try:
             order = self._valid_order(order_id)
+            link = {"order_id": order} if order else {}
+            if order and isinstance(task_no, int) and not isinstance(task_no, bool):
+                link["task_no"] = task_no
             with self._lock:
                 self._emit([NewEvent(type="tool.called", actor=actor, payload={
-                    "tool": tool, "status": status, **({"order_id": order} if order else {})})])
+                    "tool": tool, "status": status, **link})])
         except Exception:  # noqa: BLE001 - the animation event never fails a tool call
             log.exception("tool.called for %s %s not written", actor, tool)
 
@@ -1656,18 +1887,9 @@ class Gateway:
                                 else "agent", "text": masked[:self.CONTEXT_CHARS]})
         text, _ = redact_ids(text)
         text = mask_spoken_emails(text)
-        if speaker == "ceo":
-            text = mask_text(text, masked_name="", company=None)
-            written = self._emit([
-                NewEvent(type="voice.command", actor="ceo", provider="local",
-                         payload={"text": text, "channel": channel, "speaker": "ceo",
-                                  "case_id": None}),
-                NewEvent(type="touch.operating", actor="ceo",
-                         payload={"note": f'order: "{clip(text, 120)}"', "approval_id": None,
-                                  "channel": self._touch_channel or channel}),
-            ])
-            # v1.11.1: the order's own id rides the wake, so each card can carry it
-            self._wake(f"CEO order_{written[0].id}: {text}")
+        if speaker == "ceo":  # D41: a one-task order through the queue (same wake)
+            self._ceo_order([mask_text(text, masked_name="", company=None)], channel,
+                            premasked=True)
             return {"forwarded": True}
         # Public, unauthenticated page: always a fresh case. Never join (or reveal) a case
         # by the email typed in, or anyone could read or redirect someone else's case.
@@ -4113,7 +4335,7 @@ class Gateway:
         from app.ceo_tools import REGISTRY, parse
 
         if name == "ceo_command" and isinstance(args.get("text"), str):
-            parsed = parse(args["text"][:600])
+            parsed = parse(args["text"][:1500])
             tool_name = parsed[1][0] if parsed and parsed[0] == "tool" else None
         elif name == "ceo_tool" and isinstance(args.get("name"), str):
             tool_name = args["name"]
@@ -4167,23 +4389,46 @@ class Gateway:
 
     def _propose(self, tool: str, pinned: dict, readback: str, source: str) -> dict:
         """A start tool's single-use proposal: pinned to its exact target, 60 s. A newer
-        proposal supersedes every open one (confirm words go to the newest)."""
+        proposal supersedes every open one (confirm words go to the newest). D41: a newer
+        order absorbs an unexpired open order's tasks (that one is cancelled "merged")."""
+        from app import ceo_tools
         from app.ceo_tools import PROPOSAL_TTL
 
         import secrets  # never a counter: a lost write reply would hand out the same id twice
 
+        merged = None
+        if tool == "order":
+            live = [p for p in self._open_proposals()
+                    if p["tool"] == "order" and not self._expired(p)]
+            if live:
+                merged = live[-1]["proposal_id"]
+                old = live[-1].get("args") or {}
+                old_tasks = old.get("tasks") if isinstance(old.get("tasks"), list) \
+                    else [old.get("text") or ""]
+                new_tasks = pinned.get("tasks") if isinstance(pinned.get("tasks"), list) \
+                    else [pinned.get("text") or ""]
+                try:
+                    pinned, readback = ceo_tools.pin_order(
+                        self, {"tasks": [*old_tasks, *new_tasks]})
+                except ceo_tools.ToolRefused as err:
+                    raise Refused(err.code, err.message, err.data) from err
         proposal_id = f"prop_{secrets.token_hex(5)}"
         expires_at = iso_ts(self._now() + PROPOSAL_TTL)
-        events = [self._proposal_cancel(p, "expired" if self._expired(p) else "superseded",
-                                        "click", "") for p in self._open_proposals()]
+        events = [self._proposal_cancel(
+            p, "expired" if self._expired(p) else "merged" if p["proposal_id"] == merged
+            else "superseded", "click", "") for p in self._open_proposals()]
         case_id = pinned.get("case_id")
         approval = self.state.approvals.get(pinned.get("approval_id") or "")
         if approval is not None:
             case_id = approval.case_id
         public_args, public_readback, private = pinned, readback, None
         if tool == "order":  # v1.8.5: the CEO's words stay private; the theater sees a length
+            count = len(pinned.get("tasks") or [pinned["text"]])
             public_args = {"text_len": len(pinned["text"])}
             public_readback = self.ORDER_READBACK_PUBLIC
+            if count > 1:  # D41: and how many tasks
+                public_args["tasks"] = count
+                public_readback = f"{count} tasks for the Chief of Staff. Say confirm."
             private = {"args": pinned, "readback": readback}
         elif approval is not None and approval.detail and approval.detail in readback:
             # a post read back word for word: unapproved agent text stays off the public log
@@ -4384,6 +4629,9 @@ class Gateway:
             reason = proposal.get("reason")
             if reason == "superseded":
                 raise Refused("superseded", f"{proposal_id} was replaced; confirm the newer one")
+            if reason == "merged":  # D41: its tasks are in the newer order proposal
+                raise Refused("superseded", f"{proposal_id} was merged into a newer order; "
+                                            "confirm that one")
             if reason == "expired":
                 raise Refused("expired", f"{proposal_id} expired; ask again")
             raise Refused("used", f"{proposal_id} was cancelled")
@@ -4433,7 +4681,7 @@ class Gateway:
         typing. Confirm and cancel words point at the newest open proposal."""
         from app import ceo_tools
 
-        raw = _str(args, "text", max_len=600)
+        raw = _str(args, "text", max_len=1500)  # D41: several tasks at once (was 600)
         parsed = ceo_tools.parse(raw)
         live = [p for p in self._open_proposals() if not self._expired(p)]
         kind = parsed[0] if parsed else None
@@ -4442,7 +4690,13 @@ class Gateway:
         # v1.13.1: a stop ("stop posting", "pause emails", "okay, stop everything") always
         # runs at once; the open card is never in its way (the pause then cancels it, §5b)
         stops = kind == "tool" and ceo_tools.REGISTRY[parsed[1][0]].kind == "stop"
-        if live and not confirms and not stops:  # v1.13: one decision at a time
+        # D41: speech cut at a pause ("Advertise the firm." ... "Hire two people.") adds a
+        # task to the open order proposal; anything else still waits for confirm or cancel
+        adds = bool(live) and live[-1]["tool"] == "order" and (
+            (kind == "tool" and parsed[1][0] == "order")
+            or (parsed is None and ceo_tools.free_order(raw) is not None
+                and ceo_tools.starts_order(raw) and not ceo_tools.is_greeting(raw)))
+        if live and not confirms and not stops and not adds:  # v1.13: one decision at a time
             return {"kind": "say", "say": ceo_tools.CONFIRM_OR_CANCEL}
         if ceo_tools.is_greeting(raw):  # v1.13: hello / mic checks are never orders
             return {"kind": "say", "say": ceo_tools.LISTENING}
@@ -4453,11 +4707,12 @@ class Gateway:
             if order is None:
                 return {"kind": "unknown", "say": ceo_tools.EXAMPLES}
             try:
-                pinned, _ = ceo_tools.pin_order(self, {"text": order})
+                pinned, readback = ceo_tools.pin_order(self, {"text": order})
             except ceo_tools.ToolRefused as err:
                 raise Refused(err.code, err.message) from err
-            readback = (f'Send this order to the Chief of Staff: "{pinned["text"]}". '
-                        "Say confirm.")
+            if len(pinned["tasks"]) == 1:
+                readback = (f'Send this order to the Chief of Staff: "{pinned["text"]}". '
+                            "Say confirm.")
             return self._propose("order", pinned, readback, "command")
         kind, value = parsed
         if kind == "approve_it":  # confirms an open approve, else proposes the latest
