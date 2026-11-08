@@ -1,9 +1,11 @@
-# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 06:55 local · D40 live; rehearsal 07:45; freeze 10:00
+# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 07:30 local · D41 fixes; merges stop 09:30; rehearsal T1–T6; freeze 10:00
 
 ## Needs you
 
 Captain (naive-yc-hackathon-99)
-- A (07:45): the rehearsal on the D40 skin. Sign in → /office → voice order → the first payment asks → approve → post. The console talk depends on Naïve capacity until backend 50 lands.
+- A (before 09:30, 5 min): the §D.4 email round trip from your personal Gmail (I'll send the address and the exact text when B51 lands).
+- A2 (before the demo): on /office, click "Hide" on the docked CEO panel once (a saved open panel overrides the new closed default).
+- A3 (after B53): Stripe Dashboard → Test mode → Payments: three $0.50 "MIRROR of Tempo testnet tx" records.
 - B (optional): free some memory (close ChatGPT or spare Chrome tabs); the gateway and PixelAgent share 0.4–1.2 GB.
 - C (after the event): rotate every key pasted in chat (OpenAI, Apify, Stripe, Naïve, …); pause the Naïve schedule; delete the testnet wallet keys.
 
@@ -25,6 +27,7 @@ Captain (naive-yc-hackathon-99)
 
 | Thread | Owns | State | Last report |
 |---|---|---|---|
-| frontend | `frontend/` | resting (D40 done) | 0m |
-| backend | `backend/`, `contractors/` | resting | 30m |
-| agents | `naive/` | resting | 25m |
+| frontend | `frontend/` | D41 F44 fonts → F46 /office port → F48 tour → F49 inbox → F50-office | 0m |
+| backend | `backend/`, `contractors/` | D41 B51 multi-task orders → B52 /api/payments → B53 Stripe mirror | 0m |
+| agents | `naive/` | D41 A43 prompts (READY after B51 live) | 0m |
+| frontend-voice | `frontend/src/components/ceo/` | D41 F45 /ceo port (then F47, F50-console) | 0m |
