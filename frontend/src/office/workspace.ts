@@ -343,6 +343,18 @@ export function stepOf(ev: UTaxEvent, name: (caseId: string | null) => string, f
       const kind = s(p, "kind").replace(/_/g, " ") || "follow-up";
       return { seat, kind: "event", text: `Followed up with ${who} (${kind})`, site: "AgentMail · thread", fields: [{ label: "To", value: who }, { label: "About", value: kind }], focus: 1, count: "follow-ups" };
     }
+    // D42 T3 (v1.21 §11): the draft Form 1120 at Tax, the returns workbook at Accounting.
+    case "form.step": {
+      const label = s(p, "label").slice(0, 80) || "a line";
+      const value = s(p, "value").slice(0, 80);
+      return { seat: "tax", kind: "event", text: value ? `Form 1120: ${label} · ${value}` : `Form 1120: ${label}`, site: "irs.gov · Form 1120 (draft)", fields: [{ label: "Line", value: label }, ...(value ? [{ label: "Value", value }] : [])], focus: value ? 1 : 0 };
+    }
+    case "sheet.cell": {
+      const at = `${s(p, "sheet").slice(0, 31)}!${s(p, "cell").slice(0, 6)}`;
+      const v = p.value;
+      const value = typeof v === "number" && Number.isFinite(v) ? `$${Math.round(v).toLocaleString("en-US")}` : typeof v === "string" ? v.slice(0, 80) : "";
+      return { seat: "acct", kind: "event", text: `Excel: ${at}${value ? ` = ${value}` : ""}`, site: `Excel · ${s(p, "book").slice(0, 60) || "workbook"}`, fields: [{ label: "Cell", value: at }, { label: "Formula", value: typeof p.formula === "string" ? p.formula.slice(0, 120) : "—" }, { label: "Value", value: value || "—" }], focus: 2 };
+    }
     case "post.published": {
       if (!seat) return null;
       const ch = channelName(s(p, "channel"));

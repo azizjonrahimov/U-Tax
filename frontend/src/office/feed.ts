@@ -10,6 +10,7 @@ import { API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
 import { foldTour, type TourOrder } from "./tour";
 import { foldMail, type Thread } from "./mail";
+import { EMPTY_DOCS, foldDocs, type Docs } from "./forms";
 import { assetAllowed, eventsUrl, numbersFromState, originOf, parseAssetHosts, reconnectDelayMs, seedFromState, stateUrl, streamUrl, type Endpoints } from "@/theater/live";
 import type { FirmNumbers } from "@/theater/rail";
 import { appendEvents, startScript, type ScriptCursor } from "@/theater/script";
@@ -46,7 +47,22 @@ export interface Feed {
   mail: Thread[];
   /** D41 F50: bumps on every payment.* / agent.sale event, so the ledger refetches at once. */
   payTick: number;
+  /** D42 T3: the newest draft form and workbook (form.step / sheet.cell). */
+  docs: Docs;
+  /** D42 T3: the last form or sheet event that arrived live (the desk's tab follows it). */
+  docsLive: { kind: "form" | "excel"; at: number } | null;
+  /** D42 T3: how many fields / cells of each document came from the log folded on open (they show at once; the rest play). */
+  docsBase: DocsBase;
 }
+
+export interface DocsBase {
+  form: string | null;
+  formN: number;
+  book: string | null;
+  bookN: number;
+}
+const NO_BASE: DocsBase = { form: null, formN: 0, book: null, bookN: 0 };
+const docKey = (caseId: string | null, name: string) => `${caseId}:${name}`;
 
 /** The gateway refused the CEO session: it was revoked, or the gateway's secret changed. */
 class DeadSession extends Error {}
@@ -99,6 +115,10 @@ export function useFirmFeed(session: string | null = null): Feed {
   const [mail, setMail] = useState<Thread[]>([]);
   const mailRef = useRef(mail);
   const [payTick, setPayTick] = useState(0);
+  const [docs, setDocs] = useState<Docs>(EMPTY_DOCS);
+  const docsRef = useRef(docs);
+  const [docsLive, setDocsLive] = useState<Feed["docsLive"]>(null);
+  const [docsBase, setDocsBase] = useState<DocsBase>(NO_BASE);
 
   useEffect(() => {
     if (!HAS_GATEWAY) return;
@@ -149,6 +169,18 @@ export function useFirmFeed(session: string | null = null): Feed {
         setTour(tourNext);
       }
       if (events.some((e) => wellFormed(e) && (e.type.startsWith("payment.") || e.type === "agent.sale"))) setPayTick((n) => n + 1);
+      const docsNext = foldDocs(docsRef.current, events.filter(wellFormed));
+      if (docsNext !== docsRef.current) {
+        docsRef.current = docsNext;
+        setDocs(docsNext);
+        const lastDoc = live ? [...events].reverse().find((e) => wellFormed(e) && (e.type === "form.step" || e.type === "sheet.cell")) : undefined;
+        if (lastDoc) setDocsLive({ kind: lastDoc.type === "form.step" ? "form" : "excel", at: Date.now() });
+        if (!live) {
+          const f = docsNext.form;
+          const b = docsNext.book;
+          setDocsBase({ form: f ? docKey(f.caseId, f.doc) : null, formN: f?.fields.length ?? 0, book: b ? docKey(b.caseId, b.book) : null, bookN: b?.cells.length ?? 0 });
+        }
+      }
       const mailNext = foldMail(mailRef.current, events.filter(wellFormed));
       if (JSON.stringify(mailNext) !== JSON.stringify(mailRef.current)) {
         mailRef.current = mailNext;
@@ -269,6 +301,10 @@ export function useFirmFeed(session: string | null = null): Feed {
       setTour([]);
       mailRef.current = [];
       setMail([]);
+      docsRef.current = EMPTY_DOCS;
+      setDocs(EMPTY_DOCS);
+      setDocsLive(null);
+      setDocsBase(NO_BASE);
       setLive(null);
       const last = seed.lastId ?? 0;
       if (last > 0) {
@@ -298,5 +334,5 @@ export function useFirmFeed(session: string | null = null): Feed {
     };
   }, [session]);
 
-  return { office, numbers, status, live, studio, tour, mail, payTick };
+  return { office, numbers, status, live, studio, tour, mail, payTick, docs, docsLive, docsBase };
 }

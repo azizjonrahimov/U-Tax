@@ -761,7 +761,7 @@ const server = createServer(async (req, res) => {
   // D41 F48 (dev only): any v1.20 order.* event, or an order-linked event, to drive the office's task tour.
   if (req.method === "POST" && p === "/api/dev/event") {
     if (typeof body.type !== "string" || typeof body.payload !== "object" || body.payload === null) return out(400, { error: { code: "bad_request", message: "type and payload" } });
-    const e = emit(body.type, body.payload, { actor: typeof body.actor === "string" ? body.actor : "system" });
+    const e = emit(body.type, body.payload, { actor: typeof body.actor === "string" ? body.actor : "system", ...(typeof body.case_id === "string" ? { case_id: body.case_id } : {}) });
     return out(200, { id: e.id });
   }
   return out(404, { error: { code: "not_found", message: `${req.method} ${p}` } });

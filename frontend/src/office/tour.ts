@@ -17,6 +17,7 @@ const ACTOR_SEAT: Record<string, Seat> = {
 /** Money moves are shown at Accounting's desk; the contractor job's own steps at Marketing's. */
 const TYPE_SEAT: Record<string, Seat> = {
   "payment.sent": "acct", "payment.recorded": "acct", "agent.sale": "acct", "payment.received": "acct",
+  "form.step": "tax", "sheet.cell": "acct", // D42 T3: the form fills at Tax, the workbook builds at Accounting
   "job.posted": "mkt", "job.claimed": "mkt", "job.submitted": "mkt", "job.verified": "mkt", "job.failed": "mkt", "job.delivered": "mkt",
 };
 const ENDED: readonly TaskStatus[] = ["done", "waiting_on_you", "blocked", "failed", "timeout", "cancelled"];

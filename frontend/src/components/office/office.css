@@ -381,3 +381,55 @@
 .office .pay-table tr.new td { animation: pay-flash 1.6s ease-out; }
 @keyframes pay-flash { from { background: rgba(190, 242, 67, .22); } to { background: transparent; } }
 @media (prefers-reduced-motion: reduce) { .office .pay-table tr.new td { animation: none; } }
+
+/* D42 T3 (runbook §T3): the Tax desk's Form view and the Accounting desk's Excel view */
+.office .of-dept .win.fv, .office .of-dept .win.xv { flex: 1; min-height: 0; }
+.office .doc-empty { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+.office .fv-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; }
+.office .fv-scroll { min-height: 0; overflow-y: auto; background: #2a2c27; padding: 16px; scrollbar-width: thin; }
+.office .fv-page { position: relative; max-width: 980px; margin: 0 auto; background: #fff; box-shadow: 0 12px 40px -12px rgba(0, 0, 0, .7); animation: fv-fade .45s ease-out; }
+.office .fv-page img { display: block; width: 100%; height: auto; user-select: none; }
+.office .fv-layer { position: absolute; inset: 0; }
+.office .fv-val { position: absolute; display: flex; align-items: center; justify-content: flex-end; padding: 0 3px; overflow: hidden; font: 500 clamp(8px, .95vw, 13px)/1 var(--font-jetbrains-mono), "JetBrains Mono", monospace; color: #1a4bd6; white-space: nowrap; border-radius: 2px; }
+.office .fv-val.now { box-shadow: 0 0 0 1px #bef243, 0 0 0 4px rgba(190, 242, 67, .35); animation: fv-ring .9s ease-out forwards; }
+.office .fv-val.now .fv-text { display: inline-block; animation: fv-type .3s steps(var(--n)) both; }
+@keyframes fv-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+@keyframes fv-ring { 0% { box-shadow: 0 0 0 1px #bef243, 0 0 0 6px rgba(190, 242, 67, .45); } 100% { box-shadow: 0 0 0 1px rgba(190, 242, 67, 0), 0 0 0 0 rgba(190, 242, 67, 0); } }
+@keyframes fv-fade { from { opacity: 0; } to { opacity: 1; } }
+.office .fv-agent { position: absolute; transform: none; transition: left .3s ease, top .3s ease; --c: var(--seat-tax, #ffb547); }
+.office .fv-nodraw { display: flex; align-items: center; justify-content: center; padding: 24px; color: var(--dim); text-align: center; }
+.office .fv-lines { min-height: 0; overflow-y: auto; border-left: 1px solid var(--line); padding: 14px 16px; }
+.office .fv-lines h2 { margin: 0 0 10px; font: 500 11px var(--font-geist-mono), monospace; letter-spacing: .06em; text-transform: uppercase; color: var(--faint); }
+.office .fv-lines ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.office .fv-lines li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 8px; border-radius: 8px; font-size: 13px; color: var(--dim); }
+.office .fv-lines li b { color: var(--text); font-weight: 500; white-space: nowrap; }
+.office .fv-lines li.now { background: rgba(255, 255, 255, .05); }
+.office .fv-lines li.lime { background: rgba(190, 242, 67, .1); color: var(--lime); box-shadow: inset 2px 0 0 var(--lime); }
+.office .fv-lines li.lime b { color: var(--lime); }
+.office .xv-fx { display: flex; align-items: center; gap: 10px; margin: 10px 12px 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-height: 34px; }
+.office .xv-name { min-width: 52px; color: var(--dim); font-size: 13px; border-right: 1px solid var(--line); padding-right: 10px; }
+.office .xv-fxl { font: italic 600 14px Georgia, serif; color: var(--faint); }
+.office .xv-formula { color: var(--text); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.office .xv-grid-wrap { flex: 1; min-height: 0; overflow: auto; margin: 10px 12px 0; border: 1px solid var(--line); border-radius: 6px; background: #fbfbf8; }
+.office .xv-grid { border-collapse: collapse; width: 100%; min-width: 620px; table-layout: fixed; font: 13px var(--font-geist), sans-serif; color: #1d1d1f; }
+.office .xv-grid th { background: #ecece6; color: #5c5f57; font: 500 11.5px var(--font-geist-mono), monospace; border: 1px solid #d6d6cf; padding: 3px 6px; position: sticky; top: 0; }
+.office .xv-grid thead th:first-child, .office .xv-grid tbody th { width: 40px; text-align: center; }
+.office .xv-grid thead th:nth-child(2) { width: 38%; }
+.office .xv-grid tbody th { position: static; }
+.office .xv-grid td { border: 1px solid #e2e2db; padding: 4px 8px; height: 26px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.office .xv-grid td.num { text-align: right; font-family: var(--font-jetbrains-mono), monospace; font-variant-numeric: tabular-nums; }
+.office .xv-grid td.total { background: #e6f9b8; font-weight: 600; }
+.office .xv-grid td.sel { outline: 2px solid #8fbf1f; outline-offset: -2px; box-shadow: 0 0 0 3px rgba(190, 242, 67, .5); }
+.office .xv-text { display: inline-block; }
+.office .xv-text.typing { animation: fv-type .25s steps(var(--n)) both; }
+.office .xv-tabs { display: flex; gap: 2px; margin: 0 12px 10px; padding-top: 0; border-top: 1px solid var(--line); }
+.office .xv-tabs button { border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; background: transparent; color: var(--dim); padding: 6px 14px; font: 500 12.5px var(--font-geist), sans-serif; cursor: pointer; }
+.office .xv-tabs button.on { background: var(--panel2); color: var(--lime); box-shadow: inset 0 -2px 0 var(--lime); }
+.office .xv-tabs button:focus-visible { outline: 2px solid var(--lime); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) {
+  .office .fv-page, .office .fv-val.now, .office .fv-val.now .fv-text, .office .xv-text.typing { animation: none; }
+  .office .fv-agent { transition: none; }
+}
+@media (max-width: 1100px) { .office .fv-body { grid-template-columns: minmax(0, 1fr); } .office .fv-lines { display: none; } }
+.office .fv-lines li span { min-width: 0; }
+.office .fv-lines li b { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
