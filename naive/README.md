@@ -33,7 +33,7 @@ empty value leaves no blank gap; a client is greeted by `greeting_name`, never t
 | `not-eligible-<reason>.md` | `mark_not_eligible`, one file per reason enum | `greeting_name` |
 | `hr-questionnaire.md` | auto-reply to applicants (`hr.questionnaire_sent`) | none |
 | `hr-hired.md` / `hr-declined.md` | the CEO's decision in `/ceo` | none |
-| `hr-outreach.md` | `hr_outreach` (v1.11) | `slot_time`, `minutes`; carries the AI-screen line |
+| `hr-outreach.md` | `hr_outreach` (v1.11) | `slot_time`, `minutes`, `booking_url` (v1.11.3; its own line, dropped when `HR_BOOKING_URL` is empty); carries the AI-screen line |
 | `follow-up-memo_check.md` | `follow_up` kind `memo_check` | `greeting_name` |
 | `follow-up-missing_facts.md` | `follow_up` kind `missing_facts` | `greeting_name`, `missing_list` |
 | `follow-up-call_reminder.md` | `follow_up` kind `call_reminder` | `greeting_name`, `call_time` |

@@ -154,9 +154,10 @@ function agent(key: AgentKey) {
     budget: { cap_micro_usd: usd(BUDGETS[key].cap), max_task_micro_usd: usd(BUDGETS[key].task), period: "day" as const },
     system: system(key),
     identity: identityOf(key), // holds this agent's vault, so its own token is injected
-    // X-UTax-Actor is optional and non-secret: the gateway accepts it only when it matches the
-    // token's actor (contract v1.4 §6). UNVERIFIED that Naïve forwards non-secret headers.
-    mcp_servers: [{ name: MCP_SERVER, url: seatUrl(key), headers: { "X-UTax-Actor": seat.actor } }],
+    // No headers. The bearer token alone names the seat (contract §6; X-UTax-Actor is optional).
+    // Naïve redacts any text equal to a configured header value from what the agent sees: an
+    // "X-UTax-Actor: tax" header blanked the word "tax" out of every case and tool result.
+    mcp_servers: [{ name: MCP_SERVER, url: seatUrl(key) }],
     tools: toolsetFor(key),
     metadata: { utax_actor: seat.actor },
   };

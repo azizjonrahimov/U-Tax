@@ -35,6 +35,22 @@ for (const [k, v] of Object.entries(DUMMY)) process.env[k] ??= v;
 const failures = [];
 const fail = (msg) => failures.push(msg);
 
+/**
+ * Naïve redacts any text equal to a configured header value from everything the agent sees, so
+ * a plain header value ("tax", "qa", "hr") blanks that word out of cases, cards and tool results.
+ * A non-secret header value is refused when it is short or made only of letters, spaces and dashes
+ * (a word or a phrase); secrets belong in a vault credential, not a header.
+ */
+function headerValueProblem(value) {
+  if (typeof value !== "string") return "is not a plain string (secrets go in a vault credential, not a header)";
+  if (value.length < 24 || /^[A-Za-z][A-Za-z _.-]*$/.test(value))
+    return `is "${value}", a word Naïve would redact from everything the agent reads; drop the header`;
+  return null;
+}
+for (const [value, bad] of [["tax", true], ["qa", true], ["chief-of-staff", true], ["U-Tax firm agent", true],
+  ["9f2c7e1a4b8d3f6e0a5c2b7d9e1f4a3c", false]])
+  if (Boolean(headerValueProblem(value)) !== bad) fail(`header guard self-test: "${value}" should be ${bad ? "refused" : "allowed"}`);
+
 const loaded = await loadConfig(ROOT);
 if (!loaded.ok) {
   console.error(`config ${loaded.reason}: ${loaded.message}`);
@@ -107,8 +123,11 @@ for (const [key, seat] of Object.entries(CREW)) {
     fail(`${seat.name}: its identity's vault must hold exactly one static_bearer from ${seat.tokenEnv}`);
   else if (creds[0].mcp_server_url !== agent.mcp_servers?.[0]?.url) fail(`${seat.name}: vault credential URL != its MCP server URL`);
   if (!agent.mcp_servers?.[0]?.url?.endsWith(`/mcp/${seat.actor}`)) fail(`${seat.name}: MCP URL must be its own seat, <base>/mcp/${seat.actor} (contract v1.4 §6)`);
-  const server = agent.mcp_servers?.find((s) => s.name === MCP_SERVER);
-  if (server?.headers?.["X-UTax-Actor"] !== seat.actor) fail(`${seat.name}: X-UTax-Actor header is not ${seat.actor}`);
+  for (const s of agent.mcp_servers ?? [])
+    for (const [header, value] of Object.entries(s.headers ?? {})) {
+      const problem = headerValueProblem(value);
+      if (problem) fail(`${seat.name}: MCP header ${header} ${problem}`);
+    }
 
   // 4. prompt names exactly its tools
   const prompt = readFileSync(join(ROOT, "prompts", seat.prompt), "utf8");
@@ -166,7 +185,7 @@ const TEMPLATE_RULES = {
   "hr-hired.md": { body: true, noAmounts: true, placeholders: [] },
   "hr-declined.md": { body: true, noAmounts: true, placeholders: [] },
   // v1.11 (design D31): the gateway's Spec in backend/app/gateway/templates.py names these placeholders
-  "hr-outreach.md": { body: true, applicant: true, noAmounts: true, placeholders: ["slot_time", "minutes"] },
+  "hr-outreach.md": { body: true, applicant: true, noAmounts: true, placeholders: ["slot_time", "minutes", "booking_url"], optional: ["booking_url"] },
   "follow-up-memo_check.md": { body: true, client: true, placeholders: ["greeting_name"] },
   "follow-up-missing_facts.md": { body: true, client: true, placeholders: ["greeting_name", "missing_list"] },
   "follow-up-call_reminder.md": { body: true, client: true, placeholders: ["greeting_name", "call_time"] },
