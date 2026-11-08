@@ -10,6 +10,7 @@ import { Theater } from "@/components/theater/Theater";
 import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
+import { logout, useSessionToken } from "@/ceo/session";
 import { SEAT_NAME, SEAT_ROLE, SEATS, type Seat, type Workspace, type WsStep } from "@/office/workspace";
 import "./office.css";
 
@@ -28,7 +29,8 @@ function viewFromUrl(): View {
 }
 
 export function Office() {
-  const { office, numbers, status } = useFirmFeed();
+  const session = useSessionToken();
+  const { office, numbers, status } = useFirmFeed(session);
   const [view, setView] = useState<View>("overview");
   const [follow, setFollow] = useState(true);
   const lastSwitch = useRef(0);
@@ -134,6 +136,15 @@ export function Office() {
           <button className={`follow${follow ? " on" : ""}`} aria-pressed={follow} onClick={() => setFollow((f) => !f)}>
             {follow ? "Following live" : "Follow live"}
           </button>
+          {session ? (
+            <button className="side-out" onClick={() => void logout()}>
+              Sign out
+            </button>
+          ) : (
+            <Link href="/login?next=/office" className="side-out">
+              CEO sign-in
+            </Link>
+          )}
         </div>
       </nav>
 

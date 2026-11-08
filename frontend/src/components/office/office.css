@@ -31,6 +31,8 @@
 @keyframes of-pulse { from { transform: scale(1.9); } to { transform: scale(1); } }
 .office .side-sep { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .office .side-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.office .side-out { min-height: 44px; display: flex; align-items: center; justify-content: center; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--dim); font: 500 14px var(--font-inter), sans-serif; text-decoration: none; cursor: pointer; }
+.office .side-out:hover { color: var(--text); background: var(--panel2); }
 .office .feed { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
 .office .feed .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
 .office .feed.live .dot { background: var(--green); }

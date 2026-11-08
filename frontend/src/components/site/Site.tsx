@@ -8,7 +8,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { apiFetch, ApiError, API_URL } from "@/lib/api";
-import { TOKEN_KEY } from "@/ceo/ceo";
+import { login, nextPath } from "@/ceo/session";
 import { numbersFromState, stateUrl } from "@/theater/live";
 import { formatCents } from "@/theater/format";
 import { friendlyError } from "@/talk/talk";
@@ -336,35 +336,25 @@ export function Signup() {
 export function Login() {
   const router = useRouter();
   const id = useId();
-  const [token, setToken] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
-    const t = token.trim();
-    if (!t || busy) return;
+    if (!email.trim() || !password || busy) return;
     setBusy(true);
     setError(null);
-    try {
-      // The admin token's check, as the CEO console does it: the token rides the header, never a URL.
-      const r = await fetch(`${API_URL}/api/state`, { headers: { Authorization: `Bearer ${t}` }, cache: "no-store", signal: AbortSignal.timeout(10_000) });
-      if (r.status === 401 || r.status === 403) {
-        setError("That isn't the admin token.");
-        return;
-      }
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      try {
-        sessionStorage.setItem(TOKEN_KEY, t); // this tab only, as on /ceo
-      } catch {
-        /* storage off: /ceo asks again */
-      }
-      setToken("");
-      router.push("/office");
-    } catch {
-      setError("Can't reach the firm right now. Try again in a moment.");
-    } finally {
-      setBusy(false);
+    const r = await login(email, password);
+    setBusy(false);
+    if (!r.ok) {
+      setError(r.message);
+      setPassword("");
+      return;
     }
+    setPassword("");
+    // Read at submit, not render: the page prerenders without a query.
+    router.push(nextPath(new URLSearchParams(window.location.search).get("next")));
   };
 
   return (
@@ -378,20 +368,22 @@ export function Login() {
             }}
           >
             <h1>CEO sign-in</h1>
-            <p className="lead">The admin token stays in this browser tab only, and goes to the firm in a header, never in a link.</p>
-            {/* a hidden username lets password managers file the token under the firm */}
-            <input type="text" name="username" autoComplete="username" value="ceo" readOnly hidden />
+            <p className="lead">You stay signed in for 12 hours, in this browser tab only.</p>
             <div className="field">
-              <label htmlFor={id}>Admin token</label>
-              <input id={id} type="password" autoComplete="current-password" value={token} onChange={(e) => setToken(e.target.value)} aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-e` : undefined} />
+              <label htmlFor={`${id}-email`}>Email</label>
+              <input id={`${id}-email`} type="email" autoComplete="username" maxLength={320} value={email} onChange={(e) => setEmail(e.target.value)} aria-invalid={error ? true : undefined} />
+            </div>
+            <div className="field">
+              <label htmlFor={`${id}-pw`}>Password</label>
+              <input id={`${id}-pw`} type="password" autoComplete="current-password" maxLength={200} value={password} onChange={(e) => setPassword(e.target.value)} aria-invalid={error ? true : undefined} aria-describedby={error ? `${id}-e` : undefined} />
               {error && (
                 <p className="err" id={`${id}-e`} role="alert">
                   {error}
                 </p>
               )}
             </div>
-            <button type="submit" className="btn primary" disabled={busy || !token.trim()}>
-              {busy ? "Checking…" : "Sign in to the office"}
+            <button type="submit" className="btn primary" disabled={busy || !email.trim() || !password}>
+              {busy ? "Signing in…" : "Sign in to the office"}
             </button>
             <p className="alt">
               A client? <Link href="/signup">Get your free checkup</Link> instead.

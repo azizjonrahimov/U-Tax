@@ -15,12 +15,29 @@
 // D32 (v1.12): every department action is preceded by tool.called {tool, status}; POST /api/signup
 // {name, company, email, request_id?} (public) opens a case like an inbound email and plays the case
 // flow (Intake, Tax, QA, Accounting) with tool calls.
+// D33 (v1.13 §5a-bis): POST /api/auth/login {email, password} (CEO_EMAIL default ceo@u-tax.test,
+// CEO_PASSWORD default utax-demo) answers {session, expires_at}; the session works like the admin
+// token as a Bearer, and as ?token= on state/events reads. POST /api/auth/logout revokes it.
 
 import { createServer } from "node:http";
+import { randomUUID } from "node:crypto";
 
 const PORT = Number(process.env.PORT || 8020);
 const ADMIN = process.env.ADMIN_TOKEN || "admin-test";
 const THEATER = process.env.THEATER_TOKEN || "theater-test";
+const CEO_EMAIL = (process.env.CEO_EMAIL || "ceo@u-tax.test").toLowerCase();
+const CEO_PASSWORD = process.env.CEO_PASSWORD || "utax-demo";
+const SESSION_MS = 12 * 3600 * 1000;
+/** session -> expiry (ms) */
+const sessions = new Map();
+const loginTries = [];
+const validSession = (t) => typeof t === "string" && (sessions.get(t) ?? 0) > Date.now();
+const bearerOf = (req) => /^Bearer (.+)$/.exec(req.headers.authorization || "")?.[1] ?? null;
+/** The CEO: the admin token or a live session as a Bearer, or a live session as ?token= on a read. */
+const isAdmin = (req, url) => {
+  const b = bearerOf(req);
+  return b === ADMIN || validSession(b) || (req.method === "GET" && validSession(url.searchParams.get("token")));
+};
 const VOICE = process.env.MOCK_VOICE === "1";
 const TTL_MS = Number(process.env.PROPOSAL_TTL_MS || 60_000);
 const TYPES = ["email", "social_post", "calendar_invite", "voice_screen"];
@@ -330,6 +347,31 @@ const server = createServer(async (req, res) => {
     res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
   };
   if (url.pathname === "/api/health") return out(200, { status: "ok", version: "mock-ceo" });
+  // D33: the CEO sign-in. Never logs the password (the line says only whether each field matched).
+  if (req.method === "POST" && url.pathname === "/api/auth/login") {
+    const now = Date.now();
+    while (loginTries.length && now - loginTries[0] > 15 * 60_000) loginTries.shift();
+    const email = body && typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+    const ok = email === CEO_EMAIL && body && body.password === CEO_PASSWORD;
+    const reply = (status, json) => {
+      console.log(JSON.stringify({ t: now, method: "POST", path: url.pathname, body: { email_ok: email === CEO_EMAIL, ok }, status }));
+      res.writeHead(status, { ...cors, "Content-Type": "application/json" }).end(JSON.stringify(json));
+    };
+    if (loginTries.length >= 10) return reply(429, { error: { code: "rate_limited", message: "too many sign-in attempts" } });
+    if (!ok) {
+      loginTries.push(now);
+      return reply(401, { error: { code: "bad_login", message: "wrong email or password" } });
+    }
+    const session = `sess.${randomUUID()}`;
+    sessions.set(session, now + SESSION_MS);
+    return reply(200, { session, expires_at: new Date(now + SESSION_MS).toISOString() });
+  }
+  if (req.method === "POST" && url.pathname === "/api/auth/logout") {
+    const b = bearerOf(req);
+    if (!validSession(b)) return out(401, { error: { code: "unauthorized", message: "no session" } });
+    sessions.delete(b);
+    return out(200, { ok: true });
+  }
   const ad = req.method === "GET" && /^\/assets\/ad_([0-9]{1,6})\.svg$/.exec(url.pathname);
   if (ad) return res.writeHead(200, { ...cors, "Content-Type": "image/svg+xml", "Cache-Control": "no-store" }).end(adSvg(ad[1]));
   // §5a: the client sign-up is public (the /talk per-IP limits apply on the real gateway).
@@ -350,7 +392,7 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/api/tts") {
     const purpose = body && body.purpose;
     if (purpose !== "ceo" && purpose !== "talk") return out(400, { error: { code: "bad_input", message: "purpose" } });
-    if (purpose === "ceo" && req.headers.authorization !== `Bearer ${ADMIN}`) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
+    if (purpose === "ceo" && !isAdmin(req, url)) return out(401, { error: { code: "unauthorized", message: "admin token required" } });
     let text = "";
     if (purpose === "ceo") text = typeof body.text === "string" ? body.text : "";
     else {
@@ -368,10 +410,12 @@ const server = createServer(async (req, res) => {
     return res.writeHead(200, { ...cors, "Content-Type": "audio/wav" }).end(silentWav(Math.min(4000, 300 + text.length * 25)));
   }
   // The theater token reads (state, events, stream), so the projector can be checked against this mock.
-  if (req.method === "GET" && url.searchParams.get("token") === THEATER && req.headers.authorization === undefined) {
-    if (url.pathname === "/api/state") return out(200, { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
+  const readToken = url.searchParams.get("token");
+  if (req.method === "GET" && (readToken === THEATER || validSession(readToken)) && req.headers.authorization === undefined) {
+    if (url.pathname === "/api/state") return out(200, validSession(readToken) ? state() : { ...state(), firm: { agents: 7, clients: cases.length }, touches: touchCounts() });
     if (url.pathname === "/api/events/stream") {
       let after = Number(url.searchParams.get("after_id") || 0);
+      console.log(JSON.stringify({ t: Date.now(), method: "GET", path: "/api/events/stream", body: { reader: validSession(readToken) ? "session" : "theater", after }, status: 200 }));
       res.writeHead(200, { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
       const pump = () => {
         for (const e of events.filter((x) => x.id > after)) {
@@ -385,7 +429,7 @@ const server = createServer(async (req, res) => {
       return;
     }
   }
-  if (req.headers.authorization !== `Bearer ${ADMIN}` && !(req.method === "GET" && url.pathname === "/api/events" && url.searchParams.get("token") === THEATER)) {
+  if (!isAdmin(req, url) && !(req.method === "GET" && url.pathname === "/api/events" && readToken === THEATER)) {
     return out(401, { error: { code: "unauthorized", message: "admin token required" } });
   }
   if (body === null) return out(400, { error: { code: "bad_json", message: "bad JSON" } });

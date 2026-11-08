@@ -161,7 +161,7 @@ describe("actions", () => {
   });
 
   it.each([
-    [401, "unauthorized", "", /token was rejected/],
+    [401, "unauthorized", "", /sign-in expired or was ended/],
     [0, "network_error", "", /Can't reach the gateway/],
     [409, "wrong_status", "case_3 is READY", /already moved on/],
     [400, "no_facts", "", /Use Re-ask/],

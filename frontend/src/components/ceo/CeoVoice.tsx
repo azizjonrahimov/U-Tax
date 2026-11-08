@@ -105,7 +105,7 @@ export interface VoiceProps {
   token: string;
   /** Refresh the console's lists (after anything the voice changed). */
   refresh: () => void;
-  /** A 401: the token is wrong or rotated. */
+  /** A 401: the session expired or was revoked. */
   signOut: (why: string) => void;
   /** The console's poll hands each batch of new admin events here; `reset` after a log restart. */
   feedRef: MutableRefObject<((events: readonly UTaxEvent[], reset: boolean) => void) | null>;

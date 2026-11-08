@@ -36,7 +36,12 @@ async function fetchJson(url: string): Promise<unknown> {
   return r.json();
 }
 
-export function useFirmFeed(): Feed {
+/**
+ * The firm's live feed. Signed in (D33), the CEO's session is the read token (`?token=`, since an
+ * EventSource can't send a header), so the desks see what the console sees; otherwise the theater
+ * token. A change of session reconnects.
+ */
+export function useFirmFeed(session: string | null = null): Feed {
   const [office, setOffice] = useState<Office>(emptyOffice);
   const [numbers, setNumbers] = useState<FirmNumbers | null>(null);
   const [status, setStatus] = useState<FeedStatus>(HAS_GATEWAY ? "connecting" : "offline");
@@ -44,6 +49,7 @@ export function useFirmFeed(): Feed {
 
   useEffect(() => {
     if (!HAS_GATEWAY) return;
+    const ep: Endpoints = session ? { base: API_URL, token: session } : GATEWAY;
     let alive = true;
     let es: EventSource | null = null;
     let cursor: ScriptCursor = startScript();
@@ -71,7 +77,7 @@ export function useFirmFeed(): Feed {
 
     const pollState = async () => {
       try {
-        const s = await fetchJson(stateUrl(GATEWAY));
+        const s = await fetchJson(stateUrl(ep));
         if (!alive) return;
         const n = numbersFromState(s);
         if (n) setNumbers(n);
@@ -83,7 +89,7 @@ export function useFirmFeed(): Feed {
 
     const connect = (after: number) => {
       es?.close();
-      es = new EventSource(streamUrl(GATEWAY, after));
+      es = new EventSource(streamUrl(ep, after));
       es.onopen = () => {
         attempt = 0;
         if (alive) setStatus("live");
@@ -109,10 +115,13 @@ export function useFirmFeed(): Feed {
       const seed = seedFromState(s);
       for (const c of seed.cases) if (c.flagged) flagged.add(c.caseId);
       cursor = startScript({ caseNames: seed.caseNames });
+      // A new read token (signed in or out) starts the desks over: the lookback is folded once.
+      officeRef.current = emptyOffice();
+      setOffice(officeRef.current);
       const last = seed.lastId ?? 0;
       if (last > 0) {
         try {
-          const page = await fetchJson(eventsUrl(GATEWAY, Math.max(0, last - LOOKBACK), LOOKBACK));
+          const page = await fetchJson(eventsUrl(ep, Math.max(0, last - LOOKBACK), LOOKBACK));
           const data = (page as { data?: unknown }).data;
           if (alive && Array.isArray(data)) fold((data as UTaxEvent[]).filter((e) => typeof e?.id === "number" && e.id <= last));
         } catch {
@@ -130,7 +139,7 @@ export function useFirmFeed(): Feed {
       clearTimeout(retry);
       es?.close();
     };
-  }, []);
+  }, [session]);
 
   return { office, numbers, status };
 }
