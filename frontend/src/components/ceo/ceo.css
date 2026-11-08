@@ -167,6 +167,6 @@
 .ceo .case-status.flagged { color: #ff8a7d; font-weight: 600; }
 .ceo .case-docs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 15px; }
 .ceo .case-docs .dl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-.ceo .case-docs button { min-height: 36px; padding: 0 12px; font-size: 14px; }
+.ceo .case-docs button { padding: 0 14px; font-size: 15px; }
 .ceo .case-docs .error { font-size: 14px; }
 .ceo .case-none { margin: 0; font-size: 14px; }

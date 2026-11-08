@@ -40,7 +40,6 @@ import {
 import { announceAgentAudio, CeoVoice } from "./CeoVoice";
 import { logout, useSessionToken, writeSession } from "@/ceo/session";
 import { foldOrders, type OrderCard } from "@/ceo/orders";
-
 import { CaseList } from "./CaseList";
 import { useConsoleLock } from "@/ceo/popout";
 import { current, emptyCaseDocs, stepCaseDocs, type CaseDocs } from "@/office/artifact";
@@ -293,9 +292,14 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
         let reset = false;
         const restart = () => {
           reset = true;
-          // Ids are reused after a reset: the old rows go off screen right away, before the reload.
+          // Ids are reused after a reset: the old rows go off screen right away, before the reload
+          // (also when the reload fails: the next poll starts from 0 without knowing it reset).
           logRef.current = emptyLog();
           setLog(logRef.current);
+          ordersRef.current = [];
+          setOrders([]);
+          caseDocsRef.current = emptyCaseDocs();
+          setServed({});
           setView(null);
           setConfirm(null);
           setNotice("The gateway's log restarted, so the console reloaded it. Check the lists before acting.");
@@ -810,8 +814,6 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
           )}
         </section>
 
-        {view && token && <CaseList cases={view.cases} served={served} token={token} />}
-
         {orders.length > 0 && (
           <section aria-labelledby="ord-h" className="orders">
             <h2 id="ord-h">Your orders, live</h2>
@@ -879,6 +881,8 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
             </div>
           </form>
         </section>
+
+        {view && token && <CaseList cases={view.cases} served={served} token={token} onExpired={signOut} />}
       </main>
     </div>
   );

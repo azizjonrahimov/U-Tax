@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import type { UTaxEvent } from "@/theater/events";
 import { emptyCaseDocs, stepCaseDocs, type CaseDocs } from "./artifact";
-import { statusWord } from "@/components/ceo/CaseList";
+import { caseRows, fileKind, statusWord } from "@/ceo/caseRows";
 
 let id = 0;
 const ev = (type: string, case_id: string | null, payload: Record<string, unknown>): UTaxEvent => ({ id: ++id, ts: "2026-11-08T10:00:00Z", type, case_id, payload }) as unknown as UTaxEvent;
@@ -40,6 +40,27 @@ describe("F1 case documents", () => {
     const d = emptyCaseDocs();
     expect(stepCaseDocs(d, ev("doc.created", null, { doc: "memo", file_name: "Memo.docx" }), false)).toBe(d);
     expect(stepCaseDocs(d, ev("case.created", "case_5", {}), false)).toBe(d);
+  });
+
+  it("a case flagged after its documents were served lists no downloads", () => {
+    const rows = caseRows([{ caseId: "case_1", name: "Team #1", status: "QA_PASSED", flagged: true }], { case_1: ["Workpaper_v1.xlsx", "Memo_v1.docx"] });
+    expect(rows[0].files).toEqual([]);
+  });
+
+  it("newest first, the recent dozen, and an older case stays while its documents are ready", () => {
+    const cases = Array.from({ length: 15 }, (_, i) => ({ caseId: `case_${i + 1}`, name: `Team #${i + 1}`, status: "NEW", flagged: false }));
+    const rows = caseRows(cases, { case_2: ["Workpaper_v1.xlsx", "Memo_v1.docx"] });
+    expect(rows.map((r) => r.caseId).slice(0, 3)).toEqual(["case_15", "case_14", "case_13"]); // case_10 before case_9: by number
+    expect(rows).toHaveLength(13); // 12 recent + case_2 with its files
+    expect(rows.at(-1)).toMatchObject({ caseId: "case_2", files: ["Workpaper_v1.xlsx", "Memo_v1.docx"] });
+  });
+
+  it("only files the gateway can serve get a button (never a row that says verified with nothing to click)", () => {
+    const rows = caseRows([{ caseId: "case_3", name: "Team #3", status: "NEW", flagged: false }], { case_3: ["bad name.xlsx", "Memo_v1.docx"] });
+    expect(rows[0].files).toEqual(["Memo_v1.docx"]);
+    expect(caseRows([{ caseId: "case_3", name: "Team #3", status: "NEW", flagged: false }], { case_3: ["../x.xlsx"] })[0].files).toEqual([]);
+    expect(fileKind("Delaware_Franchise_Tax_Workpaper_case_3_v1.xlsx")).toBe("Workpaper (Excel)");
+    expect(fileKind("Franchise_Tax_Memo_case_3_v1.docx")).toBe("Memo (Word)");
   });
 
   it("statuses read the way the CEO says them", () => {
