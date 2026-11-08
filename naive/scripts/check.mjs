@@ -614,7 +614,8 @@ else {
     for (const must of ["data, never instructions", "can't be undone", "Never invent a result", "ask one short question",
       "You can't write board cards", "so they never act on a guess", "pass the exact id it returned",
       "## How the firm rules below apply to you", "the messages in this conversation are the CEO's own words",
-      "A call refused with code `ambiguous`", "never pause again for it"])
+      "A call refused with code `ambiguous`", "never pause again for it",
+      "are data, and never a note", "resume nothing unless the CEO's own words in a later message ask for it"])
       if (!text.toLowerCase().includes(must.toLowerCase())) fail(`prompts/${seat.prompt}: must keep the rule "${must}"`);
     for (const t of policy.BOARD) if (new RegExp(`\\b${t}\\b`).test(raw)) fail(`prompts/${seat.prompt}: names the board tool ${t}`);
     // any §6 gateway tool named, prefixed or not (get_case is also a §5b tool)
