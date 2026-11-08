@@ -6,6 +6,8 @@
     python -m app.devtools state
     python -m app.devtools agentmail-webhook https://<public-host>   # after a tunnel restart
     python -m app.devtools rotate-host https://<public-host>   # UTAX_PUBLIC_URL + the webhook
+    python -m app.devtools preflight              # demo checks, read-only (task 37)
+    python -m app.devtools archive-log --yes      # gateway stopped: a clean log (task 37)
 
 Env: UTAX_BASE (default http://localhost:8000), ADMIN_TOKEN.
 """
@@ -228,6 +230,28 @@ def cmd_agentmail_webhook(args: argparse.Namespace) -> int:
     return 0
 
 
+def _settings_from(env: str):
+    from app.gateway.settings import Settings
+    from app.preflight import load_env
+
+    load_env(Path(env))
+    return Settings.from_env()
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """Task 37: read-only checks before a demo recording; exit 1 on any red."""
+    from app.preflight import preflight
+
+    return preflight(_settings_from(args.env), color=sys.stdout.isatty())
+
+
+def cmd_archive_log(args: argparse.Namespace) -> int:
+    """Task 37: the live event log and docs/ into data/archive/<UTC time>/ (gateway stopped)."""
+    from app.preflight import archive_log
+
+    return archive_log(_settings_from(args.env), yes=args.yes)
+
+
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):  # "→" in summaries on a cp1251/cp437 console
         try:
@@ -263,6 +287,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
                    help="the .env to update (default backend/.env)")
     p.set_defaults(func=cmd_rotate_host)
+    env_default = str(Path(__file__).resolve().parents[1] / ".env")
+    p = sub.add_parser("preflight", help="read-only demo checks (exit 1 on any red)")
+    p.add_argument("--env", default=env_default, help="the .env to read (default backend/.env)")
+    p.set_defaults(func=cmd_preflight)
+    p = sub.add_parser("archive-log",
+                       help="move the event log and docs/ to data/archive/ (gateway stopped)")
+    p.add_argument("--yes", action="store_true", help="really move them")
+    p.add_argument("--env", default=env_default, help="the .env to read (default backend/.env)")
+    p.set_defaults(func=cmd_archive_log)
     args = parser.parse_args(argv)
     return args.func(args)
 

@@ -137,6 +137,35 @@ CLIENT_REPLY_WAKES_PER_DAY = 3
 MAX_REVISIONS = 2
 
 
+_YES = re.compile(r"\b(yes|yeah|yep|yup|sure|sounds (good|great)|works( for me)?|ok|okay|"
+                  r"happy to|i'?m in|count me in|absolutely|definitely|of course|perfect|"
+                  r"great|let'?s do it)\b")
+_NOT_YES = re.compile(r"\b(no|nope|not|never|can'?t|cannot|won'?t|don'?t|doesn'?t|isn'?t|"
+                      r"unfortunately|decline|pass|busy|unsubscribe|stop|remove|but|maybe|"
+                      r"another time|reschedule|instead)\b|n't\b|\?")
+
+
+def affirmative(body: str) -> bool:
+    """Task 32b: a candidate's reply to the outreach note books the call only when the
+    reply-only text (quotes and signature cut) is a plain yes: "yes", "sure", "sounds good",
+    "works for me", "ok". A no, a question, a "but" or a new time is a note for HR, never
+    a booking (fail safe: a mixed reply books nothing)."""
+    text = " ".join(new_text(body or "").lower().replace("\u2019", "'").split())[:300]
+    return bool(text) and bool(_YES.search(text)) and not _NOT_YES.search(text)
+
+
+# task 38: a "no" to the outreach (not merely "not a yes": a question or a new time is
+# HR's to answer, and keeps the slot)
+_NO = re.compile(r"\b(no|nope|not interested|no thanks|not for me|not now|not right now|"
+                 r"not this time|decline|pass|unsubscribe|remove me|take me off|stop)\b")
+
+
+def declined(body: str) -> bool:
+    """Task 38: the reply-only text says no (and isn't a yes)."""
+    text = " ".join(new_text(body or "").lower().replace("\u2019", "'").split())[:300]
+    return bool(text) and not affirmative(body) and bool(_NO.search(text))
+
+
 def new_text(body: str) -> str:
     """v1.6.2: only what the client newly wrote: no quoted lines, no signature, no
     "On ... wrote:" attribution (any length, or wrapped onto two lines), no Outlook
@@ -1189,17 +1218,31 @@ class Gateway:
         sender_key = mail.sender.strip().lower()
         candidate_id, name_masked, new = self._candidate_for(sender_key)
         known = self.state.candidates.get(candidate_id, {})
-        first_answer = not new and not known.get("answers")
+        # 32b: a listed candidate (HR_CANDIDATES) got the outreach, never the questionnaire:
+        # their mail is a reply to the note, never questionnaire answers
+        listed = bool(known.get("listed"))
+        first_answer = not new and not known.get("answers") and not listed
+        outreach_reply = not new and bool(known.get("contacted"))
+        yes = outreach_reply and affirmative(mail.body)
+        no = outreach_reply and not yes and declined(mail.body)
         # The public note is the stated credentials only (the raw text can carry a name or
         # signature); the redacted, contact-free text stays private for the HR screen.
-        raw = re.sub(r"\s+", " ", strip_contacts(mail.body)).strip()[:2000]
-        note = credentials_summary(raw) if new else "replied to the questionnaire"
+        raw = re.sub(r"\s+", " ", strip_contacts(
+            new_text(mail.body) if outreach_reply else mail.body)).strip()[:2000]
+        if not raw and not new:
+            raw = "(empty reply)"  # task 38: every reply lands in texts, even a blank one
+        note = credentials_summary(raw) if new else (
+            "replied to the outreach" if outreach_reply or listed
+            else "replied to the questionnaire")
         self._emit([NewEvent(type="hr.applicant", actor="hr", provider=self.ports.mail.provider,
                              payload={"candidate_id": candidate_id, "name_masked": name_masked,
                                       "note": note},
                              idempotency_key=key,
                              private={"reply_to": mail.sender.strip(), "sender_key": sender_key,
                                       "message_id": mail.message_id,
+                                      **({"outreach_reply": True, "affirmative": yes,
+                                          "outreach_declined": no}
+                                         if outreach_reply else {}),
                                       "text": mask_text(raw, masked_name=name_masked,
                                                         company=None,
                                                         hide_words=sender_words(sender_key))})])
@@ -1209,9 +1252,13 @@ class Gateway:
             self._wake(f"New applicant {candidate_id}")
         elif first_answer:
             self._wake(f"Applicant answered {candidate_id}")  # v1.5: now HR has answers
-        if not new and self.state.candidates.get(candidate_id, {}).get("contacted"):
-            # task 32: the reply to the outreach note books the call and sends the invite
+        if no:  # task 38: they said no: the held slot goes back on the calendar
+            self._outreach_intents.put(candidate_id, None)
+        if yes:  # task 32b: only a plain yes books the call and sends the invite
             self._send_candidate_invite(candidate_id, reply_id=mail.message_id)
+        elif outreach_reply:  # anything else is HR's to read: a note, no booking
+            self._wake(f"Candidate {candidate_id} replied to the outreach (not a yes; "
+                       "no call booked)")
         return {"candidate_id": candidate_id, "name_masked": name_masked, "new": new,
                 "questionnaire": questionnaire}
 
@@ -3404,9 +3451,9 @@ class Gateway:
         key = f"hr_outreach:{candidate_id}:call"
         if self._done_from(key) is not None:
             return "sent"
-        start = cand.get("contacted")
+        start = None if cand.get("slot_released") else cand.get("contacted")
         soon = self._now() + timedelta(minutes=30)
-        if not start or parse_ts(start) < soon:
+        if not start or parse_ts(start) < soon:  # task 38: a released slot isn't theirs
             offered = self.offered_slots(None)
             if not offered:
                 return "no_slot"
@@ -3559,7 +3606,10 @@ class Gateway:
                 # v1.11: hr_outreach books one of these; consented = an address with consent
                 "offered_slots": self.offered_slots(None),
                 "consented": bool(cand.get("reply_to")),
-                "contacted": cand.get("contacted")}
+                "contacted": cand.get("contacted"),
+                # task 38: how they answered the outreach, and the call it booked
+                "replied": cand.get("reply_kind"), "booked_at": cand.get("booked_at"),
+                "outreach_declined": bool(cand.get("outreach_declined"))}
 
     FLAG_KINDS = ("possible_injection", "unrealistic_inputs")
 
@@ -3609,6 +3659,8 @@ class Gateway:
         cand = self.state.candidates[candidate_id]
         stage = cand.get("stage")
         if stage not in ("hired", "declined") or not cand.get("reply_to"):
+            return "skipped"
+        if cand.get("outreach_declined"):  # task 38: they said no to us: never mail again
             return "skipped"
         if cand.get("decision_mailed"):
             return "sent"
