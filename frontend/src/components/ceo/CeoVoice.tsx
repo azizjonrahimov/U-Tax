@@ -11,8 +11,10 @@
 // - without a session (no key, or no WebRTC): browser speech recognition or typing, through
 //   POST /api/ceo/command, answers read aloud by the browser.
 
-import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type MutableRefObject, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ApiError } from "@/lib/api";
+import { Switch } from "@/components/ui/Switch";
 import type { UTaxEvent } from "@/theater/events";
 import { parseVoiceSession } from "@/talk/talk";
 import { ceoError } from "@/ceo/ceo";
@@ -131,7 +133,23 @@ export interface VoiceProps {
   flagged: ReadonlySet<string>;
   /** In the /office panel: Esc is STOP EVERYTHING only while focus is inside the console (the office is the rest of the page). */
   escInside?: boolean;
+  /**
+   * F45: the /ceo page's skin. The same controls and handlers, drawn as the prototype's voice card;
+   * STOP, the top bar's mic and the alerts render into the page's slots (portals), else in place.
+   */
+  skin?: "page";
+  slots?: VoiceSlots;
 }
+
+/** F45: where the /ceo page wants STOP (the rail), the top bar's mic and the voice alerts (top of main). */
+export interface VoiceSlots {
+  stop?: HTMLElement | null;
+  mic?: HTMLElement | null;
+  alerts?: HTMLElement | null;
+}
+
+/** F45: the voice card's suggestion chips (the typed box's own examples); a click only fills the box. */
+const VOICE_CHIPS = ["what happened overnight?", "hire 2 people for the tax gig", "stop posting"] as const;
 
 /** Gateway refusals for voice actions, as sentences. */
 function voiceError(e: unknown): string {
@@ -170,7 +188,7 @@ const IGNORED =
 /** Refusals after which the action certainly did not run. */
 const NOT_RUN = new Set(["expired", "superseded", "flagged", "console_only", "not_a_confirm", "not_found", "bad_args", "unknown_tool", "nothing_pending"]);
 
-export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, escInside = false }: VoiceProps) {
+export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, escInside = false, skin, slots }: VoiceProps) {
   const [link, setLink] = useState<Link>("off");
   const [flow, setFlow] = useState<Flow>("idle");
   const [micOn, setMicOn] = useState(false);
@@ -1514,80 +1532,55 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
           : "Voice off";
   const left = card ? secondsLeft(card.expiresAt, now) : 0;
 
-  return (
-    <>
-      {/* Docked at the top while the console scrolls: the controls, STOP's result and the open card only. */}
-      <div className="voice-dock" role="region" aria-label="Voice control">
-      <div className="vbar">
-        <button className="stop" onClick={() => void stopEverything()} aria-keyshortcuts="Escape">
-          STOP EVERYTHING <kbd>Esc</kbd>
-        </button>
-        <button
-          className={`mic${micOn ? " on" : ""}`}
-          aria-pressed={micOn}
-          disabled={link === "connecting" || (link === "fallback" && !canListen) || handsFree}
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            // Keep the release even if the pointer slides off the button (else the mic stays live).
-            try {
-              e.currentTarget.setPointerCapture(e.pointerId);
-            } catch {
-              /* not capturable: the release still arrives when it stays on the button */
-            }
-            press.current = { at: Date.now(), wasOn: micRef.current };
-            if (!micRef.current) micStart();
-          }}
-          onPointerUp={() => {
-            const p = press.current;
-            press.current = null;
-            if (!p) return;
-            pointerDone.current = true;
-            if (p.wasOn || Date.now() - p.at > HOLD_MS) micStop(); // a second tap, or the end of a hold
-          }}
-          onPointerCancel={() => {
-            press.current = null;
-            micStop();
-          }}
-          onClick={() => {
-            // Keyboard and assistive tech click without pointer events: a plain toggle.
-            if (pointerDone.current) {
-              pointerDone.current = false;
-              return;
-            }
-            if (micRef.current) micStop();
-            else micStart();
-          }}
-        >
-          <MicIcon size={22} />
-          {micOn ? "Talking… tap to finish" : "Talk"}
-        </button>
-        <label className="hf">
-          <input type="checkbox" role="switch" checked={handsFree} onChange={toggleHandsFree} disabled={link === "connecting"} />
-          Hands-free
-        </label>
-        <span className={`vstate${listening ? " live" : ""}`} role="status" aria-live="polite">
-          {micLabel}
-        </span>
-        {link !== "off" && (
-          <button className="ghost" onClick={endVoice}>
-            End voice
-          </button>
-        )}
-      </div>
-      {/* D34: a turn is with the assistant (it may take up to half a minute): never silent on screen. */}
-      {working && (
-        <p className="working" role="status">
-          U-Tax is working on it…
-        </p>
-      )}
-      {/* D33: what the browser's ear understood last (the chip above says whether it is listening). One line, below the controls, so STOP never moves. */}
-      {link === "fallback" && heard && (
-        <p className="heard" role="status" title={heard.text}>
-          Heard: <q>{heard.text}</q>
-          {heard.note && <span className="note"> · {heard.note}</span>}
-        </p>
-      )}
+  // The mic's tap-or-hold handlers, shared by every mic button (the panel's, the /ceo orb and its top-bar mic).
+  const holdProps = {
+    onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return;
+      // Keep the release even if the pointer slides off the button (else the mic stays live).
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* not capturable: the release still arrives when it stays on the button */
+      }
+      press.current = { at: Date.now(), wasOn: micRef.current };
+      if (!micRef.current) micStart();
+    },
+    onPointerUp: () => {
+      const p = press.current;
+      press.current = null;
+      if (!p) return;
+      pointerDone.current = true;
+      if (p.wasOn || Date.now() - p.at > HOLD_MS) micStop(); // a second tap, or the end of a hold
+    },
+    onPointerCancel: () => {
+      press.current = null;
+      micStop();
+    },
+    onClick: () => {
+      // Keyboard and assistive tech click without pointer events: a plain toggle.
+      if (pointerDone.current) {
+        pointerDone.current = false;
+        return;
+      }
+      if (micRef.current) micStop();
+      else micStart();
+    },
+  };
+  const micDisabled = link === "connecting" || (link === "fallback" && !canListen) || handsFree;
 
+  const workingLine = working && (
+    <p className="working" role="status">
+      U-Tax is working on it…
+    </p>
+  );
+  const heardLine = link === "fallback" && heard && (
+    <p className="heard" role="status" title={heard.text}>
+      Heard: <q>{heard.text}</q>
+      {heard.note && <span className="note"> · {heard.note}</span>}
+    </p>
+  );
+  const alerts = (
+    <>
       {stopNote && (
         <p className={stopNote.ok === false ? "error banner" : "stopped"} role={stopNote.ok === false ? "alert" : "status"}>
           {stopNote.text}{" "}
@@ -1639,71 +1632,169 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
           {outcome.text}
         </p>
       )}
+    </>
+  );
+  const noticeLine = notice && (
+    <p className="notice" role="status">
+      {notice}
+    </p>
+  );
+  const transcript = lines.length > 0 && (
+    <ol className="vlog" aria-label="Voice transcript">
+      {lines.map((l) => (
+        <li key={l.n} className={l.who}>
+          <b>{l.who === "you" ? "You" : l.who === "alert" ? "Alert" : "U-Tax"}</b> {l.text}
+          {l.actions && (
+            <span className="chips">
+              {l.actions.map((a, i) => {
+                const st = a.undoId ? undoState[a.undoId] : undefined;
+                return (
+                  <span key={i} className={`chip${st === "undone" ? " undone" : ""}`}>
+                    <span className="chip-text">{a.summary}</span>
+                    {a.undoId &&
+                      (st === "undone" ? (
+                        <span className="chip-note">Undone</span>
+                      ) : st === "gone" ? (
+                        <span className="chip-note">Undo not available</span>
+                      ) : (
+                        <button className="ghost undo" disabled={st === "undoing"} onClick={() => a.undoId && void undo(a.undoId)}>
+                          {st === "undoing" ? "Undoing…" : st === "failed" ? "Retry undo" : "Undo"}
+                        </button>
+                      ))}
+                  </span>
+                );
+              })}
+            </span>
+          )}
+        </li>
+      ))}
+    </ol>
+  );
+  const typed = (
+    <form
+      className="cmd"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const t = draft;
+        setDraft("");
+        void command(t, "click");
+      }}
+    >
+      <label htmlFor="cmd" className="sr-only">
+        Type a command
+      </label>
+      <input
+        id="cmd"
+        value={draft}
+        maxLength={500}
+        autoComplete="off"
+        placeholder="Or type to U-Tax: what happened overnight? · hire 2 people for the tax gig · stop posting"
+        onChange={(e) => setDraft(e.target.value)}
+      />
+      <button className="secondary" type="submit" disabled={!draft.trim()}>
+        Send
+      </button>
+    </form>
+  );
+
+  if (skin === "page") {
+    // F45: the prototype's voice card. STOP goes to the rail, a second mic to the top bar, the alerts to the top of main.
+    const inSlot = (node: ReactNode, slot: HTMLElement | null | undefined) => (slot ? createPortal(node, slot) : node);
+    const stop = (
+      <button className="stop" onClick={() => void stopEverything()} aria-keyshortcuts="Escape" aria-label="Stop everything (Esc)">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false">
+          <rect x="6" y="6" width="12" height="12" rx="2" />
+        </svg>
+        <span>Stop everything</span>
+        <small>esc</small>
+      </button>
+    );
+    return (
+      <>
+        {inSlot(stop, slots?.stop)}
+        {slots?.mic &&
+          createPortal(
+            <button type="button" className="mic" aria-pressed={micOn} aria-label={micOn ? "Talking… tap to finish" : "Talk"} disabled={micDisabled} {...holdProps}>
+              <MicIcon size={16} />
+            </button>,
+            slots.mic,
+          )}
+        {slots?.alerts ? createPortal(alerts, slots.alerts) : <div className="voice-alerts">{alerts}</div>}
+        <div className="kicker">talk to the firm</div>
+        <button type="button" className={micOn ? "orb on" : "orb"} aria-pressed={micOn} disabled={micDisabled} {...holdProps}>
+          <MicIcon size={44} />
+          <span className="sr-only">{micOn ? "Talking… tap to finish" : "Talk"}</span>
+        </button>
+        <h3 aria-hidden="true">{micOn ? "Talking… tap to finish" : "Tap or hold to talk"}</h3>
+        <div className="row">
+          <Switch className="sw" on={handsFree} onChange={toggleHandsFree} label="Hands-free" disabled={link === "connecting"} />
+          <span className="dim">
+            Hands-free ·{" "}
+            <span className={`vstate${listening ? " live" : ""}`} role="status" aria-live="polite">
+              {micLabel}
+            </span>
+          </span>
+        </div>
+        {link !== "off" && (
+          <button className="btn btn-ghost btn-sm" onClick={endVoice}>
+            End voice
+          </button>
+        )}
+        {workingLine}
+        {heardLine}
+        {noticeLine}
+        <div className="chips" role="group" aria-label="Examples to type">
+          {VOICE_CHIPS.map((c) => (
+            <button key={c} type="button" onClick={() => setDraft(c)}>
+              {c}
+            </button>
+          ))}
+        </div>
+        {transcript}
+        {typed}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {/* Docked at the top while the console scrolls: the controls, STOP's result and the open card only. */}
+      <div className="voice-dock" role="region" aria-label="Voice control">
+      <div className="vbar">
+        <button className="stop" onClick={() => void stopEverything()} aria-keyshortcuts="Escape">
+          STOP EVERYTHING <kbd>Esc</kbd>
+        </button>
+        <button className={`mic${micOn ? " on" : ""}`} aria-pressed={micOn} disabled={micDisabled} {...holdProps}>
+          <MicIcon size={22} />
+          {micOn ? "Talking… tap to finish" : "Talk"}
+        </button>
+        <label className="hf">
+          <input type="checkbox" role="switch" checked={handsFree} onChange={toggleHandsFree} disabled={link === "connecting"} />
+          Hands-free
+        </label>
+        <span className={`vstate${listening ? " live" : ""}`} role="status" aria-live="polite">
+          {micLabel}
+        </span>
+        {link !== "off" && (
+          <button className="ghost" onClick={endVoice}>
+            End voice
+          </button>
+        )}
+      </div>
+      {/* D34: a turn is with the assistant (it may take up to half a minute): never silent on screen. */}
+      {workingLine}
+      {/* D33: what the browser's ear understood last (the chip above says whether it is listening). One line, below the controls, so STOP never moves. */}
+      {heardLine}
+
+      {alerts}
       </div>
 
       <section className="voice" aria-label="Voice transcript and typed commands">
-      {notice && (
-        <p className="notice" role="status">
-          {notice}
-        </p>
-      )}
+      {noticeLine}
 
-      {lines.length > 0 && (
-        <ol className="vlog" aria-label="Voice transcript">
-          {lines.map((l) => (
-            <li key={l.n} className={l.who}>
-              <b>{l.who === "you" ? "You" : l.who === "alert" ? "Alert" : "U-Tax"}</b> {l.text}
-              {l.actions && (
-                <span className="chips">
-                  {l.actions.map((a, i) => {
-                    const st = a.undoId ? undoState[a.undoId] : undefined;
-                    return (
-                      <span key={i} className={`chip${st === "undone" ? " undone" : ""}`}>
-                        <span className="chip-text">{a.summary}</span>
-                        {a.undoId &&
-                          (st === "undone" ? (
-                            <span className="chip-note">Undone</span>
-                          ) : st === "gone" ? (
-                            <span className="chip-note">Undo not available</span>
-                          ) : (
-                            <button className="ghost undo" disabled={st === "undoing"} onClick={() => a.undoId && void undo(a.undoId)}>
-                              {st === "undoing" ? "Undoing…" : st === "failed" ? "Retry undo" : "Undo"}
-                            </button>
-                          ))}
-                      </span>
-                    );
-                  })}
-                </span>
-              )}
-            </li>
-          ))}
-        </ol>
-      )}
+      {transcript}
 
-      <form
-        className="cmd"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const t = draft;
-          setDraft("");
-          void command(t, "click");
-        }}
-      >
-        <label htmlFor="cmd" className="sr-only">
-          Type a command
-        </label>
-        <input
-          id="cmd"
-          value={draft}
-          maxLength={500}
-          autoComplete="off"
-          placeholder="Or type to U-Tax: what happened overnight? · hire 2 people for the tax gig · stop posting"
-          onChange={(e) => setDraft(e.target.value)}
-        />
-        <button className="secondary" type="submit" disabled={!draft.trim()}>
-          Send
-        </button>
-      </form>
+      {typed}
     </section>
     </>
   );
