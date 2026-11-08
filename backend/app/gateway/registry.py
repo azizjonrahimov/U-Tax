@@ -19,6 +19,7 @@ SPONSORS = {
     "mail": ("agentmail",), "llm": ("openrouter", "openai"), "crm": ("hubspot",),
     "device": ("mobilerun",), "scrape": ("apify",), "toolbuy": ("monid",),
     "voice": ("openai", "elevenlabs"), "calendar": ("agentmail", "google"), "social": ("naive",), "pay": ("stripe",),
+    "wallet": ("tempo",),
 }
 
 
@@ -43,6 +44,7 @@ def _local(name: str, settings: Settings):
         "calendar": lambda: local.LocalCalendar(data),
         "social": lambda: local.LocalSocial(data),
         "pay": lambda: local.NoPay(),
+        "wallet": lambda: local.LocalWallet(),
     }[name]()
 
 
@@ -127,6 +129,19 @@ def _sponsor(name: str, choice: str, settings: Settings):
 
         return MonidToolBuy(_need(settings.monid_api_key, "MONID_API_KEY",
                                   "ADAPTER_TOOLBUY=monid"))
+    if name == "wallet" and choice == "tempo":  # D38 (task 47a): testnet only
+        from app.gateway.adapters.tempo_wallet import TESTNET_CHAIN_ID, TempoWallet
+
+        switch = "ADAPTER_WALLET=tempo"
+        key = _need(settings.firm_wallet_key, "FIRM_WALLET_KEY", switch)
+        if settings.tempo_chain_id != TESTNET_CHAIN_ID:
+            raise AdapterNotReady(f"{switch}: TEMPO_CHAIN_ID must be {TESTNET_CHAIN_ID} "
+                                  "(Tempo Moderato testnet only)")
+        try:
+            return TempoWallet(key, chain_id=settings.tempo_chain_id)
+        except Exception as err:  # noqa: BLE001 - a bad key: never echo it
+            raise AdapterNotReady(f"{switch}: FIRM_WALLET_KEY isn't a valid key "
+                                  f"({type(err).__name__})") from None
     if name == "pay" and choice == "stripe":  # task 40b (D36)
         from app.gateway.adapters.stripe_pay import StripePay, key_mode
 
@@ -226,6 +241,13 @@ def build_ports(settings: Settings) -> Ports:
     ports = Ports(**{name: build_port(name, settings) for name in
                      ("mail", "llm", "crm", "device", "scrape", "toolbuy", "voice", "calendar",
                       "social", "pay")})
+    # D38: the wallet only with the market on (MARKET_ENABLED=0 leaves the firm as it was)
+    ports.wallet = build_port("wallet", settings) if settings.market_enabled else None
+    if settings.market_enabled:
+        try:
+            settings.market_contractors  # a malformed registry fails at boot, clearly
+        except ValueError as err:
+            raise AdapterNotReady(str(err)) from None
     ports.realtime = build_realtime(settings, _voice_choice(settings, "tts"), ports.voice)
     ports.stt = build_stt(settings)
     return ports

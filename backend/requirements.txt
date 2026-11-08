@@ -8,3 +8,5 @@ psycopg[binary]>=3.2
 pillow>=10.1
 openpyxl>=3.1
 python-docx>=1.1
+pympp[tempo,sqlite]==0.20.0
+python-multipart>=0.0.9

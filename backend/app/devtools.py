@@ -232,6 +232,107 @@ def stripe_webhook(public: str, env_path: Path,
         return "created"
 
 
+# ---------------------------------------------------------------- D38 market wallets
+
+PIXELAGENT_ENV = Path(__file__).resolve().parents[2] / "contractors" / "pixelagent" / ".env"
+PIXELAGENT_BASE = "http://127.0.0.1:8020"
+
+
+def _address_of(key: str) -> str:
+    from mpp.methods.tempo import TempoAccount
+
+    return TempoAccount.from_key(key if key.startswith("0x") else "0x" + key).address
+
+
+def market_wallets(env_path: Path, contractor_env: Path, *, out=print,
+                   transport: httpx.BaseTransport | None = None,
+                   new_key=None, fund=None) -> dict[str, str]:
+    """D38 §2.3: the firm's and PixelAgent's testnet wallets, funded from the faucet.
+    Idempotent: a key already in the .env is kept (never overwritten) and only its address
+    and balance are printed. Writes FIRM_WALLET_KEY and MARKET_CONTRACTORS (backend .env);
+    PIXELAGENT_KEY, MPP_SECRET_KEY and MARKET_TOKEN (the contractor's .env). Prints only
+    addresses and balances: never a key or a token."""
+    import secrets
+
+    from app.gateway.adapters import tempo_wallet as tw
+
+    new_key = new_key or tw.new_key
+    fund = fund or (lambda address: tw.faucet(address, transport=transport))
+    backend = env_file_values(env_path)
+    contractor = env_file_values(contractor_env)
+    addresses: dict[str, str] = {}
+    backend_updates: dict[str, str] = {}
+    contractor_updates: dict[str, str] = {}
+    for who, values, var, updates in (("firm", backend, "FIRM_WALLET_KEY", backend_updates),
+                                      ("pixelagent", contractor, "PIXELAGENT_KEY",
+                                       contractor_updates)):
+        key = values.get(var, "")
+        if key:
+            addresses[who] = _address_of(key)
+            continue
+        key, address = new_key()
+        fund(address)
+        updates[var] = key
+        addresses[who] = address
+    if not contractor.get("MPP_SECRET_KEY"):
+        contractor_updates["MPP_SECRET_KEY"] = secrets.token_hex(32)
+    token = contractor.get("MARKET_TOKEN") or secrets.token_hex(16)
+    if not contractor.get("MARKET_TOKEN"):
+        contractor_updates["MARKET_TOKEN"] = token
+    if "pixelagent|" not in backend.get("MARKET_CONTRACTORS", "") or "PIXELAGENT_KEY" in \
+            contractor_updates:
+        base = contractor.get("PIXELAGENT_PUBLIC_URL") or PIXELAGENT_BASE
+        backend_updates["MARKET_CONTRACTORS"] = f"pixelagent|{token}|{addresses['pixelagent']}|{base}"
+    if contractor_updates:
+        contractor_env.parent.mkdir(parents=True, exist_ok=True)
+        set_env_values(contractor_env, contractor_updates)
+    if backend_updates:
+        set_env_values(env_path, backend_updates)
+    for who, address in addresses.items():
+        try:
+            balance = f"{tw.balance_of(address, transport=transport):,.2f} pathUSD"
+        except Exception as err:  # noqa: BLE001 - the RPC down: still print the address
+            balance = f"balance unknown ({type(err).__name__})"
+        out(f"{who}: {address}  {balance}")
+    written = sorted(backend_updates) + sorted(contractor_updates)
+    out("written: " + (", ".join(written) if written else "nothing (all keys already set)"))
+    return addresses
+
+
+def cmd_market_wallets(args: argparse.Namespace) -> int:
+    market_wallets(Path(args.env), Path(args.contractor_env))
+    return 0
+
+
+def cmd_market_balance(args: argparse.Namespace) -> int:
+    """The firm wallet and every MARKET_CONTRACTORS wallet: addresses and pathUSD only."""
+    from app.gateway.adapters import tempo_wallet as tw
+    from app.gateway.settings import parse_contractors
+
+    env = env_file_values(Path(args.env))
+    rows = []
+    if env.get("FIRM_WALLET_KEY"):
+        rows.append(("firm", _address_of(env["FIRM_WALLET_KEY"])))
+    rows += [(c.name, c.wallet) for c in parse_contractors(env.get("MARKET_CONTRACTORS", ""))]
+    for who, address in rows:
+        print(f"{who}: {address}  {tw.balance_of(address):,.2f} pathUSD")
+    return 0 if rows else 1
+
+
+def cmd_market_faucet(args: argparse.Namespace) -> int:
+    """Testnet only: fund one address from the Tempo Moderato faucet."""
+    import re
+
+    from app.gateway.adapters import tempo_wallet as tw
+
+    if not re.fullmatch(r"0x[0-9a-fA-F]{40}", args.address):
+        print("needs a 0x address", file=sys.stderr)
+        return 1
+    tw.faucet(args.address)
+    print(f"{args.address}: {tw.balance_of(args.address):,.2f} pathUSD")
+    return 0
+
+
 def cmd_stripe_webhook(args: argparse.Namespace) -> int:
     outcome = stripe_webhook(args.url, Path(args.env))
     note = {"created": "secret written; restart the gateway",
@@ -340,6 +441,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"),
                    help="the .env that gets AGENTMAIL_WEBHOOK_SECRET (default backend/.env)")
     p.set_defaults(func=cmd_agentmail_webhook)
+    p = sub.add_parser("market-wallets",
+                       help="D38: the firm's and PixelAgent's testnet wallets, funded")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    p.add_argument("--contractor-env", default=str(PIXELAGENT_ENV))
+    p.set_defaults(func=cmd_market_wallets)
+    p = sub.add_parser("market-balance", help="D38: pathUSD of the firm and contractor wallets")
+    p.add_argument("--env", default=str(Path(__file__).resolve().parents[1] / ".env"))
+    p.set_defaults(func=cmd_market_balance)
+    p = sub.add_parser("market-faucet", help="D38: fund an address on the Tempo testnet")
+    p.add_argument("address")
+    p.set_defaults(func=cmd_market_faucet)
     p = sub.add_parser("stripe-webhook",
                        help="point the Stripe webhook at https://<public-host>/hooks/stripe")
     p.add_argument("url", help="the public https URL (the tunnel host)")

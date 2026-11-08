@@ -47,6 +47,13 @@ class NotConfigured(PortError):
     code = "not_configured"
 
 
+class Unsure(PortError):
+    """D38: a payment may have gone out (a timeout after signing). Never retried blindly:
+    the payer checks the payee's status and the chain first."""
+
+    code = "unsure"
+
+
 class FaultPlan:
     """Test hook: the next calls raise these errors in order (stand-ins only)."""
 
@@ -306,6 +313,29 @@ class STTPort(Protocol):
     def transcribe(self, audio: bytes, content_type: str) -> Transcript: ...
 
 
+# ------------------------------------------------------------------ wallet (D38)
+
+
+@dataclass(frozen=True)
+class PaidInvoice:
+    tx_hash: str
+    amount_usd: str  # decimal string: the price paid (the network fee not included)
+    explorer_url: str
+    paid: bool  # False for the local stand-in (no token moved)
+
+
+class WalletPort(Protocol):
+    provider: str
+    token: str
+    address: str
+
+    def balance_usd(self, address: str | None = None) -> Any: ...
+
+    def tx_ok(self, tx_hash: str) -> bool | None: ...
+
+    def pay_invoice(self, url: str, *, max_usd: str, recipient: str) -> PaidInvoice: ...
+
+
 @dataclass
 class Ports:
     """Everything perform() can act through. The store is separate (events are special)."""
@@ -324,6 +354,7 @@ class Ports:
     # both, as before the split); `stt` None is "no speech-to-text" (503).
     realtime: Any = None
     stt: Any = None
+    wallet: Any = None  # D38: the firm's wallet (ADAPTER_WALLET=local|tempo)
     extra: dict[str, Any] = field(default_factory=dict)
 
     def realtime_port(self) -> Any:
