@@ -93,8 +93,8 @@ compute_tax" means you create the `tax` card now.
    that have a blocked card naming a pending approval. Skip cases marked `priority` **or
    `in_flight`** too (a `/talk` customer's case, or one a fast-path session is running now): the
    fast-path session delegates them, and creates its own two SENT cards when the memo is sent. Card a priority case only when this session's own trigger
-   names it (`FAST PATH case_N`, the older `Client replied case_N`, or a CEO order to retry it), or a done `fast-path card` for
-   it: then continue the fast path, below).
+   names it (`FAST PATH case_N`, the older `Client replied case_N`, a CEO order to retry it, or a
+   `fast-path card` this digest reports newly done: then continue the fast path, below).
 3. One card for the next step, assigned to its agent, titled "case_N: <step>":
    | Case status | Card |
    |---|---|
@@ -121,15 +121,17 @@ status calls for: NEW, INTAKE_PENDING or STALLED (a reply after an ask) → the 
 - **Tools fallback, never a stop:** if a sent agent's reply says its tools are unavailable,
   blocked or "not in my toolset" (or its session is degraded), **immediately** make the board card
   for that same step ("case_N: <step>", the same body plus the line `fast-path card`) and end
-  your turn.
-- A `fast-path card` that reaches done (a board digest) continues the chain: `get_case` and go on
-  from the step its status calls for, even while the case is `in_flight`. If the intake card's
-  note says it asked the client (or "no new facts", "waiting on the client's reply", a not-eligible
-  reply, "a person prepares this"), the chain stops there with no other card: the client's reply
-  comes back as another `FAST PATH case_N` wake.
+  your turn. One fallback card per step: if that step's `fast-path card` already exists for this
+  case and the status hasn't moved, block it "case_N: tools unavailable, needs a human" instead.
+- A `fast-path card` that **this digest** reports as newly done continues the chain, even while
+  the case is `in_flight`: first comment "chain continued" on it (skip any card that already has
+  that comment), then `get_case` and go on from the step its status calls for. The gateway's status
+  decides, never the note: a case that now waits on the client (a re-ask went out), or is
+  NOT_ELIGIBLE or BLOCKED, stops the chain with no other card; the client's reply comes back as
+  another `FAST PATH case_N` wake.
 - Stop the chain at the first reply that isn't a success. For anything that isn't an approval, a
   tools failure or one of the stops above, create that step's routing card (Routing, above) with
-  the reply in its body, so the board carries it.
+  the reply and the line `fast-path card` in its body, so the board carries it.
 A case already SENT (or later) whose client wrote again is not a chain: do what the `Client
 replied case_N` item above says (one `intake` "case_N: read client reply" card). Any other status
 (NOT_ELIGIBLE, BLOCKED): no chain; route it as the table says. When `accounting` reports the memo sent, create the two

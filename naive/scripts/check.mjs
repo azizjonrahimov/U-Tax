@@ -487,7 +487,7 @@ for (const [key, seat] of Object.entries(CREW))
 }
 // D42 (contract v1.21 §11): every email case runs the fast path; T4 tax-return prompts
 MUST_KEEP["chief-of-staff.md"].push("Every `FAST PATH case_N` wake runs this chain, whatever started the case (an email, the public `/talk` page, or a reply).",
-  "Skip cases marked `priority` **or `in_flight`**", "the chain stops there with no other card");
+  "Skip cases marked `priority` **or `in_flight`**", "stops the chain with no other card");
 MUST_KEEP["_firm-rules.md"].push("We prepare drafts and estimates. We never file a return, never e-sign, never send a tax figure the engine did not compute.");
 (MUST_KEEP["intake.md"] ??= []).push("Never ask for an EIN or an SSN", "Never add `income_tax` for an S-corp, an LLC or an individual",
   "block the card \"case_N: a person prepares this (<entity>)\"", "your\nreply is \"case_N: asked the client\", so the chain stops".replace(/\s+/g, " "),
@@ -514,7 +514,8 @@ MUST_KEEP["intake.md"].push("**A client email always gets an answer.**", "`asks_
   "If the client is eligible, facts are missing and `asks_so_far` is 0");
 MUST_KEEP["chief-of-staff.md"].push("**The intake step is always a board card** (a session started with `send_to_agent` can come up without the U-Tax tools)",
   "**tax → qa → accounting run as the direct chain**", "**Tools fallback, never a stop:**",
-  "**immediately** make the board card for that same step", "A `fast-path card` that reaches done (a board digest) continues the chain",
+  "**immediately** make the board card for that same step", "A `fast-path card` that **this digest** reports as newly done continues the chain", "One fallback card per step",
+  "The gateway's status decides, never the note", "first comment \"chain continued\" on it",
   "a tools failure or one of the stops above");
 // D38: the order the CEO assistant sends is one the Chief of Staff's share card row lists
 const SHARE_ORDER = "get an outside agent to make a share card";
