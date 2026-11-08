@@ -46,6 +46,11 @@ import { current, emptyCaseDocs, stepCaseDocs, type CaseDocs } from "@/office/ar
 import { SEAT_NAME } from "@/office/workspace";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
+import { DeptAvatar } from "@/components/ui/DeptAvatar";
+import { Switch } from "@/components/ui/Switch";
+
+/** D40: the department that does each kind of action (its avatar on approvals and standing orders). */
+const ACTION_SEAT: Readonly<Record<string, string>> = { email: "acct", social_post: "mkt", calendar_invite: "intake", voice_screen: "hr" };
 
 const HAS_GATEWAY = Boolean(process.env.NEXT_PUBLIC_API_URL);
 /** Endpoints for the shared URL builders: the token never goes in a URL here (it rides the header). */
@@ -617,6 +622,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
                     className={[old && "outdated", highlight === a.approvalId && "highlight"].filter(Boolean).join(" ") || undefined}
                   >
                     <div className="line">
+                      <DeptAvatar seat={Object.hasOwn(ACTION_SEAT, a.actionType) ? ACTION_SEAT[a.actionType] : "cos"} size={32} className="row-av" />
                       <div className="what" id={`w-${key}`}>
                         <small>
                           {ACTION_LABEL[a.actionType as ActionType] ?? a.actionType}
@@ -759,7 +765,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
 
         <section aria-labelledby="tr-h">
           <h2 id="tr-h">Standing orders</h2>
-          <p className="hint">A kind that asks you first runs on its own after you approve one. Pause stops a kind; Resume puts it back as it was.</p>
+          <p className="hint">A kind that asks you first runs on its own after you approve one. Switch a kind off to pause it; on puts it back as it was.</p>
           {loading ? (
             <p className="empty">Loading…</p>
           ) : (
@@ -770,40 +776,31 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
                 return (
                   <li key={t}>
                     <div className="line">
+                      <DeptAvatar seat={ACTION_SEAT[t] ?? "cos"} size={32} className="row-av" />
                       <div className="what" id={`w-${key}`}>
                         <small className={`st ${state.toLowerCase()}`}>
                           {state === "PAUSED" ? "paused" : state === "AUTO" ? "runs on its own" : "asks you first"}
                         </small>
                         {ACTION_LABEL[t]}
                       </div>
-                      <div className="btns">
-                        {state !== "PAUSED" && (
-                          <button
-                            className="secondary"
-                            aria-describedby={`w-${key}`}
-                            disabled={!!busy}
-                            onClick={() => void act(key, "/trust", { action_type: t, state: "PAUSED" }, `${ACTION_LABEL[t]} paused`)}
-                          >
-                            {working(key) ? "Working…" : "Pause"}
-                          </button>
-                        )}
-                        {state === "PAUSED" && (
-                          <button
-                            className="primary"
-                            aria-describedby={`w-${key}`}
-                            disabled={!!busy}
-                            onClick={() =>
-                              ask({
-                                key,
-                                prompt: `Resume ${ACTION_LABEL[t].toLowerCase()}? It goes back to how it was before the pause, and anything you approved while it was paused goes out now.`,
-                                label: "Resume",
-                                run: () => void act(key, "/trust", { action_type: t, state: "RESUME" }, `${ACTION_LABEL[t]} resumed`),
-                              })
-                            }
-                          >
-                            {working(key) ? "Working…" : "Resume…"}
-                          </button>
-                        )}
+                      <div className="btns sw">
+                        {working(key) && <span className="dim">Working…</span>}
+                        {/* D40: one switch, the same two handlers (on → Pause; off → the Resume confirm). */}
+                        <Switch
+                          on={state !== "PAUSED"}
+                          label={`${ACTION_LABEL[t]} on (off pauses them)`}
+                          disabled={!!busy}
+                          onChange={() =>
+                            state !== "PAUSED"
+                              ? void act(key, "/trust", { action_type: t, state: "PAUSED" }, `${ACTION_LABEL[t]} paused`)
+                              : ask({
+                                  key,
+                                  prompt: `Resume ${ACTION_LABEL[t].toLowerCase()}? It goes back to how it was before the pause, and anything you approved while it was paused goes out now.`,
+                                  label: "Resume",
+                                  run: () => void act(key, "/trust", { action_type: t, state: "RESUME" }, `${ACTION_LABEL[t]} resumed`),
+                                })
+                          }
+                        />
                       </div>
                     </div>
                     {confirmRow(key)}
@@ -834,6 +831,7 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
                     <ol className="order-steps">
                       {o.steps.map((st) => (
                         <li key={st.key} className={st.status}>
+                          <DeptAvatar seat={st.seat ?? "cos"} size={20} className="step-av" />
                           <span className="who">{st.seat ? SEAT_NAME[st.seat] : "U-Tax"}</span> {st.text}
                         </li>
                       ))}

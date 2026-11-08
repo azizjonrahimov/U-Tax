@@ -170,3 +170,41 @@
 .ceo .case-docs button { padding: 0 14px; font-size: 15px; }
 .ceo .case-docs .error { font-size: 14px; }
 .ceo .case-none { margin: 0; font-size: 14px; }
+
+/* ---------------------------------------------------------------- D40 (INSIDE-BRIEF §3, §7 cut line):
+   Night Lime tokens, a lime Approve, department avatars, switches for standing orders.
+   Same layout and handlers; STOP EVERYTHING keeps its red and stays one click / Esc. */
+.ceo {
+  --bg: #050505; --panel: #10120e; --panel2: #161812; --line: rgba(255, 255, 255, .1);
+  --text: #f2f3ee; --dim: #a1a39b; --green: #3ddc84; --blue: #bef243; --lime: #bef243; --on-lime: #0b0d06;
+  font-family: var(--font-geist), var(--font-inter), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  caret-color: var(--lime);
+  background: radial-gradient(ellipse 50% 35% at 75% 0%, rgba(190, 242, 67, .06), transparent 70%), var(--bg);
+}
+.ceo ::selection { background: rgba(190, 242, 67, .3); }
+.ceo :focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
+.ceo header { background: linear-gradient(rgba(5, 5, 5, .85), rgba(5, 5, 5, .6)); border-bottom-color: rgba(255, 255, 255, .08); }
+.ceo .logo { background: var(--lime); color: var(--on-lime); border-radius: 8px; font-weight: 700; }
+.ceo .title { font-weight: 600; letter-spacing: -.01em; }
+.ceo h1 { font-weight: 500; letter-spacing: -.03em; }
+.ceo h2 { font-weight: 600; letter-spacing: -.01em; }
+.ceo .count { font-family: var(--font-geist-mono), var(--font-jetbrains-mono), monospace; border-color: rgba(255, 255, 255, .14); }
+.ceo .brief, .ceo .items { border-radius: 16px; border-color: rgba(255, 255, 255, .08); }
+.ceo .items li { background: var(--panel); }
+.ceo .what small { font: 500 12px var(--font-geist-mono), var(--font-jetbrains-mono), monospace; letter-spacing: 0; text-transform: none; }
+.ceo .st.auto { color: var(--lime); }
+.ceo .primary { background: var(--lime); color: var(--on-lime); border-color: var(--lime); border-radius: 999px; font-weight: 600; box-shadow: 0 0 0 1px rgba(190, 242, 67, .35), 0 8px 26px -10px rgba(190, 242, 67, .55); }
+.ceo .primary:hover:not(:disabled) { background: #d4ff6a; }
+.ceo .secondary { border-color: rgba(255, 255, 255, .16); border-radius: 999px; }
+.ceo .secondary:hover:not(:disabled) { border-color: var(--lime); }
+.ceo .empty { border-color: rgba(255, 255, 255, .12); border-radius: 12px; }
+.ceo .row-av { flex-shrink: 0; align-self: flex-start; margin-top: 2px; }
+.ceo .btns.sw { align-items: center; }
+.ceo .order-steps li { display: flex; align-items: flex-start; gap: 8px; padding-left: 0; }
+.ceo .order-steps li::before { position: static; order: 3; margin-left: auto; color: var(--lime); }
+.ceo .order-steps .step-av { flex-shrink: 0; margin-top: 2px; }
+.ceo .stop { border-radius: 12px; }
+.ceo button.ui-switch { min-height: 0; width: 40px; height: 22px; padding: 0; border-radius: 999px; border: 1px solid rgba(255, 255, 255, .14); font-size: 0; }
+.ceo button.ui-switch.on { border-color: var(--lime); }
+.ceo button.ui-switch::before { content: ""; position: absolute; inset: -11px -4px; } /* a 44px touch target around the 22px track */
