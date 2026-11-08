@@ -411,7 +411,10 @@ function sendMemo(caseId) {
 }
 
 /** D35/D37: prepare_documents' events in one burst, shaped as the gateway emits them. */
+/** D35: the files prepare_documents built, by case (GET /api/docs/<case>/<file>). */
+const docFiles = new Map();
 function buildDocuments(caseId, masked) {
+  docFiles.set(caseId, new Set([`Delaware_Franchise_Tax_Workpaper_${caseId}_v1.xlsx`, `Franchise_Tax_Memo_${caseId}_v1.docx`]));
   const tag = masked.replace(/[^A-Za-z0-9]/g, "");
   const step = (doc, n, of, detail, cells) => emit("doc.step", { doc, step: n, detail, of }, { actor: "acct", case_id: caseId }, cells ? { cells } : null);
   const grid = (sheet, rows) => rows.flatMap((row, r) => row.map((value, c) => ({ sheet, cell: `${String.fromCharCode(65 + c)}${r + 1}`, value })).filter((x) => x.value !== ""));
@@ -670,6 +673,14 @@ const server = createServer(async (req, res) => {
   if (req.method === "POST" && p === "/api/ceo/talk") return out(...talk(body));
   if (req.method === "GET" && p.startsWith("/api/ceo/talk/")) return out(...talkCheck(decodeURIComponent(p.slice("/api/ceo/talk/".length))));
   if (req.method === "POST" && p === "/api/ceo/undo") return out(...undo(body));
+  // D35: a case's built file, CEO only (the admin check above), named exactly as built.
+  const doc = req.method === "GET" && /^\/api\/docs\/(case_[0-9]{1,6})\/([A-Za-z0-9_]{1,80}\.(xlsx|docx))$/.exec(p);
+  if (doc) {
+    if (!docFiles.get(doc[1])?.has(doc[2])) return out(404, { error: { code: "not_found", message: "no such document" } });
+    const type = doc[3] === "xlsx" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    console.log(JSON.stringify({ t: Date.now(), method: "GET", path: "/api/docs", body: { case_id: doc[1], file: doc[2] }, status: 200 }));
+    return res.writeHead(200, { ...cors, "Content-Type": type, "Content-Disposition": `attachment; filename="${doc[2]}"`, "Cache-Control": "private, no-store" }).end(Buffer.from(`mock ${doc[2]}`));
+  }
   if (req.method === "POST" && p === "/api/dev/talk-down") {
     talkDownDev = body.down !== false;
     return out(200, { down: talkDownDev });

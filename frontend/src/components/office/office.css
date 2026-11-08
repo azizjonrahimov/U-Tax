@@ -249,3 +249,9 @@
   .ceo.in-panel .stop { flex: 1 1 100%; }
   .ceo.in-panel .vbar .ghost { margin-left: 0; }
 }
+/* D35: the real files, downloadable while signed in */
+.office .of-dept .file-dl { display: inline-flex; flex-direction: column; gap: 4px; }
+.office .of-dept button.file { min-height: 36px; padding: 4px 12px; border: 1px solid var(--c); border-radius: 4px; background: var(--panel2); color: var(--text); font: 500 13px var(--font-inter), sans-serif; cursor: pointer; }
+.office .of-dept button.file:hover:not(:disabled) { background: color-mix(in srgb, var(--c) 20%, var(--panel2)); }
+.office .of-dept button.file:disabled { opacity: .7; cursor: progress; }
+.office .of-dept .dl-err { color: var(--red); font-size: 13px; }

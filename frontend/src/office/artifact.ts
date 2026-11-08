@@ -42,11 +42,14 @@ export interface Book {
   sheets: string[];
   lines: { tab: string; text: string }[];
   verified: boolean | null;
+  /** doc.created came: `file` is the real file the gateway built (it can be downloaded). */
+  built?: true;
 }
 export interface Memo {
   file: string;
   sections: string[];
   verified: boolean | null;
+  built?: true;
 }
 /** The case's documents as they are built; `units` is the order things appeared, for the playback. */
 export interface DocsArt {
@@ -394,7 +397,7 @@ export function applyStudio(st: Studio, ev: UTaxEvent, ctx: StudioCtx): Studio {
       let art = prev;
       if (prev?.kind === "docs" && prev.caseId === cid && file && (doc === "workpaper" || doc === "memo" || doc === "books")) {
         const d = prev[doc];
-        art = d ? { ...prev, [doc]: { ...d, file } } : prev;
+        art = d ? { ...prev, [doc]: { ...d, file, built: true } } : prev;
       }
       return { ...put(st, seat, { art }), files };
     }

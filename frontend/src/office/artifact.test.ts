@@ -202,3 +202,15 @@ describe("money without float noise", () => {
     expect(cellText(625000.0625, "usd")).toBe("$625,000.0625");
   });
 });
+
+describe("D35: a document can be downloaded once the gateway built it", () => {
+  it("doc.created marks the real file as built (the books never are downloadable)", () => {
+    const st = fold([
+      ev("doc.step", { doc: "workpaper", step: 1, of: 5, detail: "Inputs: x" }, { actor: "acct", case_id: "case_7" }),
+      ev("doc.step", { doc: "memo", step: 1, of: 3, detail: "Memo: summary" }, { actor: "acct", case_id: "case_7" }),
+      ev("doc.created", { doc: "workpaper", file_name: "Delaware_Franchise_Tax_Workpaper_case_7_v1.xlsx" }, { actor: "acct", case_id: "case_7" }),
+    ]);
+    const art = st.desks.acct.art;
+    expect(art?.kind === "docs" ? [art.workpaper?.built, art.workpaper?.file, art.memo?.built] : []).toEqual([true, "Delaware_Franchise_Tax_Workpaper_case_7_v1.xlsx", undefined]);
+  });
+});
