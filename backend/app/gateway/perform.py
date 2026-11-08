@@ -377,6 +377,12 @@ class Gateway:
         # D41 B53: the Stripe mirror tick (one at a time, outside self._lock): the log read so
         # far, the payments not yet recorded (tx -> payment.sent), failures per tx
         self._mirror_tick = threading.Lock()
+        # D42 M3: the autopilot (one tick at a time): case -> (what it looked like, since
+        # when), the cases whose documents must be (re)built first, and the thread's "via"
+        self._drive_tick = threading.Lock()
+        self._drive_seen: dict[str, tuple[tuple, datetime]] = {}
+        self._drive_docs: set[str] = set()
+        self._via_ctx = threading.local()
         self._mirror_seen = 0
         self._mirror_todo: dict[str, Event] = {}
         self._mirror_fails: dict[str, int] = {}
@@ -1006,6 +1012,10 @@ class Gateway:
                 events = [replace(e, payload={**e.payload, "task_no": task_no})
                           if e.payload.get("order_id") == order and "task_no" not in e.payload
                           and not e.type.startswith("order.") else e for e in events]
+        via = getattr(getattr(self, "_via_ctx", None), "value", None)
+        if via:  # v1.21 (D42 M3): every event an autopilot step writes says so
+            events = [e if "via" in e.payload or e.type.startswith(("touch.", "order."))
+                      else replace(e, payload={**e.payload, "via": via}) for e in events]
         orders = getattr(self, "_orders", None)
         if orders is not None:  # v1.20 (D41): and by the task it serves
             events = [self._with_task_no(e) for e in events]
@@ -4039,6 +4049,92 @@ class Gateway:
             return tx
         finally:
             self._mirror_tick.release()
+
+    # ------------------------------------------------------------ v1.21 (D42 M3) autopilot
+
+    AUTOPILOT_AFTER = timedelta(seconds=45)
+    AUTOPILOT_PER_TICK = 5  # cases a tick moves, at most (each step can send a mail)
+    AUTOPILOT_STEPS = {"READY": ("compute_tax", "tax"), "COMPUTED": ("qa_check", "qa")}
+
+    def _drive_step(self, case: Case) -> tuple[str, str] | None:
+        """The deterministic step a case is waiting on, or None (the table in D42 §M3)."""
+        if case.status in self.AUTOPILOT_STEPS:
+            return self.AUTOPILOT_STEPS[case.status]
+        if case.status == "QA_PASSED":
+            if case.docs is None or case.case_id in self._drive_docs:
+                return "prepare_documents", "acct"
+            return "send_memo", "acct"
+        return None
+
+    def _drive_look(self, case: Case) -> tuple:
+        return (case.status, (case.docs or {}).get("key"), len(case.texts), case.memos_sent,
+                self._drive_step(case))
+
+    def _drive_candidates(self) -> list[tuple[str, str, str]]:
+        """Under the lock: (case, tool, seat) for each case unchanged for 45 s that the
+        autopilot may move: not flagged, no approval waiting for it, email not PAUSED."""
+        now = self._now()
+        if self.state.trust.get("email") == "PAUSED":
+            return []
+        waiting = {a.case_id for a in self.state.approvals.values()
+                   if a.decision is None and a.case_id}
+        out: list[tuple[str, str, str]] = []
+        for case in sorted(self.state.cases.values(), key=lambda c: c.number):
+            step = self._drive_step(case)
+            if step is None or case.case_id in waiting or self.flagged_injection(case.case_id):
+                self._drive_seen.pop(case.case_id, None)
+                continue
+            looks = self._drive_look(case)
+            seen = self._drive_seen.get(case.case_id)
+            if seen is None:  # first look: unchanged since its status changed
+                try:
+                    since = parse_ts(case.status_ts) if case.status_ts else now
+                except ValueError:
+                    since = now
+                seen = self._drive_seen[case.case_id] = (looks, min(since, now))
+            elif seen[0] != looks:  # someone moved it: 45 s from now
+                self._drive_seen[case.case_id] = (looks, now)
+                continue
+            if now - seen[1] >= self.AUTOPILOT_AFTER:
+                out.append((case.case_id, *step))
+        return out[:self.AUTOPILOT_PER_TICK]
+
+    def drive_cases(self) -> list[str]:
+        """D42 M3 (main.tick): a case nothing moved for 45 s gets its next deterministic step
+        (compute_tax, qa_check, prepare_documents, send_memo), at most one a case a tick,
+        through the tool's own handler as that seat (perform: the lock, approvals, wakes as
+        for an agent). The tick holds no lock while a step runs. Every event it writes says
+        via: "autopilot". Off with AUTOPILOT=0. Returns "case_N:tool" for each step run."""
+        if not self.settings.autopilot or not self._drive_tick.acquire(blocking=False):
+            return []
+        try:
+            with self._lock:
+                todo = self._drive_candidates()
+            ran: list[str] = []
+            for case_id, tool, seat in todo:
+                self._via_ctx.value = "autopilot"
+                try:
+                    result = self.perform(tool, {"case_id": case_id}, actor=seat)
+                finally:
+                    self._via_ctx.value = None
+                code = (result.error or {}).get("code")
+                with self._lock:
+                    if tool == "prepare_documents" and result.status == "done":
+                        self._drive_docs.discard(case_id)
+                    if tool == "send_memo" and code == "docs_missing":
+                        self._drive_docs.add(case_id)  # stale documents: rebuild them first
+                    case = self.state.cases.get(case_id)
+                    if case is not None:  # the next step waits 45 s from now
+                        self._drive_seen[case_id] = (self._drive_look(case), self._now())
+                if result.status in ("done", "needs_approval"):
+                    ran.append(f"{case_id}:{tool}")
+                    log.info("autopilot: %s %s as %s -> %s", tool, case_id, seat,
+                             result.status)
+                else:  # an agent did it meanwhile, or the case can't move: someone looks
+                    log.info("autopilot: %s %s as %s refused: %s", tool, case_id, seat, code)
+            return ran
+        finally:
+            self._drive_tick.release()
 
     def advance_market_jobs(self) -> list[str]:
         """D38: the pay tick (app/main.py's tick, and right after a verified submit)."""

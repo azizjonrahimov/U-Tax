@@ -124,6 +124,7 @@ class Settings:
     stripe_price_id: str = ""  # optional: reuse one Price instead of making one at boot
     filing_price_cents: int = 4900  # the filing-help offer (memo.md's copy says $49)
     stripe_mirror: bool = True  # D41 B53: mirror contractor payments in test mode (0: off)
+    autopilot: bool = True  # D42 M3: the tick runs a stuck case's next step (AUTOPILOT=0: off)
     # D38 agent market (all off unless MARKET_ENABLED=1)
     market_enabled: bool = False
     tempo_chain_id: int = 42431
@@ -234,6 +235,7 @@ class Settings:
             stripe_price_id=_env("STRIPE_PRICE_ID"),
             filing_price_cents=int(_env("FILING_PRICE_CENTS") or 4900),
             stripe_mirror=_env("STRIPE_MIRROR") != "0",
+            autopilot=_env("AUTOPILOT") != "0",
             market_enabled=_env("MARKET_ENABLED") == "1",
             tempo_chain_id=int(_env("TEMPO_CHAIN_ID") or 42431),
             firm_wallet_key=_env("FIRM_WALLET_KEY"),
