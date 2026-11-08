@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
 import { foldTour, type TourOrder } from "./tour";
+import { foldMail, type Thread } from "./mail";
 import { assetAllowed, eventsUrl, numbersFromState, originOf, parseAssetHosts, reconnectDelayMs, seedFromState, stateUrl, streamUrl, type Endpoints } from "@/theater/live";
 import type { FirmNumbers } from "@/theater/rail";
 import { appendEvents, startScript, type ScriptCursor } from "@/theater/script";
@@ -41,6 +42,8 @@ export interface Feed {
   live: { seat: Seat; key: string; ts?: string; activity?: true } | null;
   /** D41 F48: the CEO orders' tasks (order.* events), folded from history and the stream. */
   tour: TourOrder[];
+  /** D41 F49: the firm's email as threads per case (history and the stream). */
+  mail: Thread[];
 }
 
 /** The gateway refused the CEO session: it was revoked, or the gateway's secret changed. */
@@ -91,6 +94,8 @@ export function useFirmFeed(session: string | null = null): Feed {
   const studioRef = useRef(studio);
   const [tour, setTour] = useState<TourOrder[]>([]);
   const tourRef = useRef(tour);
+  const [mail, setMail] = useState<Thread[]>([]);
+  const mailRef = useRef(mail);
 
   useEffect(() => {
     if (!HAS_GATEWAY) return;
@@ -139,6 +144,11 @@ export function useFirmFeed(session: string | null = null): Feed {
       if (JSON.stringify(tourNext) !== JSON.stringify(tour0)) {
         tourRef.current = tourNext;
         setTour(tourNext);
+      }
+      const mailNext = foldMail(mailRef.current, events.filter(wellFormed));
+      if (JSON.stringify(mailNext) !== JSON.stringify(mailRef.current)) {
+        mailRef.current = mailNext;
+        setMail(mailNext);
       }
       for (const e of events) {
         if (wellFormed(e)) maxSeen = Math.max(maxSeen, e.id);
@@ -253,6 +263,8 @@ export function useFirmFeed(session: string | null = null): Feed {
       setStudio(studioRef.current);
       tourRef.current = [];
       setTour([]);
+      mailRef.current = [];
+      setMail([]);
       setLive(null);
       const last = seed.lastId ?? 0;
       if (last > 0) {
@@ -282,5 +294,5 @@ export function useFirmFeed(session: string | null = null): Feed {
     };
   }, [session]);
 
-  return { office, numbers, status, live, studio, tour };
+  return { office, numbers, status, live, studio, tour, mail };
 }
