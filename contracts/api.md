@@ -290,8 +290,10 @@ For Replay mode and catch-up. Ordered by `id`.
     the CEO said stop; the gateway paused <comma-separated types>. Undo id <undo_id>.` The gateway
     strips any leading `System:` (case-insensitive, after trimming) from the CEO's own text before
     relaying it, so only the gateway can write that note.
-  - **RESUME after a stop.** A `set_trust RESUME` on the ceo seat is refused (`code: "stopped"`) when
-    the turn that issued it began before the latest stop.
+  - **Leaving PAUSED after a stop.** On the ceo seat, a `set_trust RESUME`, or any other way out of
+    PAUSED (`set_trust AUTO`/`ASK` on a paused type, or `undo` of a pause), is refused (`code: "stopped"`)
+    when the turn that issued it began before the latest stop. The CEO's own `POST /api/ceo/undo` is
+    unaffected. The ceo seat also has `cancel_order {order_id}` and `undo {undo_id}`.
   - **Ambiguous references.** On the ceo seat, an approval or candidate reference of "latest", "it",
     a pronoun, or one matching more than one item answers
     `{status: "refused", code: "ambiguous", candidates: [{id, summary}]}`.

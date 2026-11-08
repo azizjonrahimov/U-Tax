@@ -12,7 +12,7 @@
 // - Native email, social and phone tools are denied by name too, so nothing can reach a
 //   client without going through perform().
 
-import { CREW, GATEWAY_TOOLS, MCP_SERVER, type AgentKey } from "./crew.js";
+import { CEO_TOOLS, CREW, GATEWAY_TOOLS, MCP_SERVER, type AgentKey } from "./crew.js";
 
 type Permission = "allow" | "deny" | "ask";
 interface ToolConfig {
@@ -98,8 +98,9 @@ export function toolsetFor(agent: AgentKey): Toolset {
   for (const name of [...ASK_BY_DEFAULT, ...NATIVE_BYPASS, ...ESCALATION]) configs[name] = DENY;
   // Members never delegate onward; the coordinator holds the roster.
   for (const name of COORDINATOR) configs[name] = agent === "cos" ? ALLOW : DENY;
-  for (const name of BOARD) configs[name] = ALLOW;
-  for (const tool of GATEWAY_TOOLS) configs[`${MCP_SERVER}.${tool}`] = DENY;
+  // The CEO assistant is not on the board (v1.14): it acts through the CEO tools only.
+  for (const name of BOARD) configs[name] = agent === "ceo" ? DENY : ALLOW;
+  for (const tool of [...GATEWAY_TOOLS, ...CEO_TOOLS]) configs[`${MCP_SERVER}.${tool}`] = DENY;
   for (const tool of CREW[agent].tools) configs[`${MCP_SERVER}.${tool}`] = ALLOW;
   return { default_config: { permission: "deny" }, configs };
 }

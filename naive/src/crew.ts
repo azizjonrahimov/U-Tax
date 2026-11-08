@@ -37,7 +37,31 @@ export const GATEWAY_TOOLS = [
 
 export type GatewayTool = (typeof GATEWAY_TOOLS)[number];
 
-export type AgentKey = "cos" | "intake" | "tax" | "qa" | "acct" | "mkt" | "hr";
+/**
+ * The CEO tool registry (contract §5b), served at /mcp/ceo to the ceo-assistant only (v1.14 §5a-ter,
+ * design D34). Start tools run directly there, with no proposal. `get_case` shares its name with the
+ * §6 tool, but on /mcp/ceo it is the §5b one.
+ */
+export const CEO_TOOLS = [
+  "get_brief",
+  "list_approvals",
+  "get_case",
+  "get_money",
+  "get_trust",
+  "get_hiring",
+  "recent_activity",
+  "pause",
+  "approve",
+  "deny",
+  "set_trust",
+  "unblock_case",
+  "decide_candidate",
+  "order",
+] as const;
+
+export type CeoTool = (typeof CEO_TOOLS)[number];
+
+export type AgentKey = "cos" | "intake" | "tax" | "qa" | "acct" | "mkt" | "hr" | "ceo";
 
 export interface Seat {
   /** Naïve agent name (the key `naive up` upserts by). */
@@ -50,7 +74,7 @@ export interface Seat {
   prompt: string;
   description: string;
   /** Least privilege: the gateway tools this agent is offered. Nothing else from the gateway. */
-  tools: readonly GatewayTool[];
+  tools: readonly (GatewayTool | CeoTool)[];
 }
 
 export const CREW: Record<AgentKey, Seat> = {
@@ -109,6 +133,16 @@ export const CREW: Record<AgentKey, Seat> = {
     prompt: "hr.md",
     description: "Runs the paid gig hire: finds public leads, writes to candidates who gave the firm their address, screens and shortlists. The CEO hires or declines.",
     tools: ["get_candidate", "hr_record", "source_candidates", "hr_outreach", "list_candidates"],
+  },
+  // v1.14 (design D34): the CEO's own assistant, not on the team or the board. It acts only through
+  // the CEO tools on /mcp/ceo, which the gateway runs directly (no proposal) and can mostly undo.
+  ceo: {
+    name: "ceo-assistant",
+    actor: "ceo",
+    tokenEnv: "UTAX_TOOL_TOKEN_CEO",
+    prompt: "ceo-assistant.md",
+    description: "The CEO's assistant: talks with the CEO, answers from the firm's records and acts through the CEO tools.",
+    tools: CEO_TOOLS,
   },
 };
 

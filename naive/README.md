@@ -1,22 +1,23 @@
 # naive/: the U-Tax crew on Naïve
 
-Seven agents (Chief of Staff as coordinator, plus Intake, Tax, QA, Accounting, Marketing and HR) on
-one shared board, declared in `naive.config.ts` and applied with `naive up`. Their only tools are
+Seven firm agents (Chief of Staff as coordinator, plus Intake, Tax, QA, Accounting, Marketing and HR)
+on one shared board, plus the CEO's own assistant (`ceo-assistant`, v1.14: off the team and the board), declared in `naive.config.ts` and applied with `naive up`. Their only tools are
 the U-Tax gateway's MCP tools (`contracts/api.md` §6, each agent on its own `/mcp/<actor>` seat) plus the board. Native email, social, phone,
 paid and escalation tools are denied by name.
 
 | Path | What |
 |---|---|
-| `naive.config.ts` | 7 agents, each with its own identity + vault + gateway token; roster + board; Sunday 8 AM brief; first-run briefing |
+| `naive.config.ts` | 7 firm agents + the CEO assistant, each with its own identity + vault + gateway token; roster + board; Sunday 8 AM brief; first-run briefing |
 | `src/crew.ts` | the agent → gateway-tool map (one source of truth) |
 | `src/policy.ts` | deny-by-default toolsets |
 | `prompts/*.md` | one system prompt per agent; `_firm-rules.md` is appended to each |
 | `prompts/voice-intake.md` | the `/talk` voice agent (OpenAI Realtime, run by the backend; not a Naïve agent, no tools) |
 | `prompts/ceo-voice.md` | the `/ceo` voice agent for the CEO (OpenAI Realtime, run by the backend; not a Naïve agent; only the contract §5b CEO tools, every start action a proposal the CEO confirms) |
+| `prompts/ceo-assistant.md` | the CEO's conversational assistant on Naïve (v1.14 §5a-ter, D34): the §5b CEO tools on `/mcp/ceo`, run directly with no confirm; exact ids for approve, deny and hire; no board |
 | `prompts/talk-phrases.json` | the only lines the public `/talk` voice speaks (contract v1.10.2): a flat key → line map the gateway renders for `POST /api/tts` purpose `talk`, numbers only in `{placeholders}` |
 | `templates/memo.md` | the client memo (contract §7 placeholders only) |
 | `templates/*.md` | gateway-sent texts (placeholders below), posts, demo script cards, backup slide |
-| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, the page's questions word for word), the Chief of Staff's card rules and firm rules 9 and 11 kept word for word, every template's rules, bad-env guard tests |
+| `scripts/check.mjs` | offline check: engine validation, exact tool policy, contract §6 names and Agent column, per-seat URLs and tokens, prompts (including the two voice prompts' rules and the §5b CEO tool names), the `/talk` phrase registry (the gateway loader's format, the page's questions word for word), the Chief of Staff's card rules and firm rules 9 and 11 kept word for word, the CEO assistant's seat (§5b tools, no team or board, $3/day) and safety rules, every template's rules, bad-env guard tests |
 
 ## Templates for the gateway (values come from code and projections, never from an agent)
 Status: the gateway loads `memo.md` today. The others are the agreed wording with these exact
@@ -52,7 +53,7 @@ video's shot list.
 
 ## Env vars (see `.env.example`)
 `NAIVE_API_KEY`, `UTAX_MCP_URL` (required; public HTTPS base ending in `/mcp`; each agent uses `<base>/<actor>`), one token per agent
-`UTAX_TOOL_TOKEN_COS|_INTAKE|_TAX|_QA|_ACCT|_MKT|_HR` (required; the backend's values, 32+ characters,
+`UTAX_TOOL_TOKEN_COS|_INTAKE|_TAX|_QA|_ACCT|_MKT|_HR|_CEO` (required; the backend's values, 32+ characters,
 all different), `UTAX_PHONE_E164` (optional, off).
 The config reads `process.env`, so export them in your shell before `naive up`.
 
