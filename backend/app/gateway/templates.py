@@ -147,6 +147,15 @@ SPECS: dict[str, Spec] = {
         "franchise tax memos our AI agents write, before they go to founders.\n\n"
         + AI_SCREEN_LINE + "\n\nWe've sent a calendar invite for a {{minutes}}-minute intro "
         "call on {{slot_time}}.\n{{booking_url}}\n\n" + SIGN_OFF)),
+    # v1.12 (D32): the sign-up's welcome; the agents lane's file replaces this built-in
+    "signup-welcome": Spec(("greeting_name",), lines=(DISCLAIMER,), builtin=(
+        "Hi {{greeting_name}},\n\nThanks for signing up with U-Tax! We check your Delaware "
+        "franchise tax for free and show you the cheaper method.\n\nReply to this email "
+        "with:\n1. Is the company a Delaware corporation?\n2. How many shares are "
+        "authorized?\n3. How many shares are issued?\n4. Roughly what are your total gross "
+        "assets?\nAnd: does any foreign person or company own 25% or more?\n\nPlease don't "
+        "send SSNs, EINs or any ID numbers. We never need them.\n\n" + SIGN_OFF + "\n\n"
+        + DISCLAIMER)),
     "follow-up-memo_check": Spec(("greeting_name", "masked_name"), lines=(DISCLAIMER,),
                                  builtin=(
         "Hi {{greeting_name}},\n\nJust checking that our Delaware franchise tax memo reached "
