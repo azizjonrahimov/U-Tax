@@ -921,6 +921,13 @@ copied into §3, the `utax.task_done` row into §6, and the `/api/payments` line
   last call of the card marked `report: yes`. A repeat answers `{ok: true, duplicate: true}`; a task not yet
   started answers `not_running`.
 - STOP everything cancels every running and queued task (`order.task_done` `cancelled`, then `order.done`).
+- **An explicit task wins (agents A43 review).** Every tool that takes `order_id` also takes an optional `task_no`
+  (1–6). Agents pass both from the card's first body line `order_<id> task k/N`. The gateway stamps that `task_no`
+  when it names a task of that order. Only without it does the gateway stamp the running task. A late event of an
+  earlier task (e.g. a hiring-ad approval of task 2) never marks a later task `waiting_on_you`: `_waiting` is set only
+  when the stamped task IS the running task.
+- `utax.task_done` is accepted only from the `cos` seat or from a seat that already acted on that task; any other seat
+  is refused `not_yours`.
 
 **10.3 `GET /api/payments?token=`** (the same token rule as `/api/state`): newest first, ≤ 100 rows
 `{id, ts, direction, kind, counterparty, job_id?, order_id?, task_no?, amount, token, rail, status, tx_hash?,
