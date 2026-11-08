@@ -49,8 +49,16 @@ describe("D35 document downloads", () => {
 
   it("a dead session signs the tab out; a missing file and an outage say so", async () => {
     writeSession({ session: "s.dead", expiresAt: Date.now() + 60_000 });
-    expect((await downloadDoc("s.dead", "case_41", "Franchise_Tax_Memo_case_41_v1.docx", (async () => reply(401)) as unknown as typeof fetch)).ok).toBe(false);
+    // `expired`: the console signs out with the reason (F1), not a silent bounce to the sign-in page.
+    expect(await downloadDoc("s.dead", "case_41", "Franchise_Tax_Memo_case_41_v1.docx", (async () => reply(401)) as unknown as typeof fetch)).toMatchObject({ ok: false, expired: true });
     expect(readSession()).toBeNull();
+    // A late 401 for an old session after the CEO signed in again: the new session stays, no sign-out.
+    writeSession({ session: "s.new", expiresAt: Date.now() + 60_000 });
+    const late = await downloadDoc("s.old", "case_41", "Franchise_Tax_Memo_case_41_v1.docx", (async () => reply(401)) as unknown as typeof fetch);
+    expect(late).toMatchObject({ ok: false });
+    expect("expired" in late && late.expired).toBe(false);
+    expect(readSession()?.session).toBe("s.new");
+    writeSession(null);
     expect(await downloadDoc("s", "case_41", "Franchise_Tax_Memo_case_41_v1.docx", (async () => reply(404)) as unknown as typeof fetch)).toEqual({ ok: false, message: expect.stringMatching(/isn't there/) });
     const down = (async () => {
       throw new TypeError("network");

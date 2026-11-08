@@ -178,6 +178,21 @@ const RESUME_MS = 1500;
 
 type Clip = { rec: MediaRecorder; chunks: Blob[]; at: number };
 
+/**
+ * v1.18.4: the gateway books an upload at max(declared seconds, its size at a floor bitrate: 6 kbps
+ * for webm/opus, 8 kbps for mp4), so speech is recorded at 8 kbps (an honest Opus clip books ~1.3x
+ * its length, not ~5x). A browser that won't take the bitrate records at its default (it may clamp
+ * it silently: Safari's AAC is not measured yet).
+ */
+const SPEECH_BPS = 8000;
+function recorder(stream: MediaStream, type: string): MediaRecorder {
+  try {
+    return new MediaRecorder(stream, { ...(type ? { mimeType: type } : {}), audioBitsPerSecond: SPEECH_BPS });
+  } catch {
+    return new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  }
+}
+
 /** A recorder whose audio isn't wanted: its handlers off, stopped. */
 function drop(c: Clip) {
   c.rec.ondataavailable = null;
@@ -293,7 +308,7 @@ export function serverRecognition(purpose: SttPurpose, token: () => string | nul
       if (!this.stream || this.ended || this.closing) return null;
       try {
         const type = recordingType((t) => MediaRecorder.isTypeSupported(t)) ?? "";
-        const rec = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined);
+        const rec = recorder(this.stream, type);
         const c: Clip = { rec, chunks: [], at: performance.now() };
         rec.ondataavailable = (e) => e.data.size && c.chunks.push(e.data);
         rec.onerror = () => this.fail(STT_RECORD_FAILED);

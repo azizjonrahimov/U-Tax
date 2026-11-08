@@ -40,8 +40,9 @@ import {
 import { announceAgentAudio, CeoVoice } from "./CeoVoice";
 import { logout, useSessionToken, writeSession } from "@/ceo/session";
 import { foldOrders, type OrderCard } from "@/ceo/orders";
+import { CaseList } from "./CaseList";
 import { useConsoleLock } from "@/ceo/popout";
-import { current } from "@/office/artifact";
+import { current, emptyCaseDocs, stepCaseDocs, type CaseDocs } from "@/office/artifact";
 import { SEAT_NAME } from "@/office/workspace";
 import { API, authJson, newerApproval, REQUEST_MS } from "./gateway";
 import "./ceo.css";
@@ -180,6 +181,9 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
   /** D37: the CEO's orders, each with its live steps (folded from the same admin log the console reads). */
   const [orders, setOrders] = useState<OrderCard[]>([]);
   const ordersRef = useRef<OrderCard[]>([]);
+  /** F1: each case's verified documents (folded from the same log), reachable after the desk moves on. */
+  const [served, setServed] = useState<CaseDocs["served"]>({});
+  const caseDocsRef = useRef<CaseDocs>(emptyCaseDocs());
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [announce, setAnnounce] = useState("");
@@ -215,6 +219,8 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
       stopAudio();
       ordersRef.current = [];
       setOrders([]);
+      caseDocsRef.current = emptyCaseDocs();
+      setServed({});
       if (why === null) void logout(); // the CEO's own Sign out revokes the session
       else writeSession(null); // a 401: it is already dead at the gateway
       briefRef.current = null;
@@ -286,9 +292,14 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
         let reset = false;
         const restart = () => {
           reset = true;
-          // Ids are reused after a reset: the old rows go off screen right away, before the reload.
+          // Ids are reused after a reset: the old rows go off screen right away, before the reload
+          // (also when the reload fails: the next poll starts from 0 without knowing it reset).
           logRef.current = emptyLog();
           setLog(logRef.current);
+          ordersRef.current = [];
+          setOrders([]);
+          caseDocsRef.current = emptyCaseDocs();
+          setServed({});
           setView(null);
           setConfirm(null);
           setNotice("The gateway's log restarted, so the console reloaded it. Check the lists before acting.");
@@ -316,6 +327,8 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
             image: () => undefined,
           });
           setOrders(ordersRef.current);
+          caseDocsRef.current = (events as unknown[]).filter((e): e is UTaxEvent => typeof e === "object" && e !== null).reduce((d, ev) => stepCaseDocs(d, ev, ev.case_id !== null && fl.has(ev.case_id)), reset ? emptyCaseDocs() : caseDocsRef.current);
+          setServed(caseDocsRef.current.served);
         }
         setLog(logRef.current);
         voiceFeed.current?.(events as UTaxEvent[], reset);
@@ -868,6 +881,8 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
             </div>
           </form>
         </section>
+
+        {view && token && <CaseList cases={view.cases} served={served} token={token} onExpired={signOut} />}
       </main>
     </div>
   );

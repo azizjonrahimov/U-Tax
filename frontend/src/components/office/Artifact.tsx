@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { current, type Activity, type Artifact, type Book, type Desk } from "@/office/artifact";
-import { docName, downloadDoc } from "@/office/docs";
+import { docName, useDownload } from "@/office/docs";
 
 let reducedMotion: boolean | null = null;
 const reduced = () => {
@@ -66,14 +66,14 @@ export function ArtifactView({ art, session = null, served = [] }: { art: Artifa
 
 /** A file the CEO can save: a button while signed in, a plain chip otherwise. */
 function FileChip({ session, caseId, file, label, served }: { session: string | null; caseId: string | null; file: string; label?: string; served: readonly string[] }) {
-  const [state, setState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  const dl = useDownload(session, caseId, file);
   if (!session || !docName(caseId, file) || !served.includes(file)) {
     return (
       <span className="file-dl">
         <span className="file">📎 {label ?? file}</span>
-        {state.error && (
+        {dl.error && (
           <span className="dl-err" role="alert">
-            {state.error}
+            {dl.error}
           </span>
         )}
       </span>
@@ -83,24 +83,15 @@ function FileChip({ session, caseId, file, label, served }: { session: string | 
     <span className="file-dl">
       <button
         className="file"
-        disabled={state.busy}
+        disabled={dl.busy}
         title={`Download ${file}`}
-        onClick={async () => {
-          setState({ busy: true, error: null });
-          let error: string | null = "The download didn't finish. Try again.";
-          try {
-            const r = await downloadDoc(session, caseId as string, file);
-            error = r.ok ? null : r.message;
-          } finally {
-            setState({ busy: false, error });
-          }
-        }}
+        onClick={dl.start}
       >
-        {state.busy ? "Downloading…" : `⬇ ${label ?? file}`}
+        {dl.busy ? "Downloading…" : `⬇ ${label ?? file}`}
       </button>
-      {state.error && (
+      {dl.error && (
         <span className="dl-err" role="alert">
-          {state.error}
+          {dl.error}
         </span>
       )}
     </span>
