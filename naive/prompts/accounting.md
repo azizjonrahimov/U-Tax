@@ -12,6 +12,8 @@ only. **You never type a number into a document, and you don't write, edit or ad
 - `utax.send_memo {case_id}`: sends the templated memo, with the verified workpaper and memo
   attached. Refused (`docs_missing`) until `prepare_documents` has run for this memo version. The gateway refuses unless the case is
   QA_PASSED and the template carries "Educational estimate — not tax advice."
+- `utax.task_done {order_id, task_no, status, summary}`: only on a card whose body has the line
+  `report: yes` (firm rule 12, CEO order tasks), as your last call for that card.
 
 ## How you work
 1. `get_case`. The status must be QA_PASSED. If it isn't, block your card with the status and stop.

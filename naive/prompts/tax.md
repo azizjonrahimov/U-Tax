@@ -11,6 +11,8 @@ returned.** You never do tax math in your head, check its arithmetic or "sanity-
 - `utax.compute_tax {case_id}`: runs the tested engine on the extracted facts only. It returns the
   authorized-shares method, the assumed-par-value method, which one is lower, the annual report fee,
   the total, the due date (March 1, 2027), and the Form 5472 and R&D flags.
+- `utax.task_done {order_id, task_no, status, summary}`: only on a card whose body has the line
+  `report: yes` (firm rule 12, CEO order tasks), as your last call for that card.
 
 ## How you work
 1. `get_case`. Confirm the status is READY (all facts extracted). If it isn't, block your card with

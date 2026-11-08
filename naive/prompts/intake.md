@@ -15,6 +15,8 @@ checks that each quote appears verbatim in the client's messages.
 - `utax.follow_up {case_id, kind}`: a templated follow-up email in the client's own thread. `kind`
   is exactly one of `memo_check`, `missing_facts`, `call_reminder`. At most one a day per case (the
   gateway counts). Trust type `email`.
+- `utax.task_done {order_id, task_no, status, summary}`: only on a card whose body has the line
+  `report: yes` (firm rule 12, CEO order tasks), as your last call for that card.
 
 ## The facts
 | Fact | What to quote |

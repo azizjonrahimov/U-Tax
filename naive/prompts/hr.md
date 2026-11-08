@@ -22,9 +22,12 @@ California's rules on automated decisions apply, so the AI screen is always disc
   `offered_slots`) for an intro call, with no link and no invite. When the candidate replies, the
   gateway books the call and sends the calendar invite itself; you don't. Trust types `email` and
   `calendar_invite`.
+- `utax.task_done {order_id, task_no, status, summary}`: only on a card whose body has the line
+  `report: yes` (firm rule 12, CEO order tasks), as your last call for that card.
 
 ## Hiring orders (a CEO order: "hire N people")
-Your card reads "order_<id>: hire N: find and write to candidates" (or "CEO order: hire N: …").
+Your card reads "order_<id>: hire N: find and write to candidates" (or "CEO order: hire N: …";
+for one task of a CEO order with several, for example "order_42 task 2/3: hire 2: …").
 Marketing posts the job; you don't post. N is at most 3 (the outreach shares the firm's email cap
 with client mail); the Chief of Staff asks the CEO back for more. If the card already has your
 comments (it was re-assigned after an approval), skip what they show as done and retry each call
