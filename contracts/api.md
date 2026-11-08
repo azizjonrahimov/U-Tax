@@ -239,7 +239,8 @@ For Replay mode and catch-up. Ordered by `id`.
     the payload and the sender masked), and wakes the crew ("New case case_N").
   - It sends one welcome email (template `signup-welcome`, trust type `email`) asking for the
     numbers. The reply threads onto the case.
-  - Returns `{case_id, masked_name}`.
+  - Always returns `200 {"ok": true}`, for a new or an existing address alike, so the response never
+    reveals who is a client (v1.12.2). The welcome email is the client's receipt.
   - Refusals: `400 bad_input` (invalid email or empty fields), `429 rate_limited`,
     `429 at_capacity`.
 - Event `tool.called` (actor = the seat): `{tool, status: "done"|"needs_approval"|"refused"|"error",
@@ -639,6 +640,8 @@ falls back to a built-in template if the file is missing.
   - The theater's touches rail shows a mic icon for `channel: "voice"`.
 
 ## Changelog
+
+- v1.12.2 (2026-11-07, backend 28 review): /api/signup always answers {"ok": true}.
 
 - v1.12.1 (2026-11-07, backend task 27): naive.recovered; session-error recovery.
 
