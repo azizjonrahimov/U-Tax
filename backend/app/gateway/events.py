@@ -57,6 +57,7 @@ PAYLOAD_KEYS: dict[str, tuple[str, ...]] = {
     "voice.command": ("text", "channel", "speaker", "case_id", "masked_name"),  # v1.6.4
     "ceo.notified": ("channel", "subject", "summary", "reason"),
     "naive.confirm": ("session_id", "agent", "tool", "decision", "read_people"),  # v1.9 §6b-bis
+    "naive.recovered": ("session_id", "agent", "attempt"),  # task 27
     # v1.11.1 (D31): the live CEO orders
     "ad.created": ("kind", "headline", "image_url"),
     "hr.sourced": ("count", "source"),

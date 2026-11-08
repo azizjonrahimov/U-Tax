@@ -387,6 +387,7 @@ class Gateway:
             "naive_confirm": self._naive_confirm,
             "naive_question": self._naive_question,
             "naive_notice": self._naive_notice,
+            "naive_recovered": self._naive_recovered,
         }
         self._naive_noticed: dict[tuple[str, str], datetime] = {}
         self._naive_questions: set[str] = set()  # notices tried this process (mailed or not)
@@ -3452,9 +3453,26 @@ class Gateway:
         if key in self._naive_questions or self._done_from(key) is not None:
             return {"duplicate": True}
         self._naive_questions.add(key)
-        self._notify_ceo("flagged", clip(_str(args, "subject", max_len=200), 120),
+        reason = _one_of(args, "reason", ("flagged", "blocked"), default="flagged")
+        self._notify_ceo(reason, clip(_str(args, "subject", max_len=200), 120),
                          clip(_str(args, "summary", max_len=600), 500), key=key)
         return {"noticed": True}
+
+    def _naive_recovered(self, args: dict) -> dict:
+        """Task 27: app/naive_confirm.py nudged a session that stopped on a platform error."""
+        session_id = _str(args, "session_id", max_len=80)
+        attempt = _int(args, "attempt") or 1
+        self._emit([NewEvent(type="naive.recovered", actor="system", payload={
+            "session_id": session_id, "agent": _one_of(args, "agent", AGENTS),
+            "attempt": attempt}, idempotency_key=f"naive.recovered:{session_id}:{attempt}")])
+        return {"attempt": attempt}
+
+    def naive_recovery(self, session_id: str) -> tuple[int, str | None]:
+        """(nudges so far, the last one's timestamp): from the log, so a restart never
+        grants a session more tries."""
+        with self._lock:
+            count, ts = self.state.naive_recoveries.get(session_id, (0, ""))
+        return count, ts or None
 
     def _ceo_confirm(self, args: dict) -> dict:
         """POST /api/ceo/confirm: carry out a proposal's pinned action, once, within 60 s,

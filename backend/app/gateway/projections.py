@@ -165,6 +165,8 @@ class State:
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
     tts_talk_chars_by_day: dict[str, int] = field(default_factory=dict)  # v1.10 §5c budget
     ads_created: int = 0  # v1.11: make_ad numbers its PNGs
+    # task 27: a Naive session nudged after a platform error -> (attempts, last one's ts)
+    naive_recoveries: dict[str, tuple[int, str]] = field(default_factory=dict)
     candidate_call_starts: set[str] = field(default_factory=set)  # v1.11: held like case calls
     candidates: dict[str, dict] = field(default_factory=dict)
     hiring: dict[str, int] = field(default_factory=lambda: {"applicants": 0, "screened": 0,
@@ -424,6 +426,11 @@ class State:
         case = self._case(e)
         if case is not None and e.status == "ok":
             case.call = dict(e.payload)
+
+    def _on_naive_recovered(self, e: Event) -> None:
+        sid = e.payload["session_id"]
+        count = max(self.naive_recoveries.get(sid, (0, ""))[0], int(e.payload["attempt"]))
+        self.naive_recoveries[sid] = (count, e.ts)
 
     def _on_ad_created(self, e: Event) -> None:
         self.ads_created += 1
