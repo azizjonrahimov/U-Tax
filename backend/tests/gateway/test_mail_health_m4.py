@@ -81,8 +81,8 @@ def test_a_failed_send_or_a_dead_provider_is_not_ok(m, monkeypatch):
     assert m.gw.mail_health()["ok"] is True
     m.box.up = False
     clock[0] += 61
-    m.h = m.gw.mail_health()  # the check fails: last_poll_at stays the last good one
-    assert m.h["ok"] is True  # still within 2 minutes of the last good check
+    health = m.gw.mail_health()  # the check fails: last_poll_at stays the last good one
+    assert health["ok"] is True  # still within 2 minutes of the last good check
     m.clock.advance(minutes=3)
     clock[0] += 61
     assert m.gw.mail_health()["ok"] is False
