@@ -161,7 +161,7 @@ class NaiveConfirmer:
                         session_id, agent_id)
             return 0
         if session.get("status") == "idle" and session.get("stop_reason") == "error":
-            await self._recover(session_id, actor, session)
+            await self._recover(session_id, agent_id, actor, session)
             return 0  # rests QUIET_SECONDS: the backoff is checked again then
         if session.get("status") != "idle" or session.get("stop_reason") not in WAITING:
             return 0
@@ -201,7 +201,25 @@ class NaiveConfirmer:
                 "attempt": action.get("seq") or attempt})
         return answered
 
-    async def _recover(self, session_id: str, actor: str, session: dict) -> None:
+    async def _newer_session(self, agent_id: str, session_id: str, created) -> bool:
+        """Has the agent started a session after this one (that one carries on)?"""
+        from datetime import datetime
+
+        page = await self.client.list_sessions(agent_id=agent_id, limit=SESSIONS_PAGE)
+        for row in page.data:
+            if str(row.get("id") or "") == session_id or row.get("agent_id") not in (
+                    None, agent_id):
+                continue
+            try:
+                when = datetime.fromisoformat(str(row.get("created_at")).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                continue
+            if when > created:
+                return True
+        return False
+
+    async def _recover(self, session_id: str, agent_id: str, actor: str,
+                       session: dict) -> None:
         """Task 27: nudge a session that stopped on a platform error to continue its card,
         at most RECOVER_MAX times (30 s, then 2 min apart); then tell the CEO once."""
         from datetime import datetime
@@ -213,6 +231,13 @@ class NaiveConfirmer:
         except (TypeError, ValueError):
             return  # no timestamp: never nudge an old session by mistake
         if age > RECOVER_WITHIN:
+            return
+        # stale: the agent finished a tool call after the error, or a newer session of it
+        # took the card on (live: a "tax is stuck" alert after case_1 had been sent)
+        errored_at = str(session.get("updated_at") or stamp)
+        if await asyncio.to_thread(self.gw.agent_done_since, actor, errored_at):
+            return
+        if await self._newer_session(agent_id, session_id, created):
             return
         count, last = await asyncio.to_thread(self.gw.naive_recovery, session_id)
         if count >= RECOVER_MAX:

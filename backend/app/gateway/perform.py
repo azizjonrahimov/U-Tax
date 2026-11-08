@@ -3600,6 +3600,18 @@ class Gateway:
             "attempt": attempt}, idempotency_key=f"naive.recovered:{session_id}:{attempt}")])
         return {"attempt": attempt}
 
+    def agent_done_since(self, actor: str, since: str) -> bool:
+        """Task 27: has this seat finished a tool call after `since` (an ISO time)? Then a
+        session of it that errored earlier is stale: its card moved on without it."""
+        with self._lock:
+            done = self.state.agent_done_at.get(actor)
+        if not done:
+            return False
+        try:
+            return parse_ts(done) > parse_ts(since)
+        except ValueError:
+            return False
+
     def naive_recovery(self, session_id: str) -> tuple[int, str | None]:
         """(nudges so far, the last one's timestamp): from the log, so a restart never
         grants a session more tries."""
@@ -3675,9 +3687,21 @@ class Gateway:
         typing. Confirm and cancel words point at the newest open proposal."""
         from app import ceo_tools
 
-        parsed = ceo_tools.parse(_str(args, "text", max_len=600))
+        raw = _str(args, "text", max_len=600)
+        parsed = ceo_tools.parse(raw)
         if parsed is None:
-            return {"kind": "unknown", "say": ceo_tools.EXAMPLES}
+            # v1.12.3: anything else said as an order goes to the Chief of Staff, read back
+            # whole and confirmed like any order ("advertise our firm", "hire 2 people")
+            order = ceo_tools.free_order(raw)
+            if order is None:
+                return {"kind": "unknown", "say": ceo_tools.EXAMPLES}
+            try:
+                pinned, _ = ceo_tools.pin_order(self, {"text": order})
+            except ceo_tools.ToolRefused as err:
+                raise Refused(err.code, err.message) from err
+            readback = (f'Send this order to the Chief of Staff: "{pinned["text"]}". '
+                        "Say confirm.")
+            return self._propose("order", pinned, readback, "command")
         kind, value = parsed
         live = [p for p in self._open_proposals() if not self._expired(p)]
         if kind == "approve_it":  # confirms an open approve, else proposes the latest
