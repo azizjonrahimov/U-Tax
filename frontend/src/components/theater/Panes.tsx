@@ -9,6 +9,8 @@ import type { Pane as PaneKey } from "@/theater/script";
 import { formatCents, formatClock, formatUsd } from "@/theater/format";
 import { assetAllowed, originOf, parseAssetHosts } from "@/theater/live";
 import { MicIcon } from "@/components/MicIcon";
+import { DeptAvatar } from "@/components/ui/DeptAvatar";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 /** Text as it should show right now (a step being typed reveals progressively). */
 export type Typed = (target: string, full: string | undefined) => string | undefined;
@@ -30,6 +32,9 @@ export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n ==
 /** Rail case rows shown (blocked cases always show as cards above them). */
 const MAX_CASE_ROWS = 8;
 
+/** D40: each pane's header carries the avatar of the department that works there. */
+const PANE_SEAT: Partial<Record<PaneKey, string>> = { mail: "intake", sheet: "tax", search: "tax", calendar: "cos", social: "mkt", market: "mkt", phone: "hr" };
+
 function Pane(props: {
   k: PaneKey;
   screen: ScreenState;
@@ -43,8 +48,12 @@ function Pane(props: {
   return (
     <section className={`pane${screen.camera === k ? " focus" : ""}`} data-pane={k} data-target={k} aria-label={props.label}>
       <div className="ph">
-        {props.label} <b>{props.name}</b>
-        <span className="tag">{props.tag}</span>
+        <DeptAvatar seat={PANE_SEAT[k] ?? "ceo"} size={22} className="ico" />
+        <b>{props.label}</b>
+        <span className="tag" title={`${typeof props.name === "string" ? `${props.name} · ` : ""}${props.tag}`}>
+          {typeof props.name === "string" ? `${props.name} · ` : ""}
+          {props.tag}
+        </span>
       </div>
       <div className="pb">{props.children}</div>
       {failure && <div className="failnote">✗ {failure.text}</div>}
@@ -80,7 +89,7 @@ export function MailPane({ screen, typed }: { screen: ScreenState; typed: Typed 
   return (
     <Pane k="mail" screen={screen} label="Mail" name="firm inbox" tag="via Gmail · rendered from log">
       {!m?.body ? (
-        <div className="empty">No mail yet.</div>
+        <EmptyState art="inbox" title="Inbox is quiet" line="Intake checks the firm inbox every 30 s and opens a case the moment a founder writes." />
       ) : (
         <>
           <div className="from" data-target="mail.message">
@@ -117,15 +126,15 @@ const FACT_ROWS: [string, string][] = [
   ["incorporated_delaware", "Delaware corporation"],
   ["authorized_shares", "Authorized shares"],
   ["issued_shares", "Issued shares"],
-  ["gross_assets", "Gross assets (proj. Dec 31)"],
+  ["gross_assets", "Gross assets (proj.)"],
   ["stated_par", "Stated par"],
   ["foreign_owner_25", "Foreign owner 25%+"],
   ["gross_receipts", "Gross receipts"],
   ["years_with_receipts", "Years with receipts"],
 ];
 const RESULT_ROWS: [string, string][] = [
-  ["authorized_method", "Authorized-shares method"],
-  ["assumed_par_method", "Assumed-par method"],
+  ["authorized_method", "Authorized-shares"],
+  ["assumed_par_method", "Assumed-par"],
   ["annual_report_fee", "+ annual report fee"],
 ];
 /** Case chip tone by contract status (not display wording). */
@@ -165,8 +174,11 @@ export const SheetPane = memo(function SheetPane({ screen }: { screen: ScreenSta
     </span>
   ) : null;
   return (
-    <Pane k="sheet" screen={screen} label="Sheet" name={view ? `${view.name} · franchise tax` : "franchise tax"} tag="engine v1 · rendered from log">
-      <table>
+    <Pane k="sheet" screen={screen} label="Franchise tax" name={view ? view.name : "engine v1"} tag={view ? "engine v1 · rendered from log" : "rendered from log"}>
+      {!sh ? (
+        <EmptyState art="sheet" title="Waiting for numbers" line="The engine fills this the moment Intake has all five." />
+      ) : (
+        <table>
         <tbody>
           {facts.map(([k, label]) => (
             <tr key={k}>
@@ -193,7 +205,8 @@ export const SheetPane = memo(function SheetPane({ screen }: { screen: ScreenSta
             </tr>
           ))}
         </tbody>
-      </table>
+        </table>
+      )}
       {sh && sh.flags.length > 0 && (
         <div className="flags" data-target="sheet.flag">
           {sh.flags.map((f) => (
@@ -212,8 +225,9 @@ export function SearchPane({ screen, typed }: { screen: ScreenState; typed: Type
   return (
     <Pane k="search" screen={screen} label="Search" name={s.source ? "people" : "law"} tag={s.source ?? "Naïve Data catalogue"}>
       <div className="q" data-target="search.query">
-        {typed("search.query", s.query) || <span className="empty">No searches yet.</span>}
+        {typed("search.query", s.query)}
       </div>
+      {!s.query && s.results.length === 0 && !s.more && <EmptyState art="search" title="No searches yet" line="Tax cites the law it used, right here." className="after-q" />}
       {s.results.map((r, i) => (
         <div key={i} className="res" data-target={`search.result.${i}`}>
           {r}
@@ -250,7 +264,7 @@ export const CalendarPane = memo(function CalendarPane({ screen }: { screen: Scr
           );
         })}
       </div>
-      {!last && <div className="empty">No calls booked yet.</div>}
+      {!last && <EmptyState art="calendar" title="Open slots" line="Review calls land here after each memo." className="over" />}
     </Pane>
   );
 });
@@ -261,7 +275,7 @@ export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Type
   return (
     <Pane k="social" screen={screen} label="Social" name="posts & DMs" tag={`via ${s.channel ?? "social"} · rendered from log`}>
       {!s.caption && !s.dm ? (
-        <div className="empty">No posts yet.</div>
+        <EmptyState art="social" title="Nothing to post yet" line="Marketing posts after QA and your first OK." />
       ) : (
         <>
           {s.caption && (
@@ -407,7 +421,7 @@ export function PhonePane({ screen, typed }: { screen: ScreenState; typed: Typed
   return (
     <Pane k="phone" screen={screen} label="Phone" name="device & calls" tag="rendered from log">
       {!p.dial && !p.check ? (
-        <div className="empty">No calls or checks yet.</div>
+        <EmptyState art="phone" title="No calls yet" line="HR rings applicants here; QA opens memos on a real phone." />
       ) : (
         <>
           {p.check && (
@@ -669,9 +683,7 @@ export const OrdersStrip = memo(function OrdersStrip({ screen }: { screen: Scree
               <ol>
                 {[...o.lines].reverse().map((l) => (
                   <li key={l.key}>
-                    <span className="dept" style={{ background: `var(--a-${Object.hasOwn(BADGE, l.seat) ? l.seat : "ceo"})` }} aria-hidden>
-                      {Object.hasOwn(BADGE, l.seat) ? BADGE[l.seat] : "•"}
-                    </span>
+                    <DeptAvatar seat={Object.hasOwn(BADGE, l.seat) ? l.seat : "ceo"} size={22} className="dept" />
                     <span className="lt">
                       {l.text}
                       {(l.times ?? 1) > 1 && <span className="times"> ×{l.times}</span>}

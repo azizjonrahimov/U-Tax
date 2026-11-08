@@ -7,6 +7,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Theater } from "@/components/theater/Theater";
+import { DeptAvatar } from "@/components/ui/DeptAvatar";
 import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
 import { useFirmFeed, type FeedStatus } from "@/office/feed";
@@ -93,6 +94,9 @@ export function Office() {
     return Number.isFinite(at) && now - at < WORKING_MS && now - at > -WORKING_MS;
   };
 
+  // D40: each department's activity bar is its share of the busiest desk's steps.
+  const maxSteps = Math.max(1, ...SEATS.map((s) => office.desks[s].steps.length));
+
   return (
     <div className={`office${session ? " with-panel" : ""}`} style={SEAT_VARS}>
       <nav className="side" aria-label="Departments">
@@ -107,10 +111,16 @@ export function Office() {
         <ul>
           <li>
             <button className={`side-item${view === "overview" ? " on" : ""}`} aria-current={view === "overview" ? "page" : undefined} onClick={() => open("overview")}>
-              <span className="dot all" aria-hidden />
+              <svg className="side-ov" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <rect x="3.5" y="4.5" width="17" height="12" rx="2" />
+                <path d="M8 20h8M12 16.5V20" />
+              </svg>
               <span className="side-name">Overview</span>
               <span className="side-meta">theater</span>
             </button>
+          </li>
+          <li className="side-h mono" aria-hidden>
+            departments · steps
           </li>
           {SEATS.map((seat) => {
             const desk = office.desks[seat];
@@ -124,16 +134,23 @@ export function Office() {
                   style={{ "--c": seatColor(seat) } as CSSProperties}
                 >
                   {/* key: a new step re-runs the one-time pulse */}
-                  <span key={desk.steps[0]?.key ?? "idle"} className={`dot${busy ? " pulse" : ""}`} aria-hidden />
-                  <span className="side-name">{SEAT_NAME[seat]}</span>
-                  <span className="side-meta">{busy ? "working" : desk.steps.length ? `${desk.steps.length} steps` : "idle"}</span>
+                  <span key={desk.steps[0]?.key ?? "idle"} className={`side-av${busy ? " pulse" : ""}`} aria-hidden>
+                    <DeptAvatar seat={seat} size={30} />
+                  </span>
+                  <span className="side-name">
+                    {SEAT_NAME[seat]}
+                    <i className="side-bar" style={{ "--w": `${Math.round((desk.steps.length / maxSteps) * 100)}%` } as CSSProperties} aria-hidden />
+                  </span>
+                  <span className="side-meta mono">{busy ? "working" : desk.steps.length ? `${desk.steps.length} steps` : "idle"}</span>
                 </button>
               </li>
             );
           })}
           <li className="side-sep">
             <Link href="/ceo" className="side-item">
-              <span className="dot ceo-dot" aria-hidden />
+              <span className="side-av" aria-hidden>
+                <DeptAvatar seat="ceo" size={30} />
+              </span>
               <span className="side-name">CEO console</span>
               <span className="side-meta">↗</span>
             </Link>
