@@ -136,3 +136,10 @@
 .ox .follow-sw{display:flex;align-items:center;gap:10px;padding:0 8px;font-size:13px;color:var(--dim)}
 .ox .livepill .dot.off{background:var(--faint);box-shadow:none;animation:none}
 .ox .ov:focus-visible,.ox .dept:focus-visible,.ox .sbtn:focus-visible{outline:2px solid var(--lime);outline-offset:2px}
+/* D41 F48 (runbook §C.3, verbatim): the tour's sidebar press */
+.ox .dept{position:relative}
+.ox .dept.tour-on{box-shadow:inset 3px 0 0 var(--lime);background:rgba(190,242,67,.06)}
+.ox .dept.tour-press{transform:scale(.98);transition:transform .15s}
+.ox .dept.tour-press::after{content:"";position:absolute;inset:0;border-radius:inherit;border:1px solid var(--lime);animation:tourRing .65s ease-out forwards}
+@keyframes tourRing{from{opacity:.9;transform:scale(.96)}to{opacity:0;transform:scale(1.04)}}
+@media (prefers-reduced-motion:reduce){.ox .dept.tour-press,.ox .dept.tour-press::after{animation:none;transform:none}}

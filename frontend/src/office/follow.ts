@@ -6,6 +6,12 @@ export type View = "overview" | Seat;
 
 /** Auto-follow stays on a view at least this long before moving to the next desk that acted. */
 export const DWELL_MS = 6000;
+/** D41 F48: the task tour stays on a desk at least this long before moving to the next one. */
+export const TOUR_DWELL_MS = 4000;
+
+/** D41 F48: while a task runs, the tour decides the view; plain auto-follow waits. */
+export const followWhileTouring = (touring: boolean, target: Seat | null): Seat | null => (touring ? null : target);
+
 /** A step older than this (by its log time) is history, not something to follow. */
 export const FOLLOW_FRESH_MS = 15_000;
 
