@@ -284,6 +284,18 @@ For Replay mode and catch-up. Ordered by `id`.
   - Undo: `pause` ↔ `set_trust RESUME`; `set_trust` ↔ the previous state; `order` (a CoS card) →
     `cancel_order {order_id}` closes the order's open cards. `approve`, `deny` and `decide_candidate`
     have no undo; the reply says so.
+- v1.14.1, pinned shapes:
+  - **The stop note.** A stop the grammar catches inside `/api/ceo/talk` runs at once. The gateway
+    then appends this exact message to the assistant's session, as a message of its own: `System:
+    the CEO said stop; the gateway paused <comma-separated types>. Undo id <undo_id>.` The gateway
+    strips any leading `System:` (case-insensitive, after trimming) from the CEO's own text before
+    relaying it, so only the gateway can write that note.
+  - **RESUME after a stop.** A `set_trust RESUME` on the ceo seat is refused (`code: "stopped"`) when
+    the turn that issued it began before the latest stop.
+  - **Ambiguous references.** On the ceo seat, an approval or candidate reference of "latest", "it",
+    a pronoun, or one matching more than one item answers
+    `{status: "refused", code: "ambiguous", candidates: [{id, summary}]}`.
+  - The assistant's events carry the actor `ceo_assistant`; the MCP seat path stays `/mcp/ceo`.
 - `POST /api/ceo/undo` `{undo_id}` (admin or session).
 - Events `ceo.said` `{conversation_id, text_len}` (the text is private) and `ceo.replied`
   `{conversation_id, actions}`.
@@ -694,6 +706,8 @@ falls back to a built-in template if the file is missing.
 ## Changelog
 
 - v1.15 (2026-11-07, design D35): prepare_documents (xlsx workpaper, docx memo, books entry), doc.step/created/verified events, memo attachments, /api/docs.
+
+- v1.14.1 (2026-11-07, agents t7b review): pinned the stop note text, the System: strip, the RESUME-after-stop refusal, the ambiguous refusal shape, the actor ceo_assistant.
 
 - v1.14 (2026-11-07, design D34): /api/ceo/talk conversation, MCP seat ceo (direct actions, no confirm), undo.
 
