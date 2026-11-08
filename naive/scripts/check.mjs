@@ -291,7 +291,7 @@ function templateProblems(file, text, rule) {
   if (rule.applicant && !text.includes(DISCLOSURE)) bad("missing the AI-screen disclosure line");
   if (rule.body && /^\s*subject:/i.test(text)) bad("starts with a Subject: line; the gateway sets the subject");
   if (rule.noAmounts && /\$\s?\d/.test(text)) bad("literal dollar amount");
-  if (rule.noLinks && /https?:\/\/|\bwww\.|\{\{\s*booking_url\s*\}\}/i.test(text))
+  if (rule.noLinks && /https?:\/\/|\bwww\.|\{\{\s*booking_url\s*\}\}|@[a-z0-9-]+\.[a-z]{2,}|\b[a-z0-9-]+\.(?:com|io|ai|dev|co|net|org|app|xyz|to)\b/i.test(text))
     bad("has a link (a first cold note stays plain: links send it to spam; the invite email carries them)");
   if (rule.spend && /(?<!estimated )\{\{\s*agent_spend\s*\}\}/.test(text.replace(/\s+/g, " ")))
     bad('{{agent_spend}} must read "an estimated {{agent_spend}}" (spend is an estimate)');
