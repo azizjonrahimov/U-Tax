@@ -876,6 +876,11 @@ def build_router(get_gateway: Callable[[], Gateway]) -> APIRouter:
         if event.get("livemode") and not settings.stripe_live:
             log.warning("stripe hook: live event %s ignored (STRIPE_LIVE is off)", event_id)
             return {"ok": True, "ignored": "livemode"}
+        obj = (event.get("data") or {}).get("object") if isinstance(
+            event.get("data"), dict) else None
+        meta = obj.get("metadata") if isinstance(obj, dict) else None
+        if isinstance(meta, dict) and meta.get("utax_kind") == "contractor_payment_mirror":
+            return {"ok": True, "ignored": "mirror"}  # D41 B53: a mirror is never revenue
         if kind not in ("checkout.session.completed",
                         "checkout.session.async_payment_succeeded"):
             return {"ok": True, "ignored": kind}  # 2xx: Stripe must not retry these
