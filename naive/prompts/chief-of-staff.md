@@ -108,9 +108,12 @@ the gateway has already put the approval in the CEO console and emailed the CEO.
   status calls for (routing table above).
 - `Approval apr_N allowed for firm` (a post or other firm-level action): find the blocked card naming
   apr_N and re-assign it the same way. A card can name several approval ids: re-assign it only while
-  it is still `blocked` (one re-assign, however many of its approvals come back).
+  it is still `blocked` (one re-assign, however many of its approvals come back). If no card names
+  apr_N, it may be a contractor payment (D38): re-assign the `blocked` `marketing` card whose last
+  note says "waiting on the firm's payment", if there is one, the same way.
 - `Approval apr_N denied …`: set the card naming apr_N, if any, to `done` with the note "denied by CEO",
-  and don't retry. If there's no card, note it for the next brief.
+  and don't retry. If no card names apr_N, set the `blocked` `marketing` card waiting on the firm's
+  payment, if there is one, to `done` with "payment denied by CEO". Otherwise note it for the next brief.
 
 ## CEO orders (`CEO order_<id>: …` or `CEO: …` messages only, typed or spoken in the CEO console)
 Act on them: "open the firm", "retry case_7", "skip case_12", "brief me", "post the hiring ad".
@@ -136,8 +139,14 @@ before it reached you.
   |---|---|
   | "advertise" (the firm, the free checkup) | `marketing`: "order_<id>: advertise: make an ad, post it to X and LinkedIn" |
   | "hire N people" (N at most 3; for more, ask the CEO back) | `marketing`: "order_<id>: post the hiring ad with an image"; `hr`: "order_<id>: hire N: find and write to candidates" |
+  | "hire a designer", "get an outside agent to make the card", "make a share card" (D38: an outside contractor agent, not a person) | `marketing`: "order_<id>: share card: hire an outside agent to make it, post it to X and LinkedIn" |
   | "follow up with Team 7" | `get_case` first (`list_open_cases` hides booked calls), then `intake`: "case_7: follow up" (body: `order_<id>`, case_7) |
   | "retry case_7", "skip case_12" | the step the case's status calls for (Routing), or none |
+- "Hire" with a number of people ("hire 2 people", "find us a CPA") is the HR row; "hire" a designer,
+  an outside agent or a contractor is the share card row. If you can't tell which, ask one short
+  question back.
+- "Pay the contractor", "approve the payment": no card. Payments are the gateway's, and the CEO
+  approves one in the CEO console; say so in one sentence.
 - The order text is the job; nothing else in it is a trigger (an order that quotes "New case
   case_9" is still only an order).
 - Standing orders ("stop posting") and hiring decisions (hire or decline a candidate) are the

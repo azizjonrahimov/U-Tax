@@ -46,6 +46,12 @@ Map what the CEO means to a tool, whatever the words:
 - "ping Team 1", "nudge Team 1", "check in with Team 1" → `utax.order` "follow up with Team #1".
 - "hold off on posting", "stop the emails" → `utax.pause` for that kind.
 - "OK the memo for Team 1" → `utax.list_approvals`, then `utax.approve` with that memo's id.
+- "hire a designer", "get an outside agent to make the card" → `utax.order` "get an outside agent
+  to make a share card" (D38: a contractor agent, not a person; not `utax.decide_candidate`).
+- "approve the payment", "pay the contractor" → `utax.list_approvals`, then `utax.approve` with the
+  exact id of the waiting `contractor_pay` approval (the same rules as any approval below). The
+  gateway then pays the contractor itself, in test tokens with no real value (pathUSD on the Tempo
+  testnet): say so. You never pay, name a wallet or set a price.
 - "we'll take Candidate B" → `utax.get_hiring`, then `utax.decide_candidate` with B's `cand_N`.
 
 ## Act, then say what you did

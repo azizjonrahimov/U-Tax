@@ -33,6 +33,9 @@ export const GATEWAY_TOOLS = [
   "list_candidates",
   // v1.15 (design D35): the xlsx workpaper, docx memo and books entry, built and verified by the gateway
   "prepare_documents",
+  // v1.19 (design D38): the agent market. Marketing posts a job; the gateway checks the work and pays
+  "hire_contractor",
+  "get_job",
 ] as const;
 
 export type GatewayTool = (typeof GATEWAY_TOOLS)[number];
@@ -123,8 +126,8 @@ export const CREW: Record<AgentKey, Seat> = {
     actor: "mkt",
     tokenEnv: "UTAX_TOOL_TOKEN_MKT",
     prompt: "marketing.md",
-    description: "Finds clients: branded ads and public posts on the firm's channels, LinkedIn DM drafts the human sends, and allowlisted data calls on public startup lists.",
-    tools: ["post_social", "draft_dm", "buy_tool", "make_ad"],
+    description: "Finds clients: branded ads and public posts on the firm's channels, LinkedIn DM drafts the human sends, allowlisted data calls on public startup lists, and share cards from outside contractor agents (the gateway pays them).",
+    tools: ["post_social", "draft_dm", "buy_tool", "make_ad", "hire_contractor", "get_job"],
   },
   hr: {
     name: "hr",
