@@ -18,12 +18,11 @@ const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
 });
 
-// D39 "Night Lime" (the landing): Geist for headlines and body, one italic Instrument Serif word per
-// headline, Geist Mono for microcopy. Only the weights the brief lists; the theater keeps JetBrains Mono.
-// preload: false, so /office, /talk and /ceo don't fetch the landing's faces before their own first paint.
-const geist = Geist({ variable: "--font-geist", subsets: ["latin"], weight: ["400", "500", "600"], display: "swap", preload: false });
-const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"], weight: ["400", "500"], display: "swap", preload: false });
-const instrumentSerif = Instrument_Serif({ variable: "--font-instrument-serif", subsets: ["latin"], weight: "400", style: "italic", display: "swap", preload: false });
+// D39/D41 F44 "Night Lime": Geist for headlines and body, Instrument Serif (normal and italic) for the one
+// accent word, Geist Mono for microcopy; the theater keeps JetBrains Mono. Variable fonts, all weights.
+const geist = Geist({ subsets: ["latin"], variable: "--font-geist", display: "swap" });
+const geistMono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono", display: "swap" });
+const instrumentSerif = Instrument_Serif({ subsets: ["latin"], weight: "400", style: ["normal", "italic"], variable: "--font-instrument-serif", display: "swap" });
 
 export const metadata: Metadata = {
   title: "U-Tax · Your Delaware franchise tax, checked free",
