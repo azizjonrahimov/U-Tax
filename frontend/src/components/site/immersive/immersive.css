@@ -1,0 +1,268 @@
+/* D42 P1: the immersive hero (docs/designs/immersive/immersive.html, scoped to .imm).
+   Night Lime: lime is the action colour; violet only lives in the glass and the light. */
+.imm {
+  --imm-bg: #050505;
+  --imm-lime: #bef243;
+  --imm-text: #f2f3ee;
+  --imm-dim: #a1a39b;
+  --imm-line: rgba(255, 255, 255, 0.12);
+  position: relative;
+  height: 600vh;
+  margin-top: -64px; /* slide under the sticky navbar, as the D39 hero did */
+  background: var(--imm-bg);
+  color: var(--imm-text);
+}
+.imm.imm-static {
+  height: 100vh;
+  min-height: 560px;
+}
+.imm-stage {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  min-height: 560px;
+  overflow: hidden;
+}
+.imm-canvas,
+.imm-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.imm-poster {
+  object-fit: cover;
+  object-position: 62% 50%;
+}
+.imm-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  background: linear-gradient(90deg, rgba(5, 5, 5, 0.78) 0%, rgba(5, 5, 5, 0.35) 38%, transparent 60%), linear-gradient(0deg, rgba(5, 5, 5, 0.7), transparent 45%);
+}
+.imm-pill {
+  position: absolute;
+  top: 84px;
+  right: 26px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 18px;
+  border-radius: 999px;
+  background: rgba(10, 10, 12, 0.55);
+  border: 1px solid var(--imm-line);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  font: 500 12px/1 var(--font-geist-mono), monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.imm-pill a {
+  color: var(--imm-text);
+  text-decoration: none;
+}
+.imm-pill a:hover,
+.imm-pill a:focus-visible {
+  color: var(--imm-lime);
+}
+.imm-pill i {
+  width: 44px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.35);
+}
+.imm-act {
+  position: absolute;
+  left: 72px;
+  bottom: 96px;
+  z-index: 4;
+  max-width: 640px;
+  opacity: 0;
+  transform: translateY(16px);
+  transition: opacity 0.5s, transform 0.5s;
+  pointer-events: none;
+}
+.imm-act.on {
+  opacity: 1;
+  transform: none;
+}
+.imm-act.on a {
+  pointer-events: auto;
+}
+.imm .imm-dot {
+  margin: 0;
+  font-family: var(--font-doto), var(--font-geist-mono), monospace;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  font-size: 84px;
+  line-height: 0.92;
+  font-weight: 800;
+  color: var(--imm-text);
+}
+.imm-cap {
+  margin: 18px 0 0;
+  font: 400 13px/1.6 var(--font-geist-mono), monospace;
+  color: var(--imm-dim);
+  max-width: 440px;
+  letter-spacing: 0.02em;
+}
+.imm-cap em {
+  font: italic 20px var(--font-instrument-serif), serif;
+  color: var(--imm-lime);
+}
+.imm-fine {
+  margin: 14px 0 0;
+  font: 400 11px/1.5 var(--font-geist-mono), monospace;
+  color: #83857d;
+  letter-spacing: 0.02em;
+}
+.imm-cta {
+  margin-top: 22px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.imm-b {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 13px 20px;
+  border-radius: 999px;
+  font: 600 14px var(--font-geist), system-ui, sans-serif;
+  text-decoration: none;
+  transition: background 0.2s, border-color 0.2s;
+}
+.imm-b1 {
+  background: var(--imm-lime);
+  color: #0b0d06;
+}
+.imm-b1:hover {
+  background: #d4ff6a;
+}
+.imm-b2 {
+  color: var(--imm-text);
+  border: 1px solid var(--imm-line);
+  background: rgba(10, 10, 12, 0.35);
+}
+.imm-b2:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.imm-b:focus-visible,
+.imm-pill a:focus-visible,
+.imm-ticker:focus-visible {
+  outline: 2px solid var(--imm-lime);
+  outline-offset: 3px;
+}
+.imm-ticker {
+  position: absolute;
+  right: 26px;
+  bottom: 28px;
+  z-index: 5;
+  max-width: min(520px, calc(100% - 52px));
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border: 1px solid var(--imm-line);
+  border-radius: 999px;
+  background: rgba(10, 10, 12, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  font: 500 11px var(--font-geist-mono), monospace;
+  color: var(--imm-dim);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.imm-ticker span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.imm-ticker i {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--imm-lime);
+  box-shadow: 0 0 10px var(--imm-lime);
+}
+.imm-ticker.off i {
+  background: #83857d;
+  box-shadow: none;
+}
+.imm-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.imm-sr a:focus {
+  pointer-events: auto;
+}
+
+/* prefers-reduced-motion: one still frame behind the acts, laid out as a normal vertical column */
+.imm.imm-reduced {
+  height: auto;
+}
+.imm-reduced .imm-stage {
+  position: relative;
+  height: auto;
+  min-height: 100vh;
+  padding: 140px 72px 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 96px;
+}
+.imm-reduced .imm-canvas,
+.imm-reduced .imm-poster {
+  height: 100vh;
+  bottom: auto;
+}
+.imm-reduced .imm-scrim {
+  background: linear-gradient(90deg, rgba(5, 5, 5, 0.82) 0%, rgba(5, 5, 5, 0.45) 45%, rgba(5, 5, 5, 0.15) 70%);
+}
+.imm-reduced .imm-act {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  opacity: 1;
+  transform: none;
+  transition: none;
+}
+.imm-reduced .imm-act a {
+  pointer-events: auto;
+}
+
+@media (max-width: 767px) {
+  .imm-act {
+    left: 20px;
+    right: 20px;
+    bottom: 84px;
+  }
+  .imm .imm-dot {
+    font-size: 44px;
+  }
+  .imm-pill {
+    top: 76px;
+    right: 16px;
+    padding: 8px 14px;
+    font-size: 10px;
+    gap: 10px;
+  }
+  .imm-pill i {
+    width: 24px;
+  }
+  .imm-ticker {
+    right: 16px;
+    left: 16px;
+    bottom: 20px;
+    max-width: none;
+  }
+  .imm-reduced .imm-stage {
+    padding: 120px 20px 96px;
+    gap: 64px;
+  }
+}
