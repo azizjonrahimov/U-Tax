@@ -3,7 +3,8 @@
 import { describe, expect, it } from "vitest";
 import type { UTaxEvent } from "@/theater/events";
 import { ticketStreamUrl } from "./feed";
-import { followDelay, followTarget, initialView } from "./follow";
+import { followDelay, followTarget, followWhileTouring, initialView, TOUR_DWELL_MS } from "./follow";
+import { activeTask, foldTour } from "./tour";
 import { applyEvent, emptyOffice, type StepCtx } from "./workspace";
 
 const ev = (id: number, type: string, payload: Record<string, unknown>, extra: Partial<UTaxEvent> = {}): UTaxEvent => ({
@@ -23,6 +24,19 @@ describe("auto-follow", () => {
     expect(followTarget(true, { seat: "tax", key: "1" }, o, t0 - 15_001)).toBeNull(); // clock far off
     expect(followTarget(true, { seat: "tax", key: "99" }, o, t0)).toBeNull(); // not the desk's newest step
     expect(followTarget(true, { seat: "acct", key: "1" }, o, t0)).toBeNull(); // an empty desk
+  });
+
+  it("D41 F48: while a task runs, the tour wins and plain auto-follow is ignored", () => {
+    const tour = foldTour([], [
+      ev(2, "order.queued", { order_id: "order_2", tasks: [{ no: 1, text: "Advertise" }] }),
+      ev(3, "order.task_started", { order_id: "order_2", task_no: 1, of: 1 }),
+      ev(4, "post.published", { order_id: "order_2", task_no: 1 }, { actor: "mkt" }),
+    ]);
+    const plain = followTarget(true, { seat: "tax", key: "1" }, o, t0 + 1000);
+    expect(plain).toBe("tax");
+    expect(followWhileTouring(activeTask(tour) !== null, plain)).toBeNull();
+    expect(followWhileTouring(false, plain)).toBe("tax");
+    expect(followDelay(1000, 3000, TOUR_DWELL_MS)).toBe(2000);
   });
 
   it("each view gets its dwell from the last switch", () => {

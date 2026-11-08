@@ -300,3 +300,26 @@
 .office .feed.live .dot { background: var(--lime); box-shadow: 0 0 10px var(--lime); }
 .office .of-dept .win { border-radius: 14px; }
 @media (prefers-reduced-motion: reduce) { .office .side-av.pulse { animation: none; } }
+
+/* D41 F48 (runbook §C.4): the task banner on the touring desk, the order-done toast, and the task's steps in focus */
+.office .task-banner { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 14px 18px; margin-bottom: 14px; display: grid; gap: 8px; }
+.office .tb-kick { margin: 0; font: 500 11px var(--font-geist-mono), monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--lime); }
+.office .tb-row { display: flex; align-items: flex-start; gap: 14px; }
+.office .tb-text { margin: 0; flex: 1; min-width: 0; font: 500 20px/1.3 var(--font-geist), sans-serif; color: var(--text); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.office .tb-chip { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 3px 10px; font: 500 12px var(--font-geist-mono), monospace; border: 1px solid currentColor; white-space: nowrap; }
+.office .tb-chip.run { color: var(--lime); }
+.office .tb-chip.wait { color: #ffb547; }
+.office .tb-chip.done { color: #3ddc84; }
+.office .tb-chip.off, .office .tb-chip.queued { color: var(--faint); }
+.office .tb-pulse { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: tb-pulse 1.4s ease-in-out infinite; }
+@keyframes tb-pulse { 50% { opacity: .35; } }
+.office .tb-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; }
+.office .tb-step { min-width: 26px; height: 22px; padding: 0 6px; border-radius: 999px; display: grid; place-items: center; font: 500 11.5px var(--font-geist-mono), monospace; border: 1px solid var(--line-2); color: var(--faint); }
+.office .tb-step.done { background: var(--lime); border-color: var(--lime); color: var(--on-lime); }
+.office .tb-step.wait { color: #ffb547; border-color: #ffb547; }
+.office .tb-step.run.cur { color: var(--lime); border-color: var(--lime); box-shadow: 0 0 0 0 rgba(190, 242, 67, .5); animation: tb-ring 1.6s ease-out infinite; }
+@keyframes tb-ring { to { box-shadow: 0 0 0 6px rgba(190, 242, 67, 0); } }
+.office .of-dept.touring .steps li:not(.in-task) { opacity: .45; }
+.office .office-main { position: relative; }
+.office .tour-toast { position: absolute; top: 16px; left: 50%; transform: translateX(-50%); z-index: 30; background: var(--lime); color: var(--on-lime); font: 600 14px var(--font-geist), sans-serif; border-radius: 999px; padding: 8px 18px; box-shadow: 0 12px 40px -12px rgba(190, 242, 67, .6); }
+@media (prefers-reduced-motion: reduce) { .office .tb-pulse, .office .tb-step.run.cur { animation: none; } }

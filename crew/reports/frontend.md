@@ -366,3 +366,38 @@ The fix each time was to derive from the event log and to check, after each awai
 - Not done: image previews on social approvals. approval.requested is `{approval_id, action_type, summary}` and has no image field, so there is nothing to bind (no invented content). Hands-free stays a checkbox (lime accent) to keep CeoVoice.tsx untouched.
 - Controller fix: the theater rail keeps Cases at a 96px minimum and scrolls inside itself, so it is never cut off under the bottom bar at 1440x900.
 - Click-tested on the mock gateway: switch off → paused, switch on → Resume confirm → resumed; Approve clears the row. Lint, 555 tests and build green.
+
+## D41 F44 + F46 (lane/frontend-d41)
+- F44 09f22bd: layout.tsx exactly per the runbook (variable Geist/Geist Mono, Instrument Serif normal+italic, display swap, preloaded).
+- F46: office-page.css is generated from the prototype <style>. Every number is as in the prototype; the scoping rules are below.
+  - The prototype prefixes: :root and html,body → .ox; .app → .office.app; everything else → `.ox <sel>`.
+  - Three deviations, each so the rules cannot leak:
+    - *, button and the sample .cur rules are under :where(.ox), at zero specificity, so the speed-scaled theater cursors and the docked panel keep their own rules.
+    - .ox sits on two display:contents wrappers (the sidebar and the theater), so the CEO panel inside /office never gets the prototype .orders/.empty/.dot/main rules.
+    - An integration tail keeps the panel column and the narrow layouts.
+- The prototype DOM: the sidebar (.brand, .ov, 7 button.dept, .bottom with .livepill, a Following Switch, a.sbtn CEO console, Sign out/CEO sign-in) and the Overview (.head with .pills → section.orders article.ord → section.stage, with the panes and aside.rail of .pane.metric → footer.bar with .avs .sum .prog .seg .tb, Replay .tb.lime).
+  - Search shares a cell: with Market once the market has a job, otherwise in Market's slot.
+  - Stage mode is the class .stagemode (the prototype's .stage is the pane grid).
+- Unchanged:
+  - Every data-target, data-pane and handler; the target set was diffed against main. rail.voice moved from the old orders header to the newest order's head.
+  - script.ts, live.ts, screen.ts.
+  - The coin flies only on payment.sent; the demo loop is disabled by CSS.
+  - The panel defaults to closed.
+- Gates: proto-classes /office 0 missing. No page scroll at 1440x900 and 1920x1080, normal and stage. Lint, 555 tests and build green.
+- Not ported: order status chips other than "latest" (no done/waiting signal until F48/B51).
+
+## D41 F48 the department tour
+- What was added:
+  - office/tour.ts and tour.test.ts, copied verbatim from docs/designs/fixes/reference. The reference files are untracked in the main checkout, not on main.
+  - feed.ts folds the tour over every well-formed event, history and live (order.* never reach the script); the tour resets with a new read token.
+  - follow.ts: TOUR_DWELL_MS and followWhileTouring, plus a follow.test case.
+  - Office.tsx:
+    - Auto-follow yields while a task runs.
+    - The tour effect presses the sidebar row (tour-press, 650 ms), then setView, with no open(): follow stays on and ?d= is untouched.
+    - The tour's desk row is marked tour-on; the switch reads "Touring task N of M".
+    - TaskBanner sits on the touring desk and on CoS. An ended task shows its status for 2.5 s; order.done shows a toast for 4 s, then the Overview if following.
+    - History never replays these: only events from the last 15 s.
+  - workspace.ts stamps order/task on WsStep; the steps outside the task are dimmed (in-task).
+  - Mock: POST /api/dev/event (admin) to drive order.* events.
+- Verified live on the mock: queued, task_started, mkt step → Marketing desk with the banner; task_done → "✓ Task 1 done"; order.done → toast, then Overview.
+- Cut: the Window showing the newest in-task artifact (it shows the newest step as before).

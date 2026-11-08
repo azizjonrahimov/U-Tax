@@ -18,7 +18,7 @@
 // otherwise /api/voice/session answers 503 voice_unavailable and the console falls back.
 // THEATER_TOKEN (default theater-test) may read state, events and the stream, as the projector does.
 // Dev-only extras: POST /api/dev/approval {summary, case_id}, POST /api/dev/block {case_id, reason},
-// POST /api/dev/naive-confirm {agent, tool, decision}.
+// POST /api/dev/naive-confirm {agent, tool, decision}. D41: POST /api/dev/event {type, actor?, payload} (the task tour).
 // D31 (v1.11.1): a confirmed CEO order (or POST /api/dev/order {text}) emits the CEO's voice.command, then
 // plays each named department's steps with order_id ("advertise" → Marketing, "hire" → HR, "follow up" →
 // Intake), MOCK_PACE ms apart (default 1600). The ad image is served at GET /assets/ad_<n>.svg.
@@ -741,6 +741,12 @@ const server = createServer(async (req, res) => {
     if (c) c.status = "BLOCKED";
     emit("case.blocked", { reason: String(body.reason || "QA rejected the figure twice"), needs: "human" }, { case_id: body.case_id });
     return out(200, { ok: true });
+  }
+  // D41 F48 (dev only): any v1.20 order.* event, or an order-linked event, to drive the office's task tour.
+  if (req.method === "POST" && p === "/api/dev/event") {
+    if (typeof body.type !== "string" || typeof body.payload !== "object" || body.payload === null) return out(400, { error: { code: "bad_request", message: "type and payload" } });
+    const e = emit(body.type, body.payload, { actor: typeof body.actor === "string" ? body.actor : "system" });
+    return out(200, { id: e.id });
   }
   return out(404, { error: { code: "not_found", message: `${req.method} ${p}` } });
 });

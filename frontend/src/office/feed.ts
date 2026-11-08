@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import { API_URL } from "@/lib/api";
 import type { UTaxEvent } from "@/theater/events";
+import { foldTour, type TourOrder } from "./tour";
 import { assetAllowed, eventsUrl, numbersFromState, originOf, parseAssetHosts, reconnectDelayMs, seedFromState, stateUrl, streamUrl, type Endpoints } from "@/theater/live";
 import type { FirmNumbers } from "@/theater/rail";
 import { appendEvents, startScript, type ScriptCursor } from "@/theater/script";
@@ -38,6 +39,8 @@ export interface Feed {
    * `activity`: an agent.activity or artifact event (it has no step; `ts` is its log time).
    */
   live: { seat: Seat; key: string; ts?: string; activity?: true } | null;
+  /** D41 F48: the CEO orders' tasks (order.* events), folded from history and the stream. */
+  tour: TourOrder[];
 }
 
 /** The gateway refused the CEO session: it was revoked, or the gateway's secret changed. */
@@ -86,6 +89,8 @@ export function useFirmFeed(session: string | null = null): Feed {
   const officeRef = useRef(office);
   const [studio, setStudio] = useState<Studio>(emptyStudio);
   const studioRef = useRef(studio);
+  const [tour, setTour] = useState<TourOrder[]>([]);
+  const tourRef = useRef(tour);
 
   useEffect(() => {
     if (!HAS_GATEWAY) return;
@@ -128,6 +133,13 @@ export function useFirmFeed(session: string | null = null): Feed {
       const o0 = officeRef.current;
       let st = st0;
       let o = o0;
+      // D41 F48: the tour reads every event (order.* never reach the script); it is idempotent per id.
+      const tour0 = tourRef.current;
+      const tourNext = foldTour(tour0, events.filter(wellFormed));
+      if (JSON.stringify(tourNext) !== JSON.stringify(tour0)) {
+        tourRef.current = tourNext;
+        setTour(tourNext);
+      }
       for (const e of events) {
         if (wellFormed(e)) maxSeen = Math.max(maxSeen, e.id);
         if (wellFormed(e) && STUDIO_ONLY.has(e.type)) {
@@ -239,6 +251,8 @@ export function useFirmFeed(session: string | null = null): Feed {
       setOffice(officeRef.current);
       studioRef.current = emptyStudio();
       setStudio(studioRef.current);
+      tourRef.current = [];
+      setTour([]);
       setLive(null);
       const last = seed.lastId ?? 0;
       if (last > 0) {
@@ -268,5 +282,5 @@ export function useFirmFeed(session: string | null = null): Feed {
     };
   }, [session]);
 
-  return { office, numbers, status, live, studio };
+  return { office, numbers, status, live, studio, tour };
 }

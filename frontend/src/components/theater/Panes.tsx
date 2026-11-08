@@ -1,7 +1,7 @@
 // Theater panes. Pure rendering of ScreenState; every element a cursor can
 // visit carries data-target matching the script's target keys.
 
-import { memo, type CSSProperties, type ReactNode } from "react";
+import { memo, type ReactNode } from "react";
 import type { FirmNumbers } from "@/theater/rail";
 import { humanTouches, TRAINABLE_ACTION_TYPES } from "@/theater/rail";
 import { visibleOrders, type Cell, type MarketJob, type ScreenState } from "@/theater/screen";
@@ -32,11 +32,16 @@ export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n ==
 /** Rail case rows shown (blocked cases always show as cards above them). */
 const MAX_CASE_ROWS = 8;
 
+/** Class names from parts (falsy parts dropped). */
+const cx = (...parts: (string | false | null | undefined)[]) => parts.filter(Boolean).join(" ");
+
 /** D40: each pane's header carries the avatar of the department that works there. */
 const PANE_SEAT: Partial<Record<PaneKey, string>> = { mail: "intake", sheet: "tax", search: "tax", calendar: "cos", social: "mkt", market: "mkt", phone: "hr" };
 
 function Pane(props: {
   k: PaneKey;
+  /** The prototype's own pane class (.mail, .sheet), next to the key. */
+  className?: string;
   screen: ScreenState;
   label: string;
   name: ReactNode;
@@ -46,14 +51,14 @@ function Pane(props: {
   const { k, screen } = props;
   const failure = screen.failure?.pane === k ? screen.failure : undefined;
   return (
-    <section className={`pane${screen.camera === k ? " focus" : ""}`} data-pane={k} data-target={k} aria-label={props.label}>
+    <section className={cx("pane", k, props.className, screen.camera === k && "focus")} data-pane={k} data-target={k} aria-label={props.label}>
       <div className="ph">
         <DeptAvatar seat={PANE_SEAT[k] ?? "ceo"} size={22} className="ico" />
         <b>{props.label}</b>
-        <span className="tag" title={`${typeof props.name === "string" ? `${props.name} · ` : ""}${props.tag}`}>
+        <small className="tag" title={`${typeof props.name === "string" ? `${props.name} · ` : ""}${props.tag}`}>
           {typeof props.name === "string" ? `${props.name} · ` : ""}
           {props.tag}
-        </span>
+        </small>
       </div>
       <div className="pb">{props.children}</div>
       {failure && <div className="failnote">✗ {failure.text}</div>}
@@ -87,7 +92,7 @@ export function MailPane({ screen, typed }: { screen: ScreenState; typed: Typed 
   const view = screen.mailCase ? screen.cases[screen.mailCase] : undefined;
   const m = view?.mail;
   return (
-    <Pane k="mail" screen={screen} label="Mail" name="firm inbox" tag="via Gmail · rendered from log">
+    <Pane k="mail" className="mail" screen={screen} label="Mail" name="firm inbox" tag="via Gmail · rendered from log">
       {!m?.body ? (
         <EmptyState art="inbox" title="Inbox is quiet" line="Intake checks the firm inbox every 30 s and opens a case the moment a founder writes." />
       ) : (
@@ -150,9 +155,8 @@ const OPTIONAL = new Set(["gross_receipts", "years_with_receipts"]);
 const KNOWN = new Set([...FACT_ROWS, ...RESULT_ROWS].map(([k]) => k).concat("total"));
 
 function Value({ k, cell, extra }: { k: string; cell?: Cell; extra?: ReactNode }) {
-  const cls = ["v", cell?.mark ?? "", cell?.missing ? "missing" : "", cell?.circle ? "circled" : ""].filter(Boolean).join(" ");
   return (
-    <td className={cls} data-target={`sheet.cell.${k}`} title={cell?.circle ?? cell?.tick}>
+    <td className={cx("v", cell?.mark === "win" && "win", cell?.mark === "lose" && "lose", cell?.missing && "missing", cell?.circle && "circled")} data-target={`sheet.cell.${k}`} title={cell?.circle ?? cell?.tick}>
       {cell?.text || "—"}
       {cell?.assumed && <span className="assumed">assumed</span>}
       {cell?.tick && !extra && <span className="tick">✓</span>}
@@ -169,12 +173,12 @@ export const SheetPane = memo(function SheetPane({ screen }: { screen: ScreenSta
   const facts = FACT_ROWS.filter(([k]) => !OPTIONAL.has(k) || cells[k]);
   const other = Object.keys(cells).filter((k) => !KNOWN.has(k));
   const qa = sh?.qa ? (
-    <span className={`qa${sh.qa.startsWith("✓") ? "" : " bad"}`} data-target="sheet.qa">
+    <span className={cx("qa", !sh.qa.startsWith("✓") && "bad")} data-target="sheet.qa">
       {sh.qa}
     </span>
   ) : null;
   return (
-    <Pane k="sheet" screen={screen} label="Franchise tax" name={view ? view.name : "engine v1"} tag={view ? "engine v1 · rendered from log" : "rendered from log"}>
+    <Pane k="sheet" className="sheet" screen={screen} label="Franchise tax" name={view ? view.name : "engine v1"} tag={view ? "engine v1 · rendered from log" : "rendered from log"}>
       {!sh ? (
         <EmptyState art="sheet" title="Waiting for numbers" line="The engine fills this the moment Intake has all five." />
       ) : (
@@ -283,7 +287,7 @@ export function SocialPane({ screen, typed }: { screen: ScreenState; typed: Type
               <div className="chan">{s.channel}</div>
               {img && (
                 // eslint-disable-next-line @next/next/no-img-element -- agent-supplied https image, rendered as given
-                <img key={img} src={img} alt="" data-target="social.image" referrerPolicy="no-referrer" onError={hideBroken} />
+                <img key={img} className="thumb" src={img} alt="" data-target="social.image" referrerPolicy="no-referrer" onError={hideBroken} />
               )}
               <div>{typed("social.caption", s.caption)}</div>
               <span className="btn" data-target="social.post">
@@ -333,27 +337,34 @@ const JOB_STATUS: Record<MarketJob["status"], string> = {
 export function MarketPane({ screen }: { screen: ScreenState }) {
   const jobs = screen.market.jobs;
   const job = jobs.at(-1);
-  if (!job) return null;
+  if (!job) return null; // the Search pane has the cell until the first job
   const src = job.image && GATEWAY_ORIGIN ? `${GATEWAY_ORIGIN}${job.image}` : undefined;
   const img = imageOk(src) ? src : undefined;
   const claimed = job.status !== "open";
   const submitted = job.card === true;
   return (
     <Pane k="market" screen={screen} label="Market" name="outside agents" tag="testnet tokens · no real value">
-      <div className="wallets">
+      <div className="wallets pay">
         <span className="chip wallet" data-target="market.wallet.firm">
           U-Tax wallet
         </span>
-        <span className={`coin${job.pay ? " flying" : ""}`} key={job.pay ? `${job.id}:paid` : job.id} aria-hidden="true" />
+        <span className={cx("coin", job.pay && "flying")} key={job.pay ? `${job.id}:paid` : job.id} aria-hidden="true" />
         <span className="chip wallet" data-target="market.wallet.contractor">
           {job.contractor ?? "contractor"} wallet
         </span>
       </div>
       <div className={`job ${job.status}`} data-target="market.job">
-        <div className="chan">
-          {job.template.replace(/_/g, " ")} · {job.price} pathUSD
+        <div className="job-h">
+          <span className="ctr" aria-hidden>
+            {(job.contractor ?? "?").slice(0, 2).toUpperCase()}
+          </span>
+          <div>
+            <b className="headline">{job.headline}</b>
+            <span className="chan">
+              {job.template.replace(/_/g, " ")} · {job.price} pathUSD (testnet)
+            </span>
+          </div>
         </div>
-        <div className="headline">{job.headline}</div>
         {claimed && job.contractor && (
           <span className="contractor" data-target="market.claim">
             <span className="arrow" aria-hidden="true" />
@@ -379,7 +390,7 @@ export function MarketPane({ screen }: { screen: ScreenState }) {
             ))}
           </ul>
         )}
-        <div className="state" data-target="market.status">
+        <div className={cx("state", (job.status === "paid" || job.status === "delivered") && "done")} data-target="market.status">
           {JOB_STATUS[job.status]}
           {job.status === "failed" && job.reason ? ` · ${job.reason}` : ""}
         </div>
@@ -392,7 +403,7 @@ export function MarketPane({ screen }: { screen: ScreenState }) {
               <>
                 {" · "}
                 {job.pay.url ? (
-                  <a className="mono" href={job.pay.url} target="_blank" rel="noopener noreferrer">
+                  <a className="mono tx" href={job.pay.url} target="_blank" rel="noopener noreferrer">
                     {job.pay.tx}
                   </a>
                 ) : (
@@ -455,7 +466,7 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
   const spent = formatUsd(numbers.money.spent_usd);
   const blocked = screen.caseOrder.map((c) => screen.caseRows[c]).filter((r) => r?.blocked);
   return (
-    <aside aria-label="Firm numbers">
+    <aside className="rail" aria-label="Firm numbers">
       <div className="stagebox">
         <div>
           Clients served<b>{numbers.firm.clients}</b>
@@ -477,24 +488,28 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           </div>
         )}
       </div>
-      <section className="pane" data-target="rail.touches" aria-label="Human touches">
-        <div className="ph">Human touches</div>
-        <div className="pb">
-          <div className="k">
-            <span>Operating</span>
-            <span className="big">{numbers.touches.operating}</span>
-          </div>
-          <div className="k" data-target="rail.trust">
-            <span>Training (1 per action type)</span>
-            <span className="mono">
+      <section className="pane metric" data-target="rail.touches" aria-label="Human touches">
+        <h4>
+          human touches <span>operating</span>
+        </h4>
+        <div className="mb">
+          <div className="big">{numbers.touches.operating}</div>
+          <div className="kv" data-target="rail.trust">
+            <span>training (1 per action type)</span>
+            <b>
               {numbers.touches.training} / {TRAINABLE_ACTION_TYPES}
               {trust.length ? ` · ${auto} AUTO` : ""}
-            </span>
+            </b>
+          </div>
+          <div className="tr" aria-hidden>
+            {Array.from({ length: TRAINABLE_ACTION_TYPES }, (_, i) => (
+              <i key={i} className={i < numbers.touches.training ? "on" : undefined} />
+            ))}
           </div>
           {numbers.touches.engineering > 0 && (
-            <div className="k">
-              <span>Engineering fixes</span>
-              <span className="mono">{numbers.touches.engineering}</span>
+            <div className="kv">
+              <span>engineering fixes</span>
+              <b>{numbers.touches.engineering}</b>
             </div>
           )}
           <div className="log">
@@ -528,37 +543,51 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           ))}
         </div>
       </section>
-      <section className="pane" data-target="rail.money" aria-label="Money">
-        <div className="ph">Money</div>
-        <div className="pb">
-          <div className="k">
-            <span>Clients saved</span>
-            <span className="big">{saved}</span>
-          </div>
-          <div className="k">
-            <span>Firm spent (est.)</span>
-            <span className="mono">{spent}</span>
+      <section className="pane metric" data-target="rail.money" aria-label="Money">
+        <h4>money</h4>
+        <div className="mb">
+          <div className="big lime">{saved}</div>
+          <div className="sublbl">clients saved</div>
+          <div className="kv">
+            <span>firm spent (est.)</span>
+            <b>{spent}</b>
           </div>
           {tokensShown(numbers.money.contractor_paid_usd) && (
-            <div className="k">
-              <span>Contractors paid (testnet)</span>
-              <span className="mono">{Number(numbers.money.contractor_paid_usd).toFixed(2)} pathUSD</span>
+            <div className="kv">
+              <span>contractors paid (testnet)</span>
+              <b>{Number(numbers.money.contractor_paid_usd).toFixed(2)} pathUSD</b>
             </div>
           )}
           {tokensShown(numbers.money.agent_sales_usd) && (
-            <div className="k">
-              <span>Earned from agents (testnet)</span>
-              <span className="mono">{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</span>
+            <div className="kv">
+              <span>earned from agents (testnet)</span>
+              <b>{Number(numbers.money.agent_sales_usd).toFixed(2)} pathUSD</b>
             </div>
           )}
         </div>
       </section>
-      <section className="pane" data-target="rail.hiring" aria-label="Hiring">
-        <div className="ph">Hiring</div>
-        <div className="pb hiring">
+      <section className="pane metric" data-target="rail.hiring" aria-label="Hiring">
+        <h4>
+          hiring <span>HR</span>
+        </h4>
+        <div className="mb hiring">
           {/* Counts only: candidate names never reach the projector. */}
-          {plural(numbers.hiring.applicants, "applicant")} → {numbers.hiring.screened} screened · {numbers.hiring.shortlisted} shortlisted
-          {numbers.hiring.hired > 0 && ` · ${numbers.hiring.hired} hired`}
+          <div className="funnel" aria-label={`${plural(numbers.hiring.applicants, "applicant")}, ${numbers.hiring.screened} screened, ${numbers.hiring.shortlisted} shortlisted`}>
+            {(
+              [
+                ["applicants", numbers.hiring.applicants],
+                ["screened", numbers.hiring.screened],
+                ["shortlisted", numbers.hiring.shortlisted],
+              ] as const
+            ).map(([label, n]) => (
+              <div key={label} aria-hidden>
+                {label}
+                <i style={{ width: `${Math.max(4, Math.round((n / Math.max(1, numbers.hiring.applicants)) * 100))}%` }} />
+                {n}
+              </div>
+            ))}
+          </div>
+          {numbers.hiring.hired > 0 && ` ${numbers.hiring.hired} hired`}
           {(numbers.hiring.sourced ?? 0) + (numbers.hiring.contacted ?? 0) > 0 && (
             <>
               <br />
@@ -578,11 +607,11 @@ export const Rail = memo(function Rail({ screen, numbers }: { screen: ScreenStat
           )}
         </div>
       </section>
-      <section className="pane" data-target="rail.cases" aria-label="Cases">
-        <div className="ph">
-          Cases{screen.rail.crm && <span className="tag">{screen.rail.crm}</span>}
-        </div>
-        <div className="pb cases">
+      <section className="pane metric" data-target="rail.cases" aria-label="Cases">
+        <h4>
+          cases {screen.rail.crm && <span>{screen.rail.crm}</span>}
+        </h4>
+        <div className="cases">
           {SHOW_BLOCKED &&
             blocked.map((r) => (
               <div key={`b-${r.caseId}`} className="blocked">
@@ -639,6 +668,7 @@ const DESKS: readonly [seat: string, name: string, badge: string][] = [
   ["hr", "HR", "HR"],
 ];
 const BADGE: Readonly<Record<string, string>> = Object.fromEntries(DESKS.map(([seat, , badge]) => [seat, badge]));
+const DESK_NAME: Readonly<Record<string, string>> = Object.fromEntries(DESKS.map(([seat, name]) => [seat, name]));
 /** Order cards side by side (the newest ones). */
 const ORDERS_SHOWN = 3;
 
@@ -650,55 +680,47 @@ export const OrdersStrip = memo(function OrdersStrip({ screen }: { screen: Scree
   const shown = visibleOrders(screen).slice(-ORDERS_SHOWN);
   return (
     <section className="orders" data-target="orders" aria-label="CEO orders">
-      <div className="oh">
-        {/* The CEO's cursor lands here when an order is spoken (rail.voice). */}
-        <span className="ot" data-target="rail.voice">
-          CEO orders
-        </span>
-        <div className="desks" aria-hidden>
-          {DESKS.map(([seat, name]) => {
-            const lit = Object.hasOwn(screen.desks, seat) ? screen.desks[seat] : "";
-            // A new key restarts the glow: the desk fades back to idle unless its agent acts again.
-            return (
-              <span key={`${seat}:${lit}`} className={`desk${lit ? " lit" : ""}`} style={{ "--c": `var(--a-${seat})` } as CSSProperties}>
-                <i />
-                {name}
-              </span>
-            );
-          })}
-        </div>
-      </div>
-      <div className="cards">
-        {shown.map((o, i) => (
-          <article key={o.id} className={`order${i === shown.length - 1 ? " newest" : ""}`} data-target={`orders.${o.id}`}>
-            <header>
-              <span className="num">Order {o.n}</span>
-              <time className="mono">{formatClock(o.ts)}</time>
-            </header>
-            <p className="said">&ldquo;{o.text}&rdquo;</p>
+      {shown.map((o, i) => {
+        const newest = i === shown.length - 1;
+        return (
+          <article key={o.id} className={cx("ord", newest && "live")} data-target={`orders.${o.id}`}>
+            {/* The CEO's cursor lands on the newest order's head when an order is spoken (rail.voice). */}
+            <div className="ord-h" data-target={newest ? "rail.voice" : undefined}>
+              order {o.n} · <time>{formatClock(o.ts)}</time>
+              {newest && <span className="st run">latest</span>}
+            </div>
+            <q>{o.text}</q>
             {o.lines.length === 0 ? (
               <p className="wait">Waiting for the Chief of Staff…</p>
             ) : (
-              // column-reverse: the newest line sits at the bottom and the oldest scroll off the top.
-              <ol>
+              // column-reverse: the newest step sits at the bottom and the oldest scroll off the top.
+              <div className="steps">
                 {[...o.lines].reverse().map((l) => (
-                  <li key={l.key}>
-                    <DeptAvatar seat={Object.hasOwn(BADGE, l.seat) ? l.seat : "ceo"} size={22} className="dept" />
-                    <span className="lt">
-                      {l.text}
+                  <div key={l.key} className="step">
+                    <DeptAvatar seat={Object.hasOwn(BADGE, l.seat) ? l.seat : "ceo"} size={22} />
+                    <span>
+                      {/* The line already starts with the department's name: set it in bold, as the prototype does. */}
+                      {DESK_NAME[l.seat] && l.text.startsWith(DESK_NAME[l.seat]) ? (
+                        <>
+                          <b>{DESK_NAME[l.seat]}</b>
+                          {l.text.slice(DESK_NAME[l.seat].length)}
+                        </>
+                      ) : (
+                        l.text
+                      )}
                       {(l.times ?? 1) > 1 && <span className="times"> ×{l.times}</span>}
                     </span>
                     {l.image && imageOk(l.image) && (
                       // eslint-disable-next-line @next/next/no-img-element -- the gateway's own ad PNG, host-gated
                       <img src={l.image} alt="The ad image" referrerPolicy="no-referrer" onError={hideBroken} />
                     )}
-                  </li>
+                  </div>
                 ))}
-              </ol>
+              </div>
             )}
           </article>
-        ))}
-      </div>
+        );
+      })}
     </section>
   );
 });
