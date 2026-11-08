@@ -176,7 +176,7 @@ function Department({ desk, numbers, working, following }: { desk: Workspace; nu
   const seat = desk.seat;
   const step = desk.steps[0];
   return (
-    <div className="dept" style={{ "--c": seatColor(seat) } as CSSProperties}>
+    <div className="of-dept" style={{ "--c": seatColor(seat) } as CSSProperties}>
       <header className="dept-head">
         <div>
           <h1>
