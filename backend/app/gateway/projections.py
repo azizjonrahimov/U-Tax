@@ -41,7 +41,7 @@ _STAGE_RANK = {"applicant": 0, "screened": 1, "shortlisted": 2, "declined": 3, "
 # Event types that count against an action type's hourly cap.
 CAP_EVENTS = {
     "email": ("memo.sent", "client.asked", "case.not_eligible", "hr.questionnaire_sent",
-              "hr.decision_mailed"),
+              "hr.decision_mailed", "client.followed_up"),  # v1.11/v1.12 follow-ups, welcomes
     "social_post": ("post.published",),
     "calendar_invite": ("call.booked",),
     "voice_screen": ("screen.call",),
@@ -59,6 +59,7 @@ class Case:
     priority: bool = False
     reply_to: str | None = None  # real address (from private); never served
     company: str | None = None
+    greeting_name: str | None = None  # v1.12: the sign-up form's name, cleaned (greeting only)
     subject: str = ""
     texts: list[str] = field(default_factory=list)  # masked client texts, oldest first
     agent_texts: list[str] = field(default_factory=list)  # v1.6: names kept, contacts/ids gone
@@ -165,6 +166,8 @@ class State:
     voice_mints_by_day: dict[str, int] = field(default_factory=dict)  # task 13: booked mints
     tts_talk_chars_by_day: dict[str, int] = field(default_factory=dict)  # v1.10 §5c budget
     ads_created: int = 0  # v1.11: make_ad numbers its PNGs
+    signups_by_day: dict[tuple[str, str], int] = field(default_factory=dict)  # v1.12
+    signup_cases: set[str] = field(default_factory=set)  # v1.12: welcome mail owed
     # task 27: a Naive session nudged after a platform error -> (attempts, last one's ts)
     naive_recoveries: dict[str, tuple[int, str]] = field(default_factory=dict)
     candidate_call_starts: set[str] = field(default_factory=set)  # v1.11: held like case calls
@@ -270,6 +273,13 @@ class State:
         return self.cases.get(e.case_id) if e.case_id else None
 
     def _on_email_received(self, e: Event) -> None:
+        signup = e.payload.get("source") == "signup"
+        if signup and e.case_id and e.case_id not in self.cases:  # v1.12: a public case
+            day = e.ts[:10]
+            self.public_cases_by_day[day] = self.public_cases_by_day.get(day, 0) + 1
+            sender = (e.private or {}).get("identity", "")
+            self.signups_by_day[(day, sender)] = self.signups_by_day.get((day, sender), 0) + 1
+            self.signup_cases.add(e.case_id)
         self._open_case(e, text=e.payload["body"], subject=e.payload["subject"])
         self._inbound(e)
 
@@ -305,6 +315,11 @@ class State:
             case.conversation = list(private["turns"])
         case.reply_to = private.get("reply_to") or case.reply_to
         case.company = private.get("company") or case.company
+        case.greeting_name = private.get("greeting_name") or case.greeting_name
+        if e.type == "email.received" and e.payload.get("source") != "signup":
+            # the mailbox owner wrote: a name typed into the public form (maybe by a
+            # stranger who pre-claimed the address) never greets them again
+            case.greeting_name = None
         if private.get("message_id"):
             case.message_ids.append(private["message_id"])
 
