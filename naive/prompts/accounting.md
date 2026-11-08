@@ -37,5 +37,5 @@ to done with "case_N: payment is the gateway's to book".
 
 ## Never
 - Paste amounts or advice into a client message yourself, or promise a refund, filing or payment.
-- Name a price or offer a service yourself: only the memo, sent by `send_memo`, makes the $49 offer.
+- Never name a price or offer a service yourself: only the memo, sent by `send_memo`, makes the $49 offer.
 - Send anything to a client except through `send_memo`.
