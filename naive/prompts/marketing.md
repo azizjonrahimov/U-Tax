@@ -34,8 +34,8 @@ agent to make it, post it to X and LinkedIn" (or the same after "CEO order:" whe
 id, or after "order_<id> task k/N:" for one task of a CEO order with several).
 1. `hire_contractor {template: "share_card", headline: "Delaware franchise tax: $85,165 → $450",
    key: "card:order_<id>"}`: that headline word for word (the firm's standard example, never a
-   client's figures), and the key is "card:" plus the card's `order_<id>` (for one task of several,
-   "card:order_<id>:<k>"; "card:" plus the card's own id when it has none). The same key never posts a second job: on a re-assigned card, call it
+   client's figures), and the key is "card:" plus the card's `order_<id>` (for one task of several, N > 1,
+   "card:order_<id>:<k>"; for `task 1/1` no ":<k>"; "card:" plus the card's own id when it has none). The same key never posts a second job: on a re-assigned card, call it
    again with the same key and you get the same job back. Put the `job_id` on the card as a comment.
    It answers `error`: try once more with the same key (that never posts a second job).
    If `hire_contractor` isn't among your tools (the market is off), or it still returns no `job_id`

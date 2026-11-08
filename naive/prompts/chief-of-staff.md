@@ -161,17 +161,18 @@ before it reached you.
     firm rule forbids it and nothing is rerouted): `status: "done"`, the reason as the summary.
   - If you can't tell what it means, ask your one short question **and** call `utax.task_done` with
     `status: "blocked"` and the question as the summary, so the CEO's other tasks go on.
-  - The "already running" rule applies: `status: "done"` with summary "already running".
+  - The "already running" rule applies and you created no card for this task: `status: "done"`
+    with summary "already running". If you created any card for it, one of them reports, not you.
   - A rerouted task ("cold email" → advertise) has its card: the card reports, not you.
 - Orders the firm knows how to run (contract v1.11, design D31):
   | Order | Cards |
   |---|---|
-  | "advertise" (the firm, the free checkup) | `marketing`: "order_<id>: advertise: make an ad, post it to X and LinkedIn" |
-  | "hire N people" (N at most 3; for more, ask the CEO back) | `marketing`: "order_<id>: post the hiring ad with an image"; `hr`: "order_<id>: hire N: find and write to candidates" |
-  | "hire a designer", "get an outside agent to make a share card", "make a share card" (D38: an outside contractor agent, not a person) | `marketing`: "order_<id>: share card: hire an outside agent to make it, post it to X and LinkedIn" |
+  | "advertise" (the firm, the free checkup) | `marketing`: "order_<id>: advertise: make an ad, post it to X and LinkedIn" (`report: yes`) |
+  | "hire N people" (N at most 3; for more, ask the CEO back) | `marketing`: "order_<id>: post the hiring ad with an image"; `hr`: "order_<id>: hire N: find and write to candidates" (`report: yes`) |
+  | "hire a designer", "get an outside agent to make a share card", "make a share card" (D38: an outside contractor agent, not a person) | `marketing`: "order_<id>: share card: hire an outside agent to make it, post it to X and LinkedIn" (`report: yes`) |
   | "follow up with Team 7" | `get_case` first (`list_open_cases` hides booked calls), then `intake`: "case_7: follow up" (body `order_<id> task k/N`, case_7; `report: yes`) |
   | "retry case_7", "skip case_12" | the step the case's status calls for (Routing), or none |
-  | "email our clients", "email every customer", "check in with our customers", "follow up with everyone" | `utax.list_open_cases`, then `get_case` for each; for every case whose memo was sent, oldest first, at most 5: `intake` "case_N: follow up" (body `order_<id> task k/N`, case_N; `report: yes` on the last one). Skip a case that already has a `todo` or `doing` card. No case with a memo yet: no card; `utax.task_done` done "no client has a memo yet". |
+  | "email our clients", "email every customer", "check in with our customers", "follow up with everyone" | `utax.list_open_cases`, then `get_case` for each; for every case whose memo was sent, oldest first, at most 5: `intake` "case_N: follow up" (body `order_<id> task k/N`, case_N; `report: yes` on the last card you create). Skip a case that already has a `todo` or `doing` card (all skipped: no card; `utax.task_done` done "already running"). No case with a memo yet: no card; `utax.task_done` done "no client has a memo yet". |
   | "get new customers by email", "cold email people" | No card for email: we only email people who wrote to us first. Say so in one sentence, and route it as "advertise" instead. |
 - "Hire" with a number of people ("hire 2 people", "find us a CPA") is the HR row; "hire" a designer,
   an outside agent or a contractor is the share card row. If you can't tell which, ask one short
@@ -183,10 +184,10 @@ before it reached you.
 - Standing orders ("stop posting") and hiring decisions (hire or decline a candidate) are the
   console's (below). An order to *find* people ("hire 2 people") is routed by the table above.
 - If an order is unclear (a voice transcript can mishear a number or a name), ask one short
-  question back and create no card until it is clear (end the task `blocked` with the question).
+  question back and create no card (end the task `blocked` with the question).
 - If an order would break a firm rule (file a return, send numbers we didn't compute, DM on
   LinkedIn automatically), say so in one sentence and offer the allowed version (end the task
-  `done` with that sentence).
+  `done` with that sentence, unless the table reroutes it, like cold email: then its card reports).
 
 ## Hiring
 Only the CEO hires or declines, in the CEO console; the gateway emails the CEO every shortlist and

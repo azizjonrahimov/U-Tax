@@ -445,12 +445,14 @@ MUST_KEEP["chief-of-staff.md"].push("**Work only on this task.** The gateway sen
   "ask your one short question **and** call `utax.task_done` with `status: \"blocked\"`",
   "**No `report: yes` card for this task? Then you end it**", "the card reports, not you",
   "**At most one card per department per task.**", "body `order_<id> task k/N`, case_7; `report: yes`",
-  "(end the task `blocked` with the question)", "(but end its task `done`, \"the console switch does this\")",
+  "(end the task `blocked` with the question)", "If you created any card for it, one of them reports, not you",
+  "unless the table reroutes it, like cold email: then its card reports", "(but end its task `done`, \"the console switch does this\")",
   "summary \"already running\"", "The \"email our clients\" row is the one exception",
   "No card for email: we only email people who wrote to us first", "`utax.task_done` done \"no client has a memo yet\"");
 MUST_KEEP["_firm-rules.md"].push("12. **CEO order tasks.** If your card's body has a line `report: yes`, your **last** tool call for",
   "Call it exactly once. Without `report: yes`, don't call it.", "In \"order_42 task 2/3\" the id is only `order_42`",
-  "that call still comes last", "also pass `task_no: 2` on every tool that takes `order_id`");
+  "that call still comes last", "(Rule 12's `task_done` still comes last.)",
+  "except the Chief of Staff's body lines `order_<id> task k/N` and `report: yes`", "also pass `task_no: 2` on every tool that takes `order_id`");
 MUST_KEEP["ceo-voice.md"].push("one `order` with `tasks`: short imperatives, in the order said, at most 6, one job per task");
 MUST_KEEP["marketing.md"].push("\"card:order_<id>:<k>\"");
 for (const [key, seat] of Object.entries(CREW))
@@ -466,8 +468,13 @@ for (const [key, seat] of Object.entries(CREW))
   const wakeList = cos.split(/^## What wakes you/m)[1]?.split(/^## /m)[0] ?? "";
   for (const w of wakes) if (!wakeList.includes(`- \`${w}\``)) fail(`prompts/chief-of-staff.md: "What wakes you" has no item for the §10.1 wake \`${w}\``);
   // every card body the orders table spells out carries the task line rule 12 reads
-  for (const m of cos.matchAll(/\(body:? ([^;)]+)/g))
-    if (!m[1].startsWith("`order_<id> task k/N`")) fail(`prompts/chief-of-staff.md: a table card body must start \`order_<id> task k/N\` (got "${m[1]}")`);
+  const bodies = [...cos.matchAll(/\(body:? ([^;)]+)/g)].map((m) => m[1]);
+  if (bodies.length < 2) fail(`prompts/chief-of-staff.md: expected the follow-up and email rows' card bodies, read ${bodies.length}`);
+  for (const b of bodies)
+    if (!b.startsWith("`order_<id> task k/N`")) fail(`prompts/chief-of-staff.md: a table card body must start \`order_<id> task k/N\` (got "${b}")`);
+  // every orders-table row that makes a card names its reporter
+  for (const row of cos.split("\n").filter((l) => /^\s*\| "/.test(l) && /`(marketing|hr|intake)`: "/.test(l)))
+    if (!row.includes("`report: yes`")) fail(`prompts/chief-of-staff.md: an orders-table row makes cards but names no \`report: yes\` card: ${row.slice(0, 60)}…`);
   // firm rule 12's statuses are §10.2's
   const want = (s10.match(/utax\.task_done \{[^}]*status: ([\w|]+)/)?.[1] ?? "").split("|").sort().join();
   const rule12 = readFileSync(join(ROOT, "prompts", "_firm-rules.md"), "utf8").split(/^12\. /m)[1] ?? "";
