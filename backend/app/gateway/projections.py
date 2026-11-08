@@ -466,6 +466,10 @@ class State:
         if e.payload.get("kind") == "candidate":  # v1.11.1: no case; the slot is held
             if e.status == "ok":
                 self.candidate_call_starts.add(e.payload["start"])
+                parts = (e.idempotency_key or "").split(":")  # hr_outreach:<cand>:call
+                cand = self.candidates.get(parts[1]) if len(parts) == 3 else None
+                if cand is not None:
+                    cand["booked_at"] = e.payload["start"]  # task 38
             return
         case = self._case(e)
         if case is not None and e.status == "ok":
@@ -610,6 +614,15 @@ class State:
             cand["listed"] = True
         if stage == "applicant" and cand.get("contacted") and private.get("affirmative"):
             cand["replied"] = True  # 32b: a plain yes to the outreach note books the call
+            cand.pop("outreach_declined", None)  # task 38: a later yes undoes a no
+        if stage == "applicant" and private.get("outreach_reply"):
+            # task 38: "yes" sticks once said; anything else is "other"
+            cand["reply_kind"] = "yes" if private.get("affirmative") or cand.get(
+                "reply_kind") == "yes" else "other"
+            if private.get("outreach_declined") and cand.get("reply_kind") != "yes":
+                cand["outreach_declined"] = True
+                cand["slot_released"] = True
+                self.candidate_call_starts.discard(cand.get("contacted"))
         if stage == "applicant":  # 22b: the applicant's latest mail wakes HR anew
             cand["last_event_id"] = max(cand.get("last_event_id", 0), e.id)
         if stage == "applicant" and private.get("text"):
