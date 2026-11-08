@@ -1,4 +1,4 @@
-# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 05:15 local · D38 + D39 live, freeze 10:00
+# Digest (Naive YC Hackathon · U-Tax): 2026-11-08 04:57 local · D38 + D39 live, freeze 10:00
 
 ## Needs you
 
