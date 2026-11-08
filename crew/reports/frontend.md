@@ -238,6 +238,27 @@ If either page can't hear you at all: check Chrome's site permission (the lock i
   - The mock has no turn lock.
   - Chips from before a STOP still offer Undo with no "STOP ran since" note.
 
+## Every order done live, step by step (D37, contract v1.18)
+
+- **Signed-in `/office`:** each department window shows the artifact being made, live.
+  - **Email:** the composer opens when the tool starts, then the real email from `payload.sent` types in, with the workpaper and memo as attachment chips, then "Sent ✓".
+  - **Social:** the X and LinkedIn compose box types the post, then shows the ad image and "Posted on <channel> ✓".
+  - **Documents:** one artifact per case, played back in build order. The workpaper fills as a real grid, cell by cell from `payload.cells`; then the memo's sections; then the books row. Each document gets its own Verified tab.
+  - **Tax:** both methods with the real numbers, the filed one marked.
+  - **HR:** the calendar invite.
+- **Activity:** an activity pill shows "thinking…", "using <tool>" or "writing…". The agent's own words appear as "<Seat>'s notes" under the window, never as an email.
+- **Auto-follow** jumps to a desk that is making something.
+- **Privacy:** the public theater and signed-out `/office` never get activity or private content. A case flagged as a possible injection never shows its mail, cells or notes.
+- **Decisions taken with the recommended option:**
+  - Narration is shown as notes, because the gateway builds every email from a template.
+  - The documents rest on the workpaper's computation once played, not on the ledger row.
+  - Activity counts only while recent (20 s).
+- **Backend asks (sent to the controller):**
+  - `_shown` formats money cells without "$" or cents, and par $0.00001 as "0".
+  - The activity relay opens a session's stream at seq 0, so old tool events get logged as new.
+  - Public `/api/events` filters activity after slicing by id, so the 300-event lookback can come back nearly empty.
+- **Known, not built yet:** the "CEO order card with the live step list" belongs to the CEO panel, which is next.
+
 ## What the owner must do
 
 - Set `NEXT_PUBLIC_API_URL` and `NEXT_PUBLIC_THEATER_TOKEN` for the build (the theater token is public by design). The admin token is never a build variable: the CEO types it at `/ceo`.
