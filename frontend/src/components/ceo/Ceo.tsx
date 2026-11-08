@@ -42,8 +42,9 @@ import {
 } from "@/ceo/ceo";
 import { announceAgentAudio, CeoVoice, type VoiceSlots } from "./CeoVoice";
 import { logout, useSessionToken, writeSession } from "@/ceo/session";
-import { foldOrders, type OrderCard } from "@/ceo/orders";
+import { foldOrders, taskChip, type OrderCard, type TaskStatus } from "@/ceo/orders";
 import { CaseList } from "./CaseList";
+import { Payments } from "./Payments";
 import { useConsoleLock } from "@/ceo/popout";
 import { current, emptyCaseDocs, stepCaseDocs, type CaseDocs } from "@/office/artifact";
 import { SEAT_NAME, SEATS } from "@/office/workspace";
@@ -187,6 +188,18 @@ const KAN_COLS = [
 /** The channel chip on an approval card (from its kind; the approval carries no channel). */
 const ACTION_CHANNEL: Readonly<Record<string, string>> = { email: "email", social_post: "social", calendar_invite: "calendar", voice_screen: "phone" };
 const seatName = (seat: string) => (SEAT_SET.has(seat) ? SEAT_NAME[seat as keyof typeof SEAT_NAME] : "U-Tax");
+
+/** D41 F47: each task status, in words (the stepper's chip and its screen-reader line). */
+const TASK_WORDS: Readonly<Record<TaskStatus, string>> = {
+  queued: "queued",
+  running: "running now",
+  done: "done",
+  waiting_on_you: "waiting on you",
+  blocked: "blocked",
+  failed: "failed",
+  timeout: "timed out",
+  cancelled: "cancelled",
+};
 
 type RailItem = "brief" | "approvals" | "cases" | "hiring" | "standing" | "money";
 
@@ -978,9 +991,32 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
               <ol>
                 {orders.map((o) => (
                   <li key={o.id} className="card order-card">
-                    <p className="order-text">
-                      <q>{o.text}</q>
-                    </p>
+                    <div className="order-head">
+                      <p className="order-text">
+                        <q>{o.text}</q>
+                      </p>
+                      {taskChip(o.tasks) && <span className="task-chip">{taskChip(o.tasks)}</span>}
+                    </div>
+                    {o.tasks && (
+                      <ol className="order-tasks" aria-label="Tasks">
+                        {o.tasks.map((t) => (
+                          <li key={t.no} className={`tk ${t.status}`}>
+                            <span className="tk-badge" aria-hidden="true">
+                              {t.status === "done" ? "✓" : t.status === "failed" || t.status === "timeout" ? "✕" : t.status === "queued" ? "○" : t.no}
+                            </span>
+                            {t.status === "running" && <span className="tk-dot" aria-hidden="true" />}
+                            <span className="tk-text" title={t.text}>
+                              {t.text}
+                            </span>
+                            {(t.status === "waiting_on_you" || t.status === "blocked") && <span className="tk-wait">{TASK_WORDS[t.status]}</span>}
+                            {t.seat && <DeptAvatar seat={t.seat} size={22} className="tk-av" title={SEAT_NAME[t.seat]} />}
+                            <span className="sr-only">
+                              Task {t.no}: {TASK_WORDS[t.status]}
+                            </span>
+                          </li>
+                        ))}
+                      </ol>
+                    )}
                     {o.live && current(o.live.ts, now) && <p className="order-live">{o.live.text}</p>}
                     {o.steps.length === 0 ? (
                       <p className="dim">Waiting for the Chief of Staff to pick it up…</p>
@@ -1257,6 +1293,8 @@ function CeoConsole({ variant, autoplay }: { variant: "page" | "panel"; autoplay
               </div>
             </section>
           )}
+          {/* D41 F50.3: the last payments, under the money card (hidden when the ledger can't be read). */}
+          <Payments token={token} tick={activity[0]?.id ?? 0} />
         </aside>
       </div>
     );

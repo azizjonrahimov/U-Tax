@@ -8,6 +8,8 @@ export interface Recognition {
   onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
   onend: (() => void) | null;
   onerror: ((e: { error: string }) => void) | null;
+  /** D41 F47: the CEO started an utterance (the browser recognizer's event; the gateway STT's level gate). */
+  onspeechstart?: (() => void) | null;
   start(): void;
   stop(): void;
   abort(): void;

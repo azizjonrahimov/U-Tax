@@ -74,6 +74,8 @@ const MAX_LINES = 6;
 const EAR_REOPEN_MS = ECHO_TAIL_MS; // the contract's tail after TTS audio (v1.10 §5c)
 /** After STOP, function calls from the response it cut off may still arrive: they are fenced this long. */
 const STOP_FENCE_MS = 2000;
+/** D41 F47: a read-back the console speaks waits this long with no new utterance (never talk over the CEO). */
+const READBACK_QUIET_MS = 1500;
 /** While a confirm lands (and this long after), a model start call is answered locally: no duplicate proposal. */
 const CONFIRM_QUIET_MS = 5000;
 /** A Confirm click this soon after the card changed is ignored (it was aimed at the card before). */
@@ -199,6 +201,29 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
   const lastReply = useRef<{ key: string; text: string; at: number } | null>(null);
   /** STOP EVERYTHING, for Esc and a spoken stop (set once stopEverything exists). */
   const stopRef = useRef<(channel?: "click" | "voice") => Promise<void>>(async () => {});
+  /**
+   * D41 F47: the newest read-back waiting for the CEO to stop talking (only one: a newer proposal
+   * replaces it, and a replaced or cancelled one is never spoken). `n` counts the proposals that
+   * came while waiting (each a task the gateway merged in).
+   */
+  const readbackWait = useRef<{ p: Proposal; say: string; n: number; epoch: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const [waitingTasks, setWaitingTasks] = useState<number | null>(null);
+  const flushReadbackRef = useRef<() => void>(() => {});
+  const dropReadbackRef = useRef<() => void>(() => {});
+  /** An utterance began (or a phrase came in) while a read-back waits: the quiet starts over. */
+  const bumpReadback = useCallback(() => {
+    const w = readbackWait.current;
+    if (!w) return;
+    clearTimeout(w.timer);
+    w.timer = setTimeout(() => flushReadbackRef.current(), READBACK_QUIET_MS);
+  }, []);
+  const dropReadback = useCallback(() => {
+    const w = readbackWait.current;
+    if (!w) return;
+    clearTimeout(w.timer);
+    readbackWait.current = null;
+    setWaitingTasks(null);
+  }, []);
   const [handsFree, setHandsFree] = useState(false);
   const [card, setCard] = useState<Card | null>(null);
   const [now, setNow] = useState(0);
@@ -454,8 +479,10 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
         setMicOn(false);
       };
     }
+    r.onspeechstart = bumpReadback; // D41 F47: the CEO is talking again: the read-back waits
     r.onresult = (e) => {
       if (!alive.current || stopEpoch.current !== earEpoch) return;
+      bumpReadback();
       earErrors.current = 0;
       const results: { index: number; text: string; isFinal: boolean }[] = [];
       for (let i = e.resultIndex; i < e.results.length; i++) results.push({ index: i, text: e.results[i][0]?.transcript ?? "", isFinal: e.results[i].isFinal });
@@ -516,7 +543,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
     } catch {
       recRef.current = null; // already running elsewhere, or refused: the next tap retries
     }
-  }, [earCtor, goDeaf]);
+  }, [bumpReadback, earCtor, goDeaf]);
   useEffect(() => {
     listenRef.current = listen;
   }, [listen]);
@@ -579,13 +606,43 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
       addLine("firm", say);
       // No readback text in a system item: it can carry agent-written words (a post), never system authority.
       if (replaced) tellModel("The CEO typed a new command, so the earlier proposal was replaced. Only the newest card on the console can be confirmed now.", false);
+      // D41 F47: while the ear is open the CEO may still be giving tasks: the read-back waits for
+      // READBACK_QUIET_MS without an utterance, and only the newest one is ever read.
+      if (linkRef.current === "fallback" && recRef.current) {
+        const prev = readbackWait.current;
+        if (prev) clearTimeout(prev.timer);
+        const n = prev ? prev.n + 1 : 1;
+        readbackWait.current = { p, say, n, epoch: stopEpoch.current, timer: setTimeout(() => flushReadbackRef.current(), READBACK_QUIET_MS) };
+        setWaitingTasks(n);
+        return;
+      }
+      dropReadback();
       speak(say, (played) => {
         // Spoken confirms count only once the readback was actually heard (a cut-off reading doesn't arm it).
         if (played) vs.current = readbackHeard(vs.current, p.proposalId, Date.now());
       });
     },
-    [addLine, showCard, speak, tellModel],
+    [addLine, dropReadback, showCard, speak, tellModel],
   );
+  /** The quiet held: read the newest card, unless it was decided, replaced or cancelled, or STOP came since. */
+  const flushReadback = useCallback(() => {
+    const w = readbackWait.current;
+    readbackWait.current = null;
+    setWaitingTasks(null);
+    if (!w || !alive.current || w.epoch !== stopEpoch.current) return;
+    const open = vs.current.proposal;
+    if (!open || open.proposalId !== w.p.proposalId || open.settling) return;
+    speak(w.say, (played) => {
+      if (played) vs.current = readbackHeard(vs.current, w.p.proposalId, Date.now());
+    });
+  }, [speak]);
+  useEffect(() => {
+    flushReadbackRef.current = flushReadback;
+    dropReadbackRef.current = dropReadback;
+  }, [flushReadback, dropReadback]);
+  useEffect(() => () => {
+    if (readbackWait.current) clearTimeout(readbackWait.current.timer);
+  }, []);
 
   /** POST /api/ceo/confirm and report the outcome everywhere. The card was already claimed. */
   const send_confirm = useCallback(
@@ -1439,6 +1496,9 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
         seenFlagged.current = new Set();
       }
       for (const e of events) if (e.type === "case.flagged" && e.case_id) seenFlagged.current.add(e.case_id);
+      // D41 F47: a waiting read-back the gateway cancelled (merged into a newer one, or any other reason) is never spoken.
+      const waiting = readbackWait.current;
+      if (waiting && events.some((e) => e.type === "ceo.cancelled" && e.payload?.proposal_id === waiting.p.proposalId)) dropReadbackRef.current();
       // The gateway closed the open card itself (a pause from any path, a newer proposal, a restart).
       const open = vs.current.proposal;
       for (const e of events) {
@@ -1571,6 +1631,11 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
   const workingLine = working && (
     <p className="working" role="status">
       U-Tax is working on it…
+    </p>
+  );
+  const waitingLine = waitingTasks !== null && (
+    <p className="waiting-more" role="status">
+      Listening for more… ({waitingTasks} {waitingTasks === 1 ? "task" : "tasks"} so far)
     </p>
   );
   const heardLine = link === "fallback" && heard && (
@@ -1726,6 +1791,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
           <span className="sr-only">{micOn ? "Talking… tap to finish" : "Talk"}</span>
         </button>
         <h3 aria-hidden="true">{micOn ? "Talking… tap to finish" : "Tap or hold to talk"}</h3>
+        {waitingLine}
         <div className="row">
           <Switch className="sw" on={handsFree} onChange={toggleHandsFree} label="Hands-free" disabled={link === "connecting"} />
           <span className="dim">
@@ -1783,6 +1849,7 @@ export function CeoVoice({ token, refresh, signOut, feedRef, names, flagged, esc
       </div>
       {/* D34: a turn is with the assistant (it may take up to half a minute): never silent on screen. */}
       {workingLine}
+      {waitingLine}
       {/* D33: what the browser's ear understood last (the chip above says whether it is listening). One line, below the controls, so STOP never moves. */}
       {heardLine}
 

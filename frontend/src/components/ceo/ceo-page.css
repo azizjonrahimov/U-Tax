@@ -278,3 +278,39 @@
   .cx main{padding-bottom:88px}
 }
 @media (prefers-reduced-motion:reduce){.cx .dot,.cx .wave i,.cx .orb::after{animation:none!important}}
+/* D41 F47: an order's tasks, one row each (badge, one line of text, the department doing it) */
+.cx .order-head{display:flex;align-items:flex-start;gap:12px}
+.cx .order-head .order-text{flex:1;min-width:0}
+.cx .task-chip{flex:none;font:11px var(--mono);color:var(--dim);border:1px solid var(--line-2);border-radius:var(--pill);padding:2px 8px;white-space:nowrap}
+.cx .order-tasks{list-style:none;display:grid;gap:6px;margin:4px 0 10px}
+.cx .tk{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--text);min-height:24px}
+.cx .tk-badge{flex:none;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font:500 11px var(--mono);border:1px solid var(--line-2);color:var(--dim)}
+.cx .tk-text{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cx .tk-av{flex:none}
+.cx .tk-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--lime);box-shadow:0 0 10px var(--lime);animation:cx-pulse 1.2s infinite}
+.cx .tk-wait{flex:none;font:11px var(--mono);color:var(--warn);background:rgba(255,181,71,.12);border-radius:var(--pill);padding:2px 8px;white-space:nowrap}
+.cx .tk.done .tk-badge{background:var(--lime);border-color:var(--lime);color:var(--on-lime)}
+.cx .tk.running .tk-badge{border-color:var(--lime);color:var(--lime)}
+.cx .tk.waiting_on_you .tk-badge,.cx .tk.blocked .tk-badge{border-color:var(--warn);color:var(--warn)}
+.cx .tk.queued{color:var(--faint)}
+.cx .tk.queued .tk-badge{border-color:var(--line);color:var(--faint)}
+.cx .tk.failed .tk-badge,.cx .tk.timeout .tk-badge{border-color:rgba(255,90,71,.55);color:#ff8c7d}
+.cx .tk.cancelled{color:var(--faint)}
+.cx .tk.cancelled .tk-text{text-decoration:line-through}
+@media (prefers-reduced-motion:reduce){.cx .tk-dot{animation:none!important}}
+/* D41 F50.3: the console's Payments card (the last 5 ledger rows) */
+.cx .pays{padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.cx .pay-rows{list-style:none;display:flex;flex-direction:column;gap:10px}
+.cx .pay-row{display:grid;grid-template-columns:22px 1fr;gap:10px;align-items:start}
+.cx .pay-what{min-width:0;display:flex;flex-direction:column;gap:3px}
+.cx .pay-what p{font-size:13px;line-height:1.4;overflow-wrap:anywhere}
+.cx .pay-what .amt{color:var(--lime);font-family:var(--mono);white-space:nowrap}
+.cx .pay-what small{font:11px var(--mono);color:var(--faint)}
+.cx .pay-what a{color:var(--dim);text-decoration:none}
+.cx .pay-what a:hover{color:var(--text)}
+.cx .pay-row.bad .amt{color:var(--faint);text-decoration:line-through}
+.cx .pay-chip{align-self:flex-start;font:11px var(--mono);color:var(--dim);border:1px solid var(--line-2);border-radius:6px;padding:1px 6px}
+.cx .pay-open{align-self:flex-start;font:12px var(--mono);color:var(--lime);text-decoration:none}
+.cx .pay-open:hover{text-decoration:underline}
+/* D41 F47: the read-back waits for the CEO to finish */
+.cx .voice .waiting-more{color:var(--lime);font:12px var(--mono)}
