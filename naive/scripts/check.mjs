@@ -37,19 +37,13 @@ const fail = (msg) => failures.push(msg);
 
 /**
  * Naïve redacts any text equal to a configured header value from everything the agent sees, so
- * a plain header value ("tax", "qa", "hr") blanks that word out of cases, cards and tool results.
- * A non-secret header value is refused when it is short or made only of letters, spaces and dashes
- * (a word or a phrase); secrets belong in a vault credential, not a header.
+ * an "X-UTax-Actor: tax" header blanked "tax" out of cases, cards and tool results. No seat needs a
+ * header (the vault's bearer names the seat; secrets belong in a vault credential), so every MCP
+ * header is refused, whatever its value.
  */
 function headerValueProblem(value) {
-  if (typeof value !== "string") return "is not a plain string (secrets go in a vault credential, not a header)";
-  if (value.length < 24 || /^[A-Za-z][A-Za-z _.-]*$/.test(value))
-    return `is "${value}", a word Naïve would redact from everything the agent reads; drop the header`;
-  return null;
+  return `is set (${JSON.stringify(value)}); Naïve redacts header values from everything the agent reads, and no seat needs a header`;
 }
-for (const [value, bad] of [["tax", true], ["qa", true], ["chief-of-staff", true], ["U-Tax firm agent", true],
-  ["9f2c7e1a4b8d3f6e0a5c2b7d9e1f4a3c", false]])
-  if (Boolean(headerValueProblem(value)) !== bad) fail(`header guard self-test: "${value}" should be ${bad ? "refused" : "allowed"}`);
 
 const loaded = await loadConfig(ROOT);
 if (!loaded.ok) {
