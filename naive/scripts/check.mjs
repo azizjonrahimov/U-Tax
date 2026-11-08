@@ -413,22 +413,27 @@ const MUST_KEEP = {
   // D38: Marketing posts the job; only the gateway prices and pays it
   "marketing.md": ["## Hiring outside agents (D38)", "key: \"card:order_<id>\"}`", "The same key never posts a second job",
     "at most 9 checks per assignment", "Only if the 9th check still shows an `approval_id`, block the card with it", "Comment it the first time it shows",
-    "the CEO didn't approve the payment", "no more `hire_contractor` or `get_job`", "If `hire_contractor` isn't among your tools", "Card to done only when no channel is waiting on approval", "`failed` or `expired` otherwise: the fallback", "Don't post the fallback: block the card",
+    "no more `hire_contractor` or `get_job`", "If `hire_contractor` isn't among your tools", "try once more with the same key",
+    "`refused`, or a second `error`: the fallback", "Still `open` or `claimed` after the 9th check: the fallback", "Card to done only when no channel is waiting on approval", "`failed` or `expired`: the fallback", "Don't post the fallback: block the card",
     "with \"job_N: waiting on the firm's payment\"", "**Never discuss, set or change a price, a wallet, a private key or a payment.**",
     "the gateway pays the contractor itself, only after its own checks pass"],
   "ceo-assistant.md": ["the exact id of the waiting `contractor_pay` approval", "in test tokens with no real value",
     "later contractor payments within the firm's caps run on their own", "You never pay, name a wallet or set a price",
     "`utax.order` \"get an outside agent to make a share card\"", "not `utax.decide_candidate`",
-    "and `contractor_pay` when `utax.get_trust` lists it"],
-  "ceo-voice.md": ["\"get an outside agent to make the card\" (D38: an outside contractor agent, never `decide_candidate`)",
-    "five when `get_trust` lists `contractor_pay`"],
+    "and `contractor_pay` when `utax.get_trust` lists it", "`contractor_pay` (D38: paying outside contractor agents)",
+    "unless the job expired first"],
+  "ceo-voice.md": ["So is \"hire a designer\" (D38: an outside contractor agent, never `decide_candidate`)",
+    "five when `get_trust` lists `contractor_pay`", "`contractor_pay` (D38: paying outside contractor agents)",
+    "the exact id of the waiting `contractor_pay` approval", "contractor payments, or everything?"],
 };
 MUST_KEEP["chief-of-staff.md"].push("is the share card row", "\"Pay the contractor\", \"approve the payment\": no card",
-  "the share card, follow up on that case", "a wake ending \"(contractor_pay job_N)\"", "Marketing sees the answer on its next check");
+  "the share card, follow up on that case", "a wake ending \"(contractor_pay job_N)\"", "Marketing sees the answer on its next check",
+  "this rule replaces the allowed and denied rules around it", "Only if it is `blocked` on that job's payment");
 // D38: the order the CEO assistant sends is one the Chief of Staff's share card row lists
 const SHARE_ORDER = "get an outside agent to make a share card";
-if (!readFileSync(join(ROOT, "prompts", "chief-of-staff.md"), "utf8").includes(`"${SHARE_ORDER}"`))
-  fail(`prompts/chief-of-staff.md: the share card row must list the CEO assistant's order "${SHARE_ORDER}"`);
+for (const file of ["chief-of-staff.md", "ceo-assistant.md", "ceo-voice.md"])
+  if (!readFileSync(join(ROOT, "prompts", file), "utf8").replace(/\s+/g, " ").includes(`"${SHARE_ORDER}"`))
+    fail(`prompts/${file}: the share card order must read "${SHARE_ORDER}" (the CEO prompts send it, the Chief of Staff's row lists it)`);
 // D38 contract v1.19 §9.6: the Chief of Staff routes every wake the market sends, in the contract's words
 {
   const api = existsSync(contractPath) ? readFileSync(contractPath, "utf8") : "";
@@ -440,7 +445,8 @@ if (!readFileSync(join(ROOT, "prompts", "chief-of-staff.md"), "utf8").includes(`
   if (!s96.includes("(contractor_pay job_N)") || !cos.includes("(contractor_pay job_N)"))
     fail("prompts/chief-of-staff.md: the contractor_pay approval wake must match §9.6's \"(contractor_pay job_N)\"");
   // and Marketing branches on exactly the §9.2 job statuses
-  const want = [...(api.match(/`status` is one of ([^\n]+)/)?.[1] ?? "").matchAll(/`(\w+)`/g)].map((m) => m[1]).sort();
+  const s92 = api.split(/^\*\*9\.2 /m)[1]?.split(/^\*\*9\.3 /m)[0] ?? "";
+  const want = [...(s92.match(/`status` is one of ([^\n]+)/)?.[1] ?? "").matchAll(/`(\w+)`/g)].map((m) => m[1]).sort();
   const mkt = readFileSync(join(ROOT, "prompts", "marketing.md"), "utf8");
   const got = [...(mkt.match(/`utax\.get_job \{job_id\}`: the job's `status` \(([^)]+)\)/)?.[1] ?? "").matchAll(/`(\w+)`/g)].map((m) => m[1]).sort();
   if (!want.length || got.join() !== want.join()) fail(`prompts/marketing.md: get_job statuses (${got}) != contract §9.2 (${want})`);

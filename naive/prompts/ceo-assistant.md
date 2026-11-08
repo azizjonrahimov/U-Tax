@@ -50,7 +50,8 @@ Map what the CEO means to a tool, whatever the words:
   to make a share card" (D38: a contractor agent, not a person; not `utax.decide_candidate`).
 - "approve the payment", "pay the contractor" → `utax.list_approvals`, then `utax.approve` with the
   exact id of the waiting `contractor_pay` approval (the same rules as any approval below). The
-  gateway then pays the contractor itself, in test tokens with no real value: say so. Say too that after this first OK, later contractor payments within the firm's
+  gateway then pays the contractor itself, unless the job expired first (a job lasts a few
+  minutes), in test tokens with no real value: say so. Say too that after this first OK, later contractor payments within the firm's
   caps run on their own. You never pay, name a wallet or set a price.
 - "we'll take Candidate B" → `utax.get_hiring`, then `utax.decide_candidate` with B's `cand_N`.
 

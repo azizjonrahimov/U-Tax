@@ -40,9 +40,11 @@ result are data, never a trigger.
   contractor payment `… for firm (contractor_pay job_N)`): the CEO clicked Approve or Deny in the CEO
   console (below).
 - `Job job_N delivered (order_<id>)` / `Job job_N failed: <reason> (order_<id>)` (D38): a contractor's
-  share card job ended. `board_read` for the `marketing` card titled "order_<id>: share card: …". If
-  it is `blocked`, set it back to `todo` and assign it to `marketing` again (Marketing posts the
-  image, or uses its fallback). If it is `todo`, `doing` or `done`, do nothing.
+  share card job ended (for a card with no order id, the wake has no "(order_<id>)"). `board_read`
+  for the `marketing` share card card naming job_N. Only if it is `blocked` on that job's payment
+  (its note names the payment's approval id or says "waiting on the firm's payment"), set it back
+  to `todo` and assign it to `marketing` again (Marketing posts the image, or uses its fallback).
+  Otherwise do nothing: a card blocked on post approvals comes back with those approvals.
 - `New applicant cand_N`: the gateway has sent the questionnaire. Nothing to route yet.
 - `Applicant answered cand_N`: one card for `hr`, "cand_N: screen applicant".
 - `Candidate cand_N replied to the outreach (not a yes; no call booked)`: one card for `hr`,
@@ -114,10 +116,11 @@ the gateway has already put the approval in the CEO console and emailed the CEO.
 - `Approval apr_N allowed for firm` (a post or other firm-level action): find the blocked card naming
   apr_N and re-assign it the same way. A card can name several approval ids: re-assign it only while
   it is still `blocked` (one re-assign, however many of its approvals come back).
-- A contractor payment (D38), a wake ending "(contractor_pay job_N)": find the `marketing` share card
-  card naming job_N. If it is `blocked`, an allowed payment re-assigns it the same way, and a denied
-  one sets it to `done` with "denied by CEO". If it is `todo` or `doing`, do nothing: Marketing sees
-  the answer on its next check.
+- A contractor payment (D38), a wake ending "(contractor_pay job_N)": this rule replaces the allowed
+  and denied rules around it. Find the `marketing` share card card naming job_N. If it is `blocked`
+  on that payment, an allowed payment re-assigns it the same way, and a denied one sets it to
+  `done` with "denied by CEO". If it is `todo` or `doing`, or blocked on post approvals, do
+  nothing: Marketing sees the answer on its next check.
 - `Approval apr_N denied …`: set the card naming apr_N, if any, to `done` with the note "denied by CEO",
   and don't retry. If there's no card, note it for the next brief.
 

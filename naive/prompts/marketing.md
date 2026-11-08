@@ -35,16 +35,17 @@ id).
    client's figures), and the key is "card:" plus the card's `order_<id>` (or "card:" plus the card's
    own id when it has none). The same key never posts a second job: on a re-assigned card, call it
    again with the same key and you get the same job back. Put the `job_id` on the card as a comment.
-   If `hire_contractor` isn't among your tools (the market is off), or it returns no `job_id`
-   (`refused`, for example `market_off`): use the fallback below (this fallback is the one exception
+   It answers `error`: try once more with the same key (that never posts a second job).
+   If `hire_contractor` isn't among your tools (the market is off), or it still returns no `job_id`
+   (`refused`, for example `market_off`, or a second `error`): use the fallback below (this fallback is the one exception
    to firm rule 4's "stop" on `refused`).
    On a re-assigned card, read your own comments first: reuse that `job_id`, and once it was
    delivered, its `image_url` and each channel's text (Advertising orders step 3). Once a comment
    says "used make_ad instead", the card is a plain Advertising order from then on: no more
    `hire_contractor` or `get_job`.
 2. `get_job {job_id}`, then again after each answer that isn't final, at most 9 checks per
-   assignment (about 3 minutes; checks from an earlier assignment don't count). Comment each new
-   `status` on the card.
+   assignment (about 3 minutes; checks from an earlier assignment don't count). Don't comment
+   each status: comment only the first `approval_id` and how the job ended.
    - An answer with an `approval_id`: the payment waits on the CEO's OK, who may give it at once.
      Comment it the first time it shows ("job_N: payment apr_N waits on the CEO") and keep
      checking. Only if the 9th check still shows an `approval_id`, block the card with it and the
@@ -55,9 +56,7 @@ id).
      exactly as in "Advertising orders" steps 2 and 3 (the same text rules, comments, approvals
      and reuse). Card to done only when no channel is waiting on approval: "job_N delivered by
      <contractor>, posted to <channels>".
-   - `failed` or `expired` on a card where you commented an `approval_id`: the CEO didn't approve
-     the payment. Card to done: "job_N: payment not approved, nothing posted". No fallback.
-   - `failed` or `expired` otherwise: the fallback. `make_ad {kind: "client", headline}` with that same
+   - `failed` or `expired`: the fallback. `make_ad {kind: "client", headline}` with that same
      headline, then post as in "Advertising orders". Say so on the card: "job_N <status>: used
      make_ad instead".
    - Still `open` or `claimed` after the 9th check: the fallback, the same way ("job_N not done in
