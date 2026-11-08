@@ -1,4 +1,4 @@
-# API contract (v1.19): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
+# API contract (v1.20): U-Tax gateway ↔ Agent Theater ↔ Naïve agents
 
 Owned by the controller. Lanes propose changes by message to the controller; never
 edit this file on a lane branch. Every change bumps the version and is announced to
@@ -893,7 +893,45 @@ everything below.
   the CEO has approved one post with an image from that contractor. A third party's pixels are a new kind of
   content: the format, size and headline checks are filters, not a review.
 
+## 10. Multi-task orders and the payment ledger (v1.20, design D41)
+
+Source: `docs/designs/fixes/FIXES-RUNBOOK.md` §B.1 and §E. **Landing rule (as in §9):** the event rows below are
+copied into §3, the `utax.task_done` row into §6, and the `/api/payments` lines into §4 in the SAME merge as the code
+(backend B51 / B52 / B53; agents A43 for the Naïve tool list).
+
+**10.1 Events:**
+
+| type | actor | payload | notes |
+|---|---|---|---|
+| `order.queued` | system | `{order_id, of, tasks: [{no, text}]}` | right after the order's `voice.command`; `text` follows the same reader rule as `voice.command.text` |
+| `order.task_started` | system | `{order_id, task_no, of, text}` | the gateway then wakes the CoS |
+| `order.task_done` | the caller's seat, or system | `{order_id, task_no, of, status, summary, by}` | `status`: `done`, `waiting_on_you`, `blocked`, `failed`, `timeout`, `cancelled`; idem `task_done:{order_id}:{task_no}` |
+| `order.done` | system | `{order_id, of, done, waiting_on_you, other}` | after the last task ends; idem `order_done:{order_id}` |
+| `payment.recorded` | system | `{job_id, tx_hash, order_id?, task_no?, stripe_id, mode: "mirror"\|"mpp", dashboard_url}` | provider stripe; a test-mode Stripe record of a Tempo contractor payment; idem `stripe_mirror:{tx_hash}` |
+
+- Every order-linked event also carries `task_no`, stamped by the gateway wherever it stamps `order_id`.
+- `ceo.cancelled` gains `reason: "merged"` (a newer order proposal absorbs an open one's tasks).
+- Wakes: a single-task order keeps EXACTLY `CEO order_<id>: <words>`; a task of N > 1 is
+  `CEO order_<id> task <k>/<N>: <words>`. One task runs at a time across all orders.
+
+**10.2 Tools:**
+- CEO tool `order` args become `{text?, tasks?: string[≤6]}` (either is enough). Read-back for N > 1:
+  `N tasks for the Chief of Staff, one by one: 1) …; 2) …. Say confirm.` A plain "confirm" confirms it.
+- New MCP tool `utax.task_done {order_id, task_no, status: done|blocked|failed, summary?}` (any agent seat): the
+  last call of the card marked `report: yes`. A repeat answers `{ok: true, duplicate: true}`; a task not yet
+  started answers `not_running`.
+- STOP everything cancels every running and queued task (`order.task_done` `cancelled`, then `order.done`).
+
+**10.3 `GET /api/payments?token=`** (the same token rule as `/api/state`): newest first, ≤ 100 rows
+`{id, ts, direction, kind, counterparty, job_id?, order_id?, task_no?, amount, token, rail, status, tx_hash?,
+explorer_url?, stripe?: {id, mode, dashboard_url}}` from `payment.sent`, `agent.sale`, `payment.received`, joined with
+`payment.recorded` by `tx_hash`; `totals: {contractors_paid, agent_sales, clients_paid_usd}`. Testnet tokens are never
+in USD totals. A Stripe mirror is test mode only (an `sk_test_` key) and is never revenue (`/hooks/stripe` ignores
+`metadata.utax_kind=contractor_payment_mirror`).
+
 ## Changelog
+
+- v1.20 (2026-11-08, D41): §10 multi-task orders (order.queued/task_started/task_done/done, task_no, utax.task_done, merged), /api/payments, payment.recorded (Stripe test mirror). Rows land with their code.
 
 - v1.19.1 (2026-11-08, task 50): talk rides out Naïve 429s; post_social channel_failed.
 
