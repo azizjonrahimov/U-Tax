@@ -608,12 +608,14 @@ class State:
             cand["reply_to"] = private.get("reply_to")
         if private.get("listed"):  # v1.11: from the CEO's HR_CANDIDATES (no questionnaire)
             cand["listed"] = True
-        if stage == "applicant" and cand.get("contacted") and not private.get("listed"):
-            cand["replied"] = True  # task 32: a mail after the outreach note is the reply
+        if stage == "applicant" and cand.get("contacted") and private.get("affirmative"):
+            cand["replied"] = True  # 32b: a plain yes to the outreach note books the call
         if stage == "applicant":  # 22b: the applicant's latest mail wakes HR anew
             cand["last_event_id"] = max(cand.get("last_event_id", 0), e.id)
         if stage == "applicant" and private.get("text"):
-            if cand.get("texts"):  # every mail after the first is an answer
+            # every mail after the first is an answer; 32b: never a reply to the outreach
+            if cand.get("texts") and not private.get("outreach_reply") \
+                    and not cand.get("listed"):
                 cand["answers"] = cand.get("answers", 0) + 1
             cand.setdefault("texts", []).append(private["text"])  # contact-free answers
         if stage == "applicant" and e.payload["note"] and "credentials" not in cand:
