@@ -11,7 +11,7 @@ import { DeptAvatar } from "@/components/ui/DeptAvatar";
 import { Switch } from "@/components/ui/Switch";
 import { formatCents, formatClock } from "@/theater/format";
 import type { FirmNumbers } from "@/theater/rail";
-import { useFirmFeed, type FeedStatus } from "@/office/feed";
+import { useFirmFeed, type DocsBase, type FeedStatus } from "@/office/feed";
 import { logout, useSessionToken } from "@/ceo/session";
 import { canPopOut, popOut } from "@/ceo/popout";
 import { Ceo } from "@/components/ceo/Ceo";
@@ -19,6 +19,10 @@ import { followDelay, followTarget, followWhileTouring, initialTab, initialView,
 import type { Thread } from "@/office/mail";
 import { Mail } from "./Mail";
 import { Payments } from "./Payments";
+import { FormView } from "./FormView";
+import { ExcelView } from "./ExcelView";
+import { EmptyState } from "@/components/ui/EmptyState";
+import type { Docs } from "@/office/forms";
 import { activeTask, taskLabel, tourTarget, type TourOrder, type TourTask } from "@/office/tour";
 import { TaskBanner } from "./TaskBanner";
 import { ARTIFACT_MS, current, DRAFT_MS, type Desk } from "@/office/artifact";
@@ -35,7 +39,7 @@ const seatColor = (seat: Seat) => `var(--seat-${seat})`;
 
 export function Office() {
   const session = useSessionToken();
-  const { office, numbers, status, live, studio, tour, mail, payTick } = useFirmFeed(session);
+  const { office, numbers, status, live, studio, tour, mail, payTick, docs, docsLive, docsBase } = useFirmFeed(session);
   const theater = useMemo(() => <Theater />, []);
   /** D33: the CEO console as a panel on the right (signed in). Nothing mounts until the viewer's layout is read. */
   const [panelReady, setPanelReady] = useState(false);
@@ -50,6 +54,12 @@ export function Office() {
   const [toast, setToast] = useState<string | null>(null);
   /** D41 F49: the Intake desk's view (?tab=inbox opens the Inbox). */
   const [intakeTab, setIntakeTab] = useState<DeskTab>("workspace");
+  /** D42 T3: when the viewer last picked a desk tab (a form or sheet event after it switches the tab again). */
+  const [pickedAt, setPickedAt] = useState(0);
+  const pickTab = useCallback((t: DeskTab) => {
+    setIntakeTab(t);
+    setPickedAt(Date.now());
+  }, []);
   const followRef = useRef(follow);
   const seenEnd = useRef(new Set<string>());
   /** Wall clock for the "working" dots, refreshed every few seconds (render stays pure). */
@@ -163,6 +173,9 @@ export function Office() {
   const tourInbox = follow && running?.task.seat === "intake" && !!running.task.startedAt && newestMail >= running.task.startedAt;
   // The Accounting desk is on the tour for a payment (money events are shown there): open its Payments.
   const tourPayments = follow && running?.task.seat === "acct";
+  // D42 T3: the form filling or the sheet building live (the last 90 s) puts its desk on that tab.
+  const autoDoc = docsLive && docsLive.at > pickedAt && now - docsLive.at < 90_000 ? docsLive.kind : null;
+  const docTab: DeskTab | null = autoDoc === "form" && view === "tax" ? "form" : autoDoc === "excel" && view === "acct" ? "excel" : null;
 
   /** The task a desk's banner shows: the running one at its desk (and at the CoS), else the one that just ended there. */
   const bannerFor = (seat: Seat): { order: TourOrder; task: TourTask } | null => {
@@ -259,7 +272,7 @@ export function Office() {
             {theater}
           </div>
         ) : (
-          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} served={studio.served} banner={bannerFor(view)} tab={tourInbox ? "inbox" : tourPayments ? "payments" : intakeTab} onTab={setIntakeTab} mail={mail} payTick={payTick} />
+          <Department key={view} desk={office.desks[view]} studio={studio.desks[view]} numbers={numbers} working={working(view) || current(studio.desks[view].act?.ts, now)} following={follow} now={now} session={session} served={studio.served} banner={bannerFor(view)} tab={tourInbox ? "inbox" : (docTab ?? (tourPayments ? "payments" : intakeTab))} onTab={pickTab} mail={mail} payTick={payTick} docs={docs} docsBase={docsBase} />
         )}
         {toast && (
           <div className="tour-toast" role="status">
@@ -409,8 +422,11 @@ function FeedDot({ status }: { status: FeedStatus }) {
 
 // ------------------------------------------------------------------ one department
 
-function Department({ desk, studio, numbers, working, following, now, session, served, banner, tab, onTab, mail, payTick }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null; served: Record<string, string[]>; banner: { order: TourOrder; task: TourTask } | null; tab: DeskTab; onTab: (t: DeskTab) => void; mail: Thread[]; payTick: number }) {
+function Department({ desk, studio, numbers, working, following, now, session, served, banner, tab, onTab, mail, payTick, docs, docsBase }: { desk: Workspace; studio: Desk; numbers: FirmNumbers | null; working: boolean; following: boolean; now: number; session: string | null; served: Record<string, string[]>; banner: { order: TourOrder; task: TourTask } | null; tab: DeskTab; onTab: (t: DeskTab) => void; mail: Thread[]; payTick: number; docs: Docs; docsBase: DocsBase }) {
   const seat = desk.seat;
+  const formTab = seat === "tax" && tab === "form";
+  const excelTab = seat === "acct" && tab === "excel";
+  const nameOf = (caseId: string | null) => (caseId ? (mail.find((t) => t.caseId === caseId)?.name ?? caseId) : "the client");
   const inbox = seat === "intake" && tab === "inbox";
   const payments = seat === "acct" && tab === "payments";
   const step = desk.steps[0];
@@ -438,11 +454,24 @@ function Department({ desk, studio, numbers, working, following, now, session, s
         )}
         {seat === "acct" && (
           <div className="seg desk-tabs" role="group" aria-label="Accounting view">
-            <button className={tab !== "payments" ? "on" : ""} aria-pressed={tab !== "payments"} onClick={() => onTab("workspace")}>
+            <button className={tab !== "payments" && tab !== "excel" ? "on" : ""} aria-pressed={tab !== "payments" && tab !== "excel"} onClick={() => onTab("workspace")}>
               Workspace
             </button>
             <button className={tab === "payments" ? "on" : ""} aria-pressed={tab === "payments"} onClick={() => onTab("payments")}>
               Payments
+            </button>
+            <button className={tab === "excel" ? "on" : ""} aria-pressed={tab === "excel"} onClick={() => onTab("excel")}>
+              Excel
+            </button>
+          </div>
+        )}
+        {seat === "tax" && (
+          <div className="seg desk-tabs" role="group" aria-label="Tax view">
+            <button className={tab !== "form" ? "on" : ""} aria-pressed={tab !== "form"} onClick={() => onTab("workspace")}>
+              Workspace
+            </button>
+            <button className={tab === "form" ? "on" : ""} aria-pressed={tab === "form"} onClick={() => onTab("form")}>
+              Form
             </button>
           </div>
         )}
@@ -451,6 +480,22 @@ function Department({ desk, studio, numbers, working, following, now, session, s
         <Mail threads={mail} />
       ) : payments ? (
         <Payments session={session} tick={payTick} />
+      ) : formTab ? (
+        docs.form ? (
+          <FormView key={`${docs.form.caseId}:${docs.form.doc}`} form={docs.form} client={nameOf(docs.form.caseId)} base={docsBase.form === `${docs.form.caseId}:${docs.form.doc}` ? docsBase.formN : 0} session={session} />
+        ) : (
+          <div className="doc-empty">
+            <EmptyState art="sheet" title="No form yet" line="Tax fills a draft Form 1120 here, line by line, once a case asks for income tax." />
+          </div>
+        )
+      ) : excelTab ? (
+        docs.book ? (
+          <ExcelView key={`${docs.book.caseId}:${docs.book.book}`} book={docs.book} base={docsBase.book === `${docs.book.caseId}:${docs.book.book}` ? docsBase.bookN : 0} />
+        ) : (
+          <div className="doc-empty">
+            <EmptyState art="sheet" title="No workbook yet" line="Accounting builds the returns workbook here, cell by cell, with every formula." />
+          </div>
+        )
       ) : (
       <div className="dept-grid">
         <Window seat={seat} step={step} tabs={desk.tabs} trail={desk.steps.slice(1, 6)} studio={studio} now={now} session={session} served={served} />

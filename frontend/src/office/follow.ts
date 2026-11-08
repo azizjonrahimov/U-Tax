@@ -7,10 +7,11 @@ export type View = "overview" | Seat;
 /** Auto-follow stays on a view at least this long before moving to the next desk that acted. */
 export const DWELL_MS = 6000;
 /** D41 F49/F50: `?tab=inbox` opens the Intake desk on its Inbox; `?tab=payments` the Accounting desk on its Payments. */
-export type DeskTab = "workspace" | "inbox" | "payments";
+export type DeskTab = "workspace" | "inbox" | "payments" | "form" | "excel";
+const TABS: readonly DeskTab[] = ["inbox", "payments", "form", "excel"];
 export const initialTab = (search: string): DeskTab => {
   const t = new URLSearchParams(search).get("tab");
-  return t === "inbox" || t === "payments" ? t : "workspace";
+  return (TABS as readonly (string | null)[]).includes(t) ? (t as DeskTab) : "workspace";
 };
 
 /** D41 F48: the task tour stays on a desk at least this long before moving to the next one. */
