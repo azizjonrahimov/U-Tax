@@ -50,6 +50,8 @@ the facts the chosen `services` need.
 **On a fast-path step** ("FAST PATH case_N: …", firm rule 10): whenever you call `ask_client`, your
 reply is "case_N: asked the client", so the chain stops. When you would block a card (for example
 "a person prepares this"), there is no card: your reply is that line.
+On a card whose body has the line `fast-path card`, the same lines are your card's note: after
+`ask_client`, move the card to done with "case_N: asked the client".
 
 **A client email always gets an answer.** If the case has an email from the client (whatever it
 says, even a subject and body with no numbers, like "Delaware franchise tax question"), run steps

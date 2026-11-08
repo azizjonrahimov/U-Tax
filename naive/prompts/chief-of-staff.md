@@ -93,7 +93,8 @@ compute_tax" means you create the `tax` card now.
    that have a blocked card naming a pending approval. Skip cases marked `priority` **or
    `in_flight`** too (a `/talk` customer's case, or one a fast-path session is running now): the
    fast-path session delegates them, and creates its own two SENT cards when the memo is sent. Card a priority case only when this session's own trigger
-   names it (`FAST PATH case_N`, the older `Client replied case_N`, or a CEO order to retry it).
+   names it (`FAST PATH case_N`, the older `Client replied case_N`, or a CEO order to retry it), or a done `fast-path card` for
+   it: then continue the fast path, below).
 3. One card for the next step, assigned to its agent, titled "case_N: <step>":
    | Case status | Card |
    |---|---|
@@ -109,17 +110,26 @@ compute_tax" means you create the `tax` card now.
 ## The fast path (target: memo in the customer's inbox in under 45 s)
 Every `FAST PATH case_N` wake runs this chain, whatever started the case (an email, the public
 `/talk` page, or a reply).
-**Never `board_write` a card for a `FAST PATH case_N` wake's chain** (a card costs minutes): use the
-direct chain. The only cards a FAST PATH wake makes are the ones named below: a failed step's
-card, a SENT case's "read client reply" card, and the two SENT cards. Delegate with `send_to_agent` and `wait: true`, one step at a time:
+**The intake step is always a board card** (a session started with `send_to_agent` can come up
+without the U-Tax tools): `intake` "case_N: extract facts", body case_N and the line
+`fast-path card`, then end your turn. **tax → qa → accounting run as the direct chain** (a card
+costs minutes): delegate with `send_to_agent` and `wait: true`, one step at a time:
 `tax` "FAST PATH case_N: compute tax" → `qa` "FAST PATH case_N: QA check" → `accounting`
 "FAST PATH case_N: prepare documents and send memo". `get_case` first and start at the step its
-status calls for: NEW, INTAKE_PENDING or STALLED (a reply after an ask) → `intake` "FAST PATH case_N: extract facts"; READY →
-`tax`; COMPUTED → `qa`; QA_PASSED → `accounting`. If `intake` reports that it asked the client (or
-"no new facts"), stop the chain: the client's reply comes back as another `FAST PATH case_N` wake.
-Stop the chain at the first reply that isn't a success. "asked the client", "no new facts",
-"waiting on the client's reply", a not-eligible reply and "a person prepares this" stop it with
-no card. For anything else that isn't an approval, create that step's routing card (Routing, above) with the reply in its body, so the board carries it.
+status calls for: NEW, INTAKE_PENDING or STALLED (a reply after an ask) → the `intake` card; READY →
+`tax`; COMPUTED → `qa`; QA_PASSED → `accounting`.
+- **Tools fallback, never a stop:** if a sent agent's reply says its tools are unavailable,
+  blocked or "not in my toolset" (or its session is degraded), **immediately** make the board card
+  for that same step ("case_N: <step>", the same body plus the line `fast-path card`) and end
+  your turn.
+- A `fast-path card` that reaches done (a board digest) continues the chain: `get_case` and go on
+  from the step its status calls for, even while the case is `in_flight`. If the intake card's
+  note says it asked the client (or "no new facts", "waiting on the client's reply", a not-eligible
+  reply, "a person prepares this"), the chain stops there with no other card: the client's reply
+  comes back as another `FAST PATH case_N` wake.
+- Stop the chain at the first reply that isn't a success. For anything that isn't an approval, a
+  tools failure or one of the stops above, create that step's routing card (Routing, above) with
+  the reply in its body, so the board carries it.
 A case already SENT (or later) whose client wrote again is not a chain: do what the `Client
 replied case_N` item above says (one `intake` "case_N: read client reply" card). Any other status
 (NOT_ELIGIBLE, BLOCKED): no chain; route it as the table says. When `accounting` reports the memo sent, create the two
