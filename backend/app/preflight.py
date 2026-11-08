@@ -206,6 +206,40 @@ def check_openai(settings, transport: Transport = None) -> list[Check]:
                   if not missing else f"key works; no model for {', '.join(missing)}")]
 
 
+MIN_APIFY_USD = 1.0  # ten capped runs ($0.10 each) left this month
+
+
+def check_apify(settings, transport: Transport = None) -> list[Check]:
+    """Task 40c: only with ADAPTER_SCRAPE=apify. The token (users/me), both actors the
+    adapter runs (read, not run: free) and the month's usage against its limit."""
+    if settings.adapters.get("scrape") != "apify":
+        return []
+    if not settings.apify_token:
+        return [Check("Apify", False, "APIFY_TOKEN is not set (ADAPTER_SCRAPE=apify)")]
+    from app.gateway.adapters.apify import API, PAGE_ACTOR, SEARCH_ACTOR
+
+    try:
+        with _http(API, transport, Authorization=f"Bearer {settings.apify_token}") as http:
+            http.get("/users/me").raise_for_status()
+            for actor in (PAGE_ACTOR, SEARCH_ACTOR):
+                http.get(f"/acts/{actor}").raise_for_status()
+            limits = http.get("/users/me/limits")
+            body = limits.json() if limits.is_success else {}
+    except httpx.HTTPError as err:
+        return [Check("Apify", False, f"the token or an actor {_status(err)}")]
+    data = body.get("data") if isinstance(body, dict) else None
+    try:
+        used = float(data["current"]["monthlyUsageUsd"])
+        cap = float(data["limits"]["maxMonthlyUsageUsd"])
+    except (KeyError, TypeError, ValueError):
+        return [Check("Apify", True, "token works; both actors reachable (usage unknown)")]
+    left = cap - used
+    return [Check("Apify", left >= MIN_APIFY_USD,
+                  f"token works; both actors reachable; ${left:,.2f} of ${cap:,.2f} left "
+                  "this month" + ("" if left >= MIN_APIFY_USD else
+                                  f" (under ${MIN_APIFY_USD:.2f})"))]
+
+
 def check_social(settings, transport: Transport = None) -> list[Check]:
     identity = settings.naive_social_identity
     if not identity or not settings.naive_api_key:
@@ -279,7 +313,7 @@ def check_files(settings) -> list[Check]:
 def preflight(settings, transport: Transport = None,
               out: Callable[[str], None] = print, color: bool = True) -> int:
     checks: list[Check] = []
-    for run in (check_gateway, check_naive, check_agentmail, check_elevenlabs, check_openai,
+    for run in (check_gateway, check_naive, check_agentmail, check_elevenlabs, check_apify, check_openai,
                 check_social):
         try:
             checks += run(settings, transport)
