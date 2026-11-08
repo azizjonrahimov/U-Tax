@@ -127,6 +127,22 @@ def _sponsor(name: str, choice: str, settings: Settings):
 
         return MonidToolBuy(_need(settings.monid_api_key, "MONID_API_KEY",
                                   "ADAPTER_TOOLBUY=monid"))
+    if name == "pay" and choice == "stripe":  # task 40b (D36)
+        from app.gateway.adapters.stripe_pay import StripePay, key_mode
+
+        switch = "ADAPTER_PAY=stripe"
+        key = _need(settings.stripe_secret_key, "STRIPE_SECRET_KEY", switch)
+        mode = key_mode(key)
+        if not mode:
+            raise AdapterNotReady(f"{switch}: STRIPE_SECRET_KEY must be an sk_ or rk_ key")
+        if mode == "live" and not settings.stripe_live:
+            raise AdapterNotReady(f"{switch}: a live key needs STRIPE_LIVE=1 (the owner's "
+                                  "word); use the sk_test_ key")
+        if not settings.stripe_webhook_secret:
+            log.warning("%s: no STRIPE_WEBHOOK_SECRET, so /hooks/stripe answers 503 and no "
+                        "payment is recorded (python -m app.devtools stripe-webhook <url>)",
+                        switch)
+        return StripePay(key, price_id=settings.stripe_price_id)
     if name == "social" and choice == "naive":
         from app.gateway.adapters.naive_social import NaiveSocial
 

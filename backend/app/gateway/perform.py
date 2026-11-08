@@ -404,6 +404,7 @@ class Gateway:
             "follow_up": self._follow_up,
             "list_candidates": self._list_candidates,
             "resolve_purchase": self._resolve_purchase,  # control: the CEO, not an agent
+            "stripe_payment": self._stripe_payment,  # task 40b: /hooks/stripe only
             "firm_brief": self._firm_brief,
             # gateway / control actions (contract §5, §6a-c): never callable by an agent token
             "inject_email": self._inject_email,
@@ -2803,7 +2804,79 @@ class Gateway:
             self._epoch = f"{first.id}:{first.ts}" if first is not None else ""
         return "UTX-" + hashlib.sha256(f"{self._epoch}|{key}".encode()).hexdigest()[:12].upper()
 
-    def _memo_body(self, case: Case, *, outgoing: bool = False, memo_ref: str) -> str:
+    OFFER_LABEL = "U-Tax filing help: annual report worksheet + 20-minute call"
+
+    def _payment_link(self, case: Case) -> str | None:
+        """Task 40b: the case's $49 filing-help link (a worksheet + a 20-minute call; U-Tax
+        files nothing), made once per case (the
+        Idempotency-Key carries the log's epoch, so a reset log never reuses an old link).
+        Stripe down or not set up: None, and the memo goes without the line."""
+        if case.payment_link_url:
+            return case.payment_link_url
+        pay = self.ports.pay
+        if pay.provider is None:
+            return None
+        cents = self.settings.filing_price_cents
+        try:
+            link = pay.create_link(cents, self.OFFER_LABEL, self._memo_ref(
+                f"pay:{case.case_id}"), case_id=case.case_id)
+        except PortError as err:
+            log.warning("payment link for %s not made (%s); the memo goes without it",
+                        case.case_id, err)
+            return None
+        self._emit([NewEvent(type="payment.link_created", actor="acct", case_id=case.case_id,
+                             provider=pay.provider,
+                             payload={"link_id": link.link_id, "amount_cents": cents,
+                                      "currency": "usd"},
+                             idempotency_key=f"pay:{case.case_id}:link",
+                             private={"url": link.url})])
+        return link.url
+
+    def _stripe_payment(self, args: dict) -> dict:
+        """Task 40b: a paid Checkout Session from /hooks/stripe (signature checked there).
+        Idempotent by the session (a redelivery, or completed + async_payment_succeeded).
+        The books row is written first: a locked U-Tax_Books.xlsx refuses books_unavailable
+        and Stripe retries the delivery later."""
+        session_id = _str(args, "session_id", max_len=255)
+        key = f"stripe:{session_id}"
+        done = self._done_from(key)
+        if done is not None:
+            return {"case_id": done.case_id, "duplicate": True}
+        case = None
+        for candidate in (args.get("case_id"), args.get("client_reference_id"),
+                          self.state.payment_links.get(str(args.get("link_id") or ""))):
+            if isinstance(candidate, str) and candidate in self.state.cases:
+                case = self.state.cases[candidate]
+                break
+        if case is None:
+            raise Refused("not_found", "the payment names no case of ours")
+        amount = args.get("amount_cents")
+        currency = str(args.get("currency") or "").lower()
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0 \
+                or not re.fullmatch(r"[a-z]{3}", currency):
+            raise Refused("bad_input", "amount_cents (an integer) and currency are required")
+        from app.gateway import documents as docs
+
+        books = self.settings.data_dir / "docs" / "U-Tax_Books.xlsx"
+        try:
+            row = docs.append_revenue(books, f"{case.case_id}:filing",
+                                      self._now().date().isoformat(), case.masked_name, amount)
+        except OSError as err:
+            log.warning("revenue for %s not written to the books: %s", case.case_id, err)
+            raise Refused("books_unavailable", "U-Tax_Books.xlsx couldn't be written (is it "
+                                               "open?); Stripe will retry") from err
+        self._emit([NewEvent(type="payment.received", actor="acct", case_id=case.case_id,
+                             provider="stripe",
+                             payload={"case_id": case.case_id, "amount_cents": amount,
+                                      "currency": currency},
+                             idempotency_key=key,
+                             private={"session_id": session_id,
+                                      "event_id": str(args.get("event_id") or "")[:255]})])
+        return {"case_id": case.case_id, "amount_cents": amount, "currency": currency,
+                "books_row": row}
+
+    def _memo_body(self, case: Case, *, outgoing: bool = False, memo_ref: str,
+                   payment_url: str | None = None) -> str:
         """The memo text. `memo_ref` is minted once per memo version (_memo_ref of the memo
         key) and reused for both renders, retries and memo.sent; no render without it."""
         if not MEMO_REF.fullmatch(memo_ref or ""):
@@ -2817,7 +2890,10 @@ class Gateway:
                 form5472=bool(case.result.get("form5472_flag")),
                 rnd=bool(case.result.get("rnd_flag")), rnd_known=rnd_known,
                 greeting_name=self._greeting(case) if outgoing else case.masked_name,
-                memo_ref=memo_ref))
+                memo_ref=memo_ref,
+                # task 40b: the per-case link only in the client's copy; the masked
+                # memo.sent body (theater, event stream) drops the offer's line
+                payment_link=(payment_url or "") if outgoing else ""))
         except TemplateError as err:
             raise Refused("template_invalid", str(err)) from err
 
@@ -2850,6 +2926,10 @@ class Gateway:
                    f"{format_usd(case.result['authorized_method_cents'])} → "
                    f"{format_usd(case.result['total_cents'])}")
         self._gate("email", key, _cap(summary), case.case_id, public=case.priority)
+        payment_url = self._payment_link(case)  # task 40b: after the gate; None = no line
+        if payment_url:
+            outgoing = with_reference(self._memo_body(case, outgoing=True, memo_ref=memo_ref,
+                                                      payment_url=payment_url), memo_ref)
         try:
             sent = self._with_retry("memo email", lambda: self.ports.mail.send(
                 OutMail(to=case.reply_to, subject=MEMO_SUBJECT, body=outgoing,

@@ -280,12 +280,14 @@ class SocialPort(Protocol):
 @dataclass(frozen=True)
 class PaymentLink:
     url: str
+    link_id: str = ""  # task 40b: Stripe's plink_... (a completed checkout names it)
 
 
 class PayPort(Protocol):
     provider: str | None
 
-    def create_link(self, amount_cents: int, label: str, key: str) -> PaymentLink: ...
+    def create_link(self, amount_cents: int, label: str, key: str,
+                    case_id: str = "") -> PaymentLink: ...
 
 
 # ------------------------------------------------------------------ stt (task 40a)

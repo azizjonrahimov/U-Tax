@@ -28,7 +28,7 @@ QUESTIONNAIRE_SUBJECT = "U-Tax: a few questions about the gig"
 DECISION_SUBJECT = "U-Tax: about the memo review gig"
 PLACEHOLDERS = ("greeting_name", "masked_name", "authorized_method", "assumed_par_method",
                 "annual_report_fee", "total", "due_date", "form5472_note", "rnd_note",
-                "memo_ref")
+                "memo_ref", "payment_link")  # task 40b: optional, "" without Stripe
 MEMO_REF = re.compile(r"UTX-[A-Z0-9]{8,16}")
 
 
@@ -116,7 +116,10 @@ SPECS: dict[str, Spec] = {
         "Using the assumed-par-value method instead of the authorized-shares method, your "
         "estimated 2026 Delaware franchise tax drops from {{authorized_method}} to "
         "{{assumed_par_method}} (+{{annual_report_fee}} annual report fee = {{total}}), "
-        "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n" + DISCLAIMER
+        "due {{due_date}}.\n{{form5472_note}}\n{{rnd_note}}\n"
+        "Want hands-on help? For $49, U-Tax prepares your Delaware annual report worksheet "
+        "and walks you through filing it yourself on a 20-minute call: {{payment_link}}\n"
+        + DISCLAIMER
         + "\n\nReference: {{memo_ref}}")),
     "ask-client": Spec(("greeting_name", "masked_name", "missing_list", "problems_line"),
                        required=("missing_list",), lines=(DISCLAIMER,), builtin=_BUILTIN_ASK),
@@ -214,12 +217,19 @@ def _join(items: list[str]) -> str:
     return ", ".join(items[:-1]) + f", and {items[-1]}"
 
 
+# task 40b: a line holding one of these, empty, disappears whole (the offer's sentence
+# "...: {{payment_link}}" never reads "...:" without a link)
+WHOLE_LINE = ("payment_link",)
+
+
 def _fill(template: str, values: dict[str, str]) -> str:
     kept = []
     for line in template.splitlines():
         only = _TOKEN.fullmatch(line.strip())
         if only and not values.get(only.group(1), ""):
             continue  # a line holding only an empty placeholder disappears
+        if any(not values.get(name, "") and "{{" + name + "}}" in line for name in WHOLE_LINE):
+            continue
         kept.append(line)
     text = _TOKEN.sub(lambda m: values.get(m.group(1), ""), "\n".join(kept))
     return re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -281,8 +291,9 @@ def _tidy(text: str) -> str:
 
 def memo_values(*, masked_name: str, result: dict, form5472: bool, rnd: bool,
                 rnd_known: bool, greeting_name: str | None = None,
-                memo_ref: str = "") -> dict[str, str]:
+                memo_ref: str = "", payment_link: str = "") -> dict[str, str]:
     return {
+        "payment_link": payment_link,
         "memo_ref": memo_ref,
         "greeting_name": greeting_name or masked_name,
         "masked_name": masked_name,

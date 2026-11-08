@@ -42,5 +42,6 @@ def test_zero_events_is_an_empty_state(h):
     assert state["cases"] == [] and state["firm"]["clients"] == 0
     assert state["trust"] == {"email": "ASK", "social_post": "ASK", "calendar_invite": "ASK",
                               "voice_screen": "ASK"}
-    assert state["money"] == {"tax_saved_cents": 0, "spent_usd": "0.00", "spent_by_provider": {}}
+    assert state["money"] == {"tax_saved_cents": 0, "revenue_cents": 0,  # task 40b
+                              "spent_usd": "0.00", "spent_by_provider": {}}
     json.dumps(state)  # serializable as-is
