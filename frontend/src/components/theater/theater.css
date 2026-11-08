@@ -275,3 +275,33 @@
   .theater .order:not(.newest) { display: none; }
   .theater .desks { display: none; }
 }
+
+/* v1.19 (D38): the Market pane (Marketing hires an outside agent; testnet tokens) */
+.theater .low.three { grid-template-columns: 1fr 1.1fr .8fr; }
+.theater main[data-focus="market"] { grid-template-columns: 1.9fr .8fr var(--rail); }
+.theater main[data-focus="market"] .col.left { grid-template-rows: .6fr 2fr; }
+.theater main[data-focus="market"] .col.left .low.three { grid-template-columns: .6fr 2fr .5fr; }
+.theater main[data-focus="social"] .col.left .low.three { grid-template-columns: 2fr .6fr .5fr; }
+.theater main[data-focus="phone"] .col.left .low.three { grid-template-columns: .6fr .5fr 2fr; }
+.theater .wallets { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.theater .wallet { font-size: calc(11px * var(--k) * var(--s)); }
+.theater .coin { width: calc(14px * var(--k)); height: calc(14px * var(--k)); border-radius: 50%; background: #f5c542; box-shadow: 0 0 0 2px #8a6d1d inset; opacity: 0; }
+.theater .coin.flying { animation: coin-fly calc(1.2s * var(--t)) ease-in-out forwards; }
+@keyframes coin-fly { 0% { opacity: 1; transform: translateX(-300%); } 85% { opacity: 1; transform: translateX(300%); } 100% { opacity: 0; transform: translateX(300%); } }
+.theater .job { border: 1px solid var(--line); border-radius: 8px; padding: 8px; font-size: calc(12px * var(--k) * var(--s)); display: grid; gap: 6px; }
+.theater .job .chan { color: var(--faint); font-size: calc(11px * var(--k) * var(--s)); text-transform: uppercase; letter-spacing: .08em; }
+.theater .job .headline { font-weight: 600; }
+.theater .job .contractor { justify-self: start; display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px; border: 1px dashed #9a9ab0; border-radius: 999px; color: #c9c9d6; font-size: calc(11px * var(--k) * var(--s)); animation: market-in calc(.5s * var(--t)) ease-out; }
+.theater .job .contractor .arrow { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid #9a9ab0; transform: rotate(-30deg); }
+.theater .job .thumb { height: calc(54px * var(--k)); border-radius: 6px; background: linear-gradient(135deg, #2a2a44, #3b3560); display: grid; place-items: center; color: var(--faint); font-size: calc(11px * var(--k) * var(--s)); filter: blur(3px); animation: market-in calc(.5s * var(--t)) ease-out; overflow: hidden; }
+.theater .job .thumb.clear { filter: none; transition: filter calc(.6s * var(--t)) ease; }
+.theater .job .thumb img { max-height: 100%; max-width: 100%; }
+.theater .job .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: calc(11px * var(--k) * var(--s)); }
+.theater .job .checks .ok { color: var(--green); }
+.theater .job .checks .bad { color: #ff8a7d; outline: 2px solid #ff4d3d; outline-offset: 1px; border-radius: 999px; padding: 0 4px; }
+.theater .job .state { color: var(--faint); font-size: calc(11px * var(--k) * var(--s)); }
+.theater .job .paid { color: var(--green); font-weight: 600; }
+.theater .job .paid a { color: inherit; }
+.theater .earlier { margin-top: 6px; color: var(--faint); font-size: calc(11px * var(--k) * var(--s)); display: grid; gap: 2px; }
+@keyframes market-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .theater .coin.flying, .theater .job .contractor, .theater .job .thumb { animation: none; } .theater .coin.flying { opacity: 0; } }

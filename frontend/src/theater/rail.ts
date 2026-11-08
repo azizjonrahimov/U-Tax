@@ -11,7 +11,11 @@ import { normalizeDecimal } from "./format";
 export interface FirmNumbers {
   firm: { agents: number; clients: number };
   touches: { training: number; operating: number; engineering: number };
-  money: { tax_saved_cents: number; spent_usd: string };
+  /**
+   * v1.19 (D38): `contractor_paid_usd` (Σ payment.sent ok) and `agent_sales_usd` (Σ agent.sale), in
+   * testnet tokens; absent when the market is off.
+   */
+  money: { tax_saved_cents: number; spent_usd: string; contractor_paid_usd?: string; agent_sales_usd?: string };
   /** Counts only: the projector never shows candidate names (contract v1.6). */
   hiring: { applicants: number; screened: number; shortlisted: number; hired: number; declined?: number; awaiting?: number; sourced?: number; contacted?: number };
   queue: { waiting: number; blocked: number };
@@ -77,6 +81,8 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
   const sentSaving = new Map<string, number>(); // case → saving as of its latest memo.sent
   const status = new Map<string, string>();
   const costs: string[] = [];
+  const paid: string[] = []; // v1.19: tokens paid to contractors
+  const sales: string[] = []; // v1.19: tokens agents paid us
 
   for (const e of [...events].sort((a, b) => a.id - b.id)) {
     if (!Number.isSafeInteger(e.id) || seen.has(e.id) || skip.has(e.id)) continue;
@@ -85,6 +91,10 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
     // law.searched, post.published, screen.call) may show a cost but are booked separately, so
     // summing them would double-count. A failed provider call still books its cost.
     if (e.type === "cost.booked" && typeof e.cost_usd === "string") costs.push(e.cost_usd);
+    const amount = (e.payload as Record<string, unknown> | null)?.amount_usd;
+    const amountStr = typeof amount === "number" && Number.isFinite(amount) ? String(amount) : typeof amount === "string" ? amount : null;
+    if (e.status === "ok" && amountStr !== null && e.type === "payment.sent") paid.push(amountStr);
+    if (e.status === "ok" && amountStr !== null && e.type === "agent.sale") sales.push(amountStr);
     if (e.status !== "ok") continue;
     const p = (e.payload ?? {}) as Record<string, unknown>;
     const c = e.case_id;
@@ -161,7 +171,12 @@ export function railFromEvents(events: readonly UTaxEvent[], skip: ReadonlySet<n
   return {
     firm: { agents: AGENT_COUNT, clients: clients.size },
     touches,
-    money: { tax_saved_cents: saved, spent_usd: sumUsd(costs) },
+    money: {
+      tax_saved_cents: saved,
+      spent_usd: sumUsd(costs),
+      ...(paid.length ? { contractor_paid_usd: sumUsd(paid) } : {}),
+      ...(sales.length ? { agent_sales_usd: sumUsd(sales) } : {}),
+    },
     hiring,
     // Waiting chips need the gateway's queue; a log alone can't know it.
     queue: { waiting: 0, blocked },

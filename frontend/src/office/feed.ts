@@ -106,6 +106,8 @@ export function useFirmFeed(session: string | null = null): Feed {
     };
     const studioCtx: StudioCtx = {
       ...ctx,
+      // v1.19: a contractor's delivered card is the gateway's own asset.
+      asset: (path) => (GATEWAY_ORIGIN && assetAllowed(`${GATEWAY_ORIGIN}${path}`, HOSTS, GATEWAY_ORIGIN) ? `${GATEWAY_ORIGIN}${path}` : undefined),
       // A desk whose newest step is about a flagged case: its agent's notes may quote that mail.
       seatFlagged: (seat) => {
         const c = officeRef.current.desks[seat].steps[0]?.caseId ?? null;
