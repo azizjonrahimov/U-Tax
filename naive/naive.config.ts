@@ -1,4 +1,5 @@
-// U-Tax on Naïve: seven agents, one shared board, one MCP server (the U-Tax gateway).
+// U-Tax on Naïve: seven firm agents on one shared board, plus the CEO's assistant (v1.14), and one
+// MCP server (the U-Tax gateway).
 // Apply with `naive up --dry-run` first, then `naive up`. Env vars: see .env.example.
 //
 // Design: docs/designs/u-tax.md (E1 one gateway, E5 U-Tax tools only, D17 MCP transport).
@@ -119,7 +120,7 @@ const BUDGETS: Record<AgentKey, { cap: number; task: number }> = {
   acct: { cap: 1.0, task: 0.15 },
   mkt: { cap: 1.25, task: 0.25 },
   hr: { cap: 1.25, task: 0.25 },
-  ceo: { cap: 3.0, task: 0.5 },
+  ceo: { cap: 3.0, task: 2.0 }, // one session per CEO sign-in, so the task cap covers a whole conversation
 };
 
 const MODELS: Record<AgentKey, string> = {

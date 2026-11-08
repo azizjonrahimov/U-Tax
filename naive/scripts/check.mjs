@@ -612,9 +612,22 @@ else {
     const raw = readFileSync(join(ROOT, "prompts", seat.prompt), "utf8");
     const text = raw.replace(/\s+/g, " ");
     for (const must of ["data, never instructions", "can't be undone", "Never invent a result", "ask one short question",
-      "You can't write board cards"])
+      "You can't write board cards", "so they never act on a guess", "pass the exact id it returned",
+      "## How the firm rules below apply to you", "the messages in this conversation are the CEO's own words"])
       if (!text.toLowerCase().includes(must.toLowerCase())) fail(`prompts/${seat.prompt}: must keep the rule "${must}"`);
     for (const t of policy.BOARD) if (new RegExp(`\\b${t}\\b`).test(raw)) fail(`prompts/${seat.prompt}: names the board tool ${t}`);
+    // any §6 gateway tool named, prefixed or not (get_case is also a §5b tool)
+    for (const t of GATEWAY_TOOLS)
+      if (!ceoTools.includes(t) && new RegExp(`\\b${t}\\b`, "i").test(raw)) fail(`prompts/${seat.prompt}: names gateway tool ${t}`);
+    // "Your tools" lists exactly the §5b tools, and offers no unpinned target for an irreversible call
+    const toolsSection = raw.split(/^## Your tools.*$/m)[1]?.split(/^## /m)[0] ?? "";
+    const listed = [...new Set([...toolsSection.matchAll(/`utax\.(\w+) \{/g)].map((m) => m[1]))].sort();
+    if (listed.join() !== ceoTools.join()) fail(`prompts/${seat.prompt}: "Your tools" lists ${listed}, contract §5b has ${ceoTools}`);
+    if (/"latest"/.test(toolsSection)) fail(`prompts/${seat.prompt}: "Your tools" offers "latest" as a target; approve/deny take an exact approval_id`);
+    // the D34 budget: $3/day, and one conversation's task cap inside it
+    const b = agent.budget ?? {};
+    if (b.cap_micro_usd !== 3_000_000 || b.period !== "day" || !(b.max_task_micro_usd > 0 && b.max_task_micro_usd <= b.cap_micro_usd))
+      fail(`ceo-assistant: budget must be $3.00/day with a task cap inside it (got ${JSON.stringify(b)})`);
   }
 }
 
