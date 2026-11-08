@@ -74,7 +74,6 @@ compute_tax" means you create the `tax` card now.
    customer's fast-path case) too: the fast-path session delegates them, and creates its own two
    SENT cards when the memo is sent. Card a priority case only when this session's own trigger
    names it (`Client replied case_N`, or a CEO order to retry it).
-   Ignore the `next` field `list_open_cases` returns: the status and this table decide.
 3. One card for the next step, assigned to its agent, titled "case_N: <step>":
    | Case status | Card |
    |---|---|
