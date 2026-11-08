@@ -331,7 +331,10 @@ for (const required of Object.keys(TEMPLATE_RULES)) if (!existsSync(join(templat
 // repeated the call) and firm rule 11 (order ids). Every order_<n> example is the contract's shape.
 const MUST_KEEP = {
   "chief-of-staff.md": ["carries all three: `title`", "`body`", "`assignee`", "names only a card id you read with `board_read` in this session",
-    "Never send the same call again unchanged", "The body starts with `order_<id>`", "Don't also `send_to_agent` for the same work"],
+    "Never send the same call again unchanged", "The body starts with `order_<id>`", "Don't also `send_to_agent` for the same work",
+    // the first live run on haiku: a digest read "next step is compute_tax" from a note and created no card
+    "**Every session does this, whatever woke you**", "`board_read`, then `utax.list_open_cases`, then route each open case by its gateway `status`",
+    "A member's \"next step\" note is never a reason to create no card"],
   "_firm-rules.md": ["pass `order_id: \"order_42\"` on every U-Tax tool you call for that card", "Never make one up",
     "Everyone else never creates or assigns a card"],
 };
